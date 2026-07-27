@@ -1,0 +1,29 @@
+[package]
+name = "yamcha-app"
+version = "0.2.0"
+edition = "2021"
+
+[lib]
+name = "yamcha_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-store = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+specta = { workspace = true }
+specta-typescript = "0.0.9"
+tauri-specta = { version = "=2.0.0-rc.21", features = ["derive", "typescript"] }
+base64 = "0.22"
+reqwest = { version = "0.12", features = ["json", "gzip"] }
+notify-debouncer-full = "0.5"
+yamcha-core = { path = "../crates/yamcha-core" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

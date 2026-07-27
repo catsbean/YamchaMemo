@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the main and trash windows",
+  "windows": ["main", "trash"],
+  "permissions": [
+    "core:default",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-destroy",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "dialog:default",
+    "opener:default",
+    "store:default"
+  ]
+}

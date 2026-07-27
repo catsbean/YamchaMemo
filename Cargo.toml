@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["src-tauri", "crates/yamcha-core"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+specta = { version = "=2.0.0-rc.22", features = ["derive", "serde_json"] }
+chrono = "0.4"
+thiserror = "2"
+serde_yaml_ng = "0.10"
+regex = "1"
+rusqlite = { version = "0.34", features = ["bundled"] }
+tantivy = "0.24"

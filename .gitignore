@@ -1,0 +1,16 @@
+node_modules/
+dist/
+target/
+src-tauri/gen/schemas/
+*.local
+.DS_Store
+testvault/
+.yamcha/
+
+# API 키 등 비밀값 — .env.example만 올린다
+.env
+.env.*
+!.env.example
+
+# 개인 머신에 종속된 설정 (절대경로 등)
+.claude/settings.local.json
