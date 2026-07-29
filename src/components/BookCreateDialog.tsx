@@ -3,6 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { load } from "@tauri-apps/plugin-store";
 import { commands, type JsonValue } from "../bindings";
+import { isImeEnter } from "../lib/ime";
 import { useVault } from "../stores/vault";
 import Modal from "./Modal";
 
@@ -194,7 +195,7 @@ export default function BookCreateDialog({
                 className={inputCls}
                 value={f.title}
                 onChange={(e) => setF({ ...f, title: e.target.value })}
-                onKeyDown={(e) => e.key === "Enter" && submit()}
+                onKeyDown={(e) => e.key === "Enter" && !isImeEnter(e) && submit()}
               />
             </label>
             <label className="flex flex-col gap-0.5">

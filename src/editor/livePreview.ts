@@ -88,13 +88,57 @@ function selectionTouches(view: EditorView, from: number, to: number): boolean {
   return false;
 }
 
-/** 콜아웃 종류별 색상 클래스 (독서기록 발췌/생각/요약/질문) */
+/** 콜아웃 종류별 색상 클래스 — 입력 바 버튼 색과 같은 계열로 맞춘다.
+ *  (독서기록 발췌/생각/요약/질문 · 일지 기록/느낌) */
 const CALLOUT_CLASS: Record<string, string> = {
   발췌: "cm-co-excerpt",
   생각: "cm-co-thought",
   요약: "cm-co-summary",
   질문: "cm-co-question",
+  기록: "cm-co-log",
+  느낌: "cm-co-feeling",
 };
+
+/** vault에 등록된 사용자 정의 콜아웃의 색 클래스 (없으면 기본 회색) */
+function customCalloutClass(name: string): string {
+  const def = useVault.getState().callouts.find((c) => c.label === name);
+  return def ? `cm-co-p-${def.color}` : "cm-co-default";
+}
+
+/** 커스텀 콜아웃 아이콘 */
+function customCalloutIcon(name: string): string | null {
+  const def = useVault.getState().callouts.find((c) => c.label === name);
+  if (!def) return "💬"; // 앱이 모르는 콜아웃(외부 편집기에서 온 것)
+  return def.icon || null; // 등록된 종류인데 아이콘이 '없음'이면 붙이지 않는다
+}
+
+/** 콜아웃 종류별 아이콘 — 파일에는 `[!기록]` 텍스트를 그대로 두고 화면에서만 붙인다.
+ *  (파일에 이모지를 넣으면 검색·다른 앱 호환이 깨진다) */
+const CALLOUT_ICON: Record<string, string> = {
+  발췌: "📌",
+  생각: "💭",
+  요약: "📋",
+  질문: "❓",
+  기록: "🕘",
+  느낌: "💛",
+};
+
+/** `[!이름]` 자리에 그려 넣는 아이콘+이름 라벨 */
+class CalloutLabelWidget extends WidgetType {
+  constructor(readonly name: string) {
+    super();
+  }
+  eq(other: CalloutLabelWidget) {
+    return other.name === this.name;
+  }
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-callout-label";
+    const icon = CALLOUT_ICON[this.name] ?? customCalloutIcon(this.name);
+    span.textContent = icon ? `${icon} ${this.name}` : this.name;
+    return span;
+  }
+}
 
 function buildDecorations(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = [];
@@ -111,16 +155,42 @@ function buildDecorations(view: EditorView): DecorationSet {
           const firstLine = doc.lineAt(node.from);
           const m = firstLine.text.match(/^\s*>\s*\[!([^\]]+)\]/);
           if (m) {
-            const cls = CALLOUT_CLASS[m[1].trim()] ?? "cm-co-default";
+            const name = m[1].trim();
+            const cls = CALLOUT_CLASS[name] ?? customCalloutClass(name);
+            // 커서가 콜아웃 안에 있으면 원문(`> [!이름]`)을 그대로 보여 편집할 수 있게 한다
+            const raw = selectionTouches(view, node.from, node.to);
             for (let pos = node.from; pos <= node.to && pos <= doc.length; ) {
               const line = doc.lineAt(pos);
-              const header =
-                line.number === firstLine.number ? " cm-callout-header" : "";
+              const isHeader = line.number === firstLine.number;
               ranges.push(
                 Decoration.line({
-                  class: `cm-callout ${cls}${header}`,
+                  class: `cm-callout ${cls}${isHeader ? " cm-callout-header" : ""}`,
                 }).range(line.from),
               );
+              if (!raw) {
+                // 줄머리 `> ` 숨김 — 좌측 색 바가 인용 표시를 대신한다
+                const qm = line.text.match(/^\s*>\s?/);
+                if (qm && qm[0].length > 0) {
+                  ranges.push(
+                    Decoration.replace({}).range(
+                      line.from,
+                      line.from + qm[0].length,
+                    ),
+                  );
+                }
+                // 첫 줄의 `[!이름]`을 아이콘+이름 라벨로 치환
+                if (isHeader) {
+                  const bm = line.text.match(/\[!([^\]]+)\]/);
+                  if (bm && bm.index !== undefined) {
+                    const labelFrom = line.from + bm.index;
+                    ranges.push(
+                      Decoration.replace({
+                        widget: new CalloutLabelWidget(name),
+                      }).range(labelFrom, labelFrom + bm[0].length),
+                    );
+                  }
+                }
+              }
               if (line.to + 1 > node.to) break;
               pos = line.to + 1;
             }
@@ -270,6 +340,15 @@ const livePreviewTheme = EditorView.baseTheme({
     backgroundColor: "rgba(0,0,0,0.02)",
   },
   ".cm-callout-header": { fontWeight: "600" },
+  // 아이콘+이름 라벨 (원문 `[!이름]` 자리에 그려진다)
+  ".cm-callout-label": { fontWeight: "600", marginRight: "2px" },
+  ".cm-co-excerpt .cm-callout-label": { color: "#b45309" },
+  ".cm-co-thought .cm-callout-label": { color: "#0369a1" },
+  ".cm-co-summary .cm-callout-label": { color: "#047857" },
+  ".cm-co-question .cm-callout-label": { color: "#6d28d9" },
+  ".cm-co-log .cm-callout-label": { color: "#0369a1" },
+  ".cm-co-feeling .cm-callout-label": { color: "#b45309" },
+  ".cm-co-default .cm-callout-label": { color: "#525252" },
   ".cm-co-excerpt": {
     borderLeftColor: "#f59e0b",
     backgroundColor: "rgba(245, 158, 11, 0.06)",
@@ -286,6 +365,48 @@ const livePreviewTheme = EditorView.baseTheme({
     borderLeftColor: "#8b5cf6",
     backgroundColor: "rgba(139, 92, 246, 0.06)",
   },
+  // 일지 — 입력 바의 기록(sky)·느낌(amber) 버튼과 같은 색
+  ".cm-co-log": {
+    borderLeftColor: "#0ea5e9",
+    backgroundColor: "rgba(14, 165, 233, 0.06)",
+  },
+  ".cm-co-feeling": {
+    borderLeftColor: "#f59e0b",
+    backgroundColor: "rgba(245, 158, 11, 0.06)",
+  },
+  // 커스텀 콜아웃용 팔레트
+  ".cm-co-p-amber": { borderLeftColor: "#f59e0b", backgroundColor: "rgba(245,158,11,0.06)" },
+  ".cm-co-p-orange": { borderLeftColor: "#f97316", backgroundColor: "rgba(249,115,22,0.06)" },
+  ".cm-co-p-yellow": { borderLeftColor: "#eab308", backgroundColor: "rgba(234,179,8,0.06)" },
+  ".cm-co-p-lime": { borderLeftColor: "#84cc16", backgroundColor: "rgba(132,204,22,0.06)" },
+  ".cm-co-p-emerald": { borderLeftColor: "#10b981", backgroundColor: "rgba(16,185,129,0.06)" },
+  ".cm-co-p-teal": { borderLeftColor: "#14b8a6", backgroundColor: "rgba(20,184,166,0.06)" },
+  ".cm-co-p-sky": { borderLeftColor: "#0ea5e9", backgroundColor: "rgba(14,165,233,0.06)" },
+  ".cm-co-p-blue": { borderLeftColor: "#3b82f6", backgroundColor: "rgba(59,130,246,0.06)" },
+  ".cm-co-p-indigo": { borderLeftColor: "#6366f1", backgroundColor: "rgba(99,102,241,0.06)" },
+  ".cm-co-p-violet": { borderLeftColor: "#8b5cf6", backgroundColor: "rgba(139,92,246,0.06)" },
+  ".cm-co-p-fuchsia": { borderLeftColor: "#d946ef", backgroundColor: "rgba(217,70,239,0.06)" },
+  ".cm-co-p-rose": { borderLeftColor: "#f43f5e", backgroundColor: "rgba(244,63,94,0.06)" },
+  ".cm-co-p-stone": { borderLeftColor: "#a8a29e", backgroundColor: "rgba(168,162,158,0.06)" },
+  ".cm-co-p-red": { borderLeftColor: "#ef4444", backgroundColor: "rgba(239,68,68,0.06)" },
+  ".cm-co-p-black": { borderLeftColor: "#171717", backgroundColor: "rgba(23,23,23,0.05)" },
+  ".cm-co-p-neutral": { borderLeftColor: "#a3a3a3", backgroundColor: "rgba(163,163,163,0.06)" },
+  ".cm-co-p-amber .cm-callout-label": { color: "#b45309" },
+  ".cm-co-p-orange .cm-callout-label": { color: "#c2410c" },
+  ".cm-co-p-yellow .cm-callout-label": { color: "#a16207" },
+  ".cm-co-p-lime .cm-callout-label": { color: "#4d7c0f" },
+  ".cm-co-p-emerald .cm-callout-label": { color: "#047857" },
+  ".cm-co-p-teal .cm-callout-label": { color: "#0f766e" },
+  ".cm-co-p-sky .cm-callout-label": { color: "#0369a1" },
+  ".cm-co-p-blue .cm-callout-label": { color: "#1d4ed8" },
+  ".cm-co-p-indigo .cm-callout-label": { color: "#4338ca" },
+  ".cm-co-p-violet .cm-callout-label": { color: "#6d28d9" },
+  ".cm-co-p-fuchsia .cm-callout-label": { color: "#a21caf" },
+  ".cm-co-p-rose .cm-callout-label": { color: "#be123c" },
+  ".cm-co-p-stone .cm-callout-label": { color: "#57534e" },
+  ".cm-co-p-red .cm-callout-label": { color: "#b91c1c" },
+  ".cm-co-p-black .cm-callout-label": { color: "#171717" },
+  ".cm-co-p-neutral .cm-callout-label": { color: "#525252" },
   ".cm-co-default": {
     borderLeftColor: "#a3a3a3",
     backgroundColor: "rgba(0,0,0,0.03)",
@@ -299,7 +420,8 @@ const livePreviewTheme = EditorView.baseTheme({
     boxShadow: "0 1px 4px rgba(0,0,0,0.15)",
   },
   ".cm-inline-img-broken": { color: "#9ca3af", fontSize: "0.85em" },
-  ".cm-taskbox": { cursor: "pointer", color: "#7c3aed" },
+  // 체크박스 — 입력 바의 할 일(emerald) 버튼과 같은 색
+  ".cm-taskbox": { cursor: "pointer", color: "#10b981" },
 });
 
 export function livePreview() {

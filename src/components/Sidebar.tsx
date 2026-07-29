@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useVault } from "../stores/vault";
+import { openTrashWindow } from "../lib/trashWindow";
 import CustomTypeDialog from "./CustomTypeDialog";
 import SettingsModal from "./SettingsModal";
 
@@ -132,12 +133,21 @@ export default function Sidebar({ onSearch }: { onSearch: () => void }) {
         <p className="truncate text-[11px] text-neutral-400" title={vaultPath ?? ""}>
           {vaultPath}
         </p>
-        <button
-          className="mt-1 text-[11px] text-neutral-500 underline hover:text-neutral-700"
-          onClick={() => setSettingsOpen(true)}
-        >
-          ⚙️ 설정
-        </button>
+        <div className="mt-1 flex items-center gap-3">
+          <button
+            className="text-[11px] text-neutral-500 underline hover:text-neutral-700"
+            onClick={() => setSettingsOpen(true)}
+          >
+            ⚙️ 설정
+          </button>
+          <button
+            className="text-[11px] text-neutral-500 underline hover:text-neutral-700"
+            onClick={openTrashWindow}
+            title="삭제한 노트를 되돌립니다"
+          >
+            🗑️ 휴지통
+          </button>
+        </div>
       </div>
 
       {addingType && <CustomTypeDialog onClose={() => setAddingType(false)} />}

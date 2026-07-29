@@ -3,8 +3,11 @@ import { load } from "@tauri-apps/plugin-store";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { join } from "@tauri-apps/api/path";
+import { notifyOtherWindows } from "../lib/windowSync";
 import {
   commands,
+  type DailyKind,
+  type CalloutDef,
   type EntryKind,
   type FieldDef,
   type IssueKind,
@@ -31,6 +34,9 @@ type FmObject = { [key: string]: JsonValue | undefined };
 /** 편집 시 목록(대시보드) 표시 방식 */
 export type LayoutMode = "replace" | "three" | "vertical";
 
+/** 일지 빠른 입력 바의 기본 순서 — 기록 · 느낌 · 할 일, 사용자 정의는 그 뒤 */
+export const DEFAULT_DAILY_KIND_ORDER = ["log", "feeling", "todo"];
+
 interface VaultStore {
   /** 사이드바에서 선택된 섹션 — current가 없으면 이 타입의 대시보드가 열린다 */
   nav: string;
@@ -52,6 +58,19 @@ interface VaultStore {
   /** 휴지통 자동삭제 보존 일수 (0 = 안 함) */
   trashRetentionDays: number;
   setTrashRetention(days: number): Promise<void>;
+  /** 일지에서 할 일을 아래에 둘지 오른쪽에 둘지 */
+  todoPanel: "bottom" | "right";
+  setTodoPanel(v: "bottom" | "right"): Promise<void>;
+  /** 할 일 구역을 크게 볼지 (기록 영역과 비율을 뒤집는다) */
+  todoBig: boolean;
+  toggleTodoBig(): Promise<void>;
+  /** 일지 빠른 입력 바의 종류 순서 — 기본 종류는 DailyKind 값, 사용자 정의는 그 이름.
+   *  여기 없는 종류(나중에 만든 것)는 뒤에 붙는다. */
+  dailyKindOrder: string[];
+  setDailyKindOrder(order: string[]): Promise<void>;
+  /** vault에 저장된 사용자 정의 콜아웃 */
+  callouts: CalloutDef[];
+  refreshCallouts(): Promise<void>;
   /** 미러 대상 폴더들 */
   mirrors: string[];
   /** 마지막 미러 동기화 결과 */
@@ -81,9 +100,18 @@ interface VaultStore {
   setFrontmatter(fm: FmObject): void;
   saveCurrent(): Promise<void>;
   createNote(t: string, title: string, fields: FmObject): Promise<void>;
+  /** 제목 없이 바로 만들어 편집기를 연다 (제목은 편집기 제목칸에서 입력) */
+  createUntitled(t: string): Promise<void>;
+  /** 방금 만들어 아직 제목을 안 정한 노트의 rel — 편집기가 제목칸을 열어 준다 */
+  pendingTitleRel: string | null;
+  clearPendingTitle(): void;
   openToday(): Promise<void>;
   deleteCurrent(): Promise<void>;
   appendEntry(kind: EntryKind, text: string): Promise<void>;
+  /** 데일리노트 빠른 입력 (할 일/기록/느낌) */
+  appendDaily(kind: DailyKind, text: string): Promise<void>;
+  /** 사용자 정의 종류로 기록 추가 (임의 이름 콜아웃) */
+  appendCalloutKind(label: string, text: string): Promise<void>;
   openReadingForBook(bookRelPath: string): Promise<void>;
   openByTitle(title: string): Promise<void>;
   addCustomType(
@@ -101,6 +129,8 @@ interface VaultStore {
   updateFrontmatter(relPath: string, patch: FmObject): Promise<void>;
   /** 전체 재색인 후 색인된 노트 수 반환 (실패 시 undefined) */
   reindexAll(): Promise<number | undefined>;
+  /** 렌더 밖에서 터진 오류를 화면 알림으로 올린다 */
+  setError(message: string): void;
   clearError(): void;
 }
 
@@ -128,6 +158,20 @@ export const useVault = create<VaultStore>((set, get) => {
     mirrorTimer = setTimeout(() => get().syncMirrors(), 2000);
   }
 
+  /** 제목을 정하지 않고 떠나는 노트에 `{날짜} {본문 첫머리}`로 이름을 붙인다.
+   *  실패해도 화면 전환을 막지 않는다(이름이 없을 뿐 내용은 이미 저장돼 있다). */
+  async function autoTitleLeaving() {
+    const rel = get().pendingTitleRel;
+    if (!rel) return;
+    set({ pendingTitleRel: null });
+    try {
+      await commands.autoTitleNote(rel);
+      await get().refresh();
+    } catch {
+      // 무시
+    }
+  }
+
   /** vault 경로를 열고 설정에 저장한 뒤 목록·스키마를 새로고침한다 */
   async function activateVault(vaultPath: string) {
     unwrap(await commands.setVault(vaultPath));
@@ -137,12 +181,14 @@ export const useVault = create<VaultStore>((set, get) => {
     await commands.setHistoryPolicy(get().historyMax, get().historyIntervalSecs);
     await get().refreshSchemas();
     await get().refresh();
+    await get().refreshCallouts();
   }
 
   return {
     nav: "home",
     async setNav(t) {
       if (get().dirty) await get().saveCurrent();
+      await autoTitleLeaving();
       set({ nav: t, current: null, dirty: false });
       const store = await settings();
       await store.set("lastNav", t);
@@ -167,6 +213,30 @@ export const useVault = create<VaultStore>((set, get) => {
       set({ bookPickerView: v });
       const store = await settings();
       await store.set("bookPickerView", v);
+    },
+    callouts: [],
+    async refreshCallouts() {
+      const r = await commands.listCallouts();
+      if (r.status === "ok") set({ callouts: r.data });
+    },
+    todoBig: false,
+    async toggleTodoBig() {
+      const v = !get().todoBig;
+      set({ todoBig: v });
+      const store = await settings();
+      await store.set("todoBig", v);
+    },
+    todoPanel: "bottom",
+    async setTodoPanel(v) {
+      set({ todoPanel: v });
+      const store = await settings();
+      await store.set("todoPanel", v);
+    },
+    dailyKindOrder: DEFAULT_DAILY_KIND_ORDER,
+    async setDailyKindOrder(order) {
+      set({ dailyKindOrder: order });
+      const store = await settings();
+      await store.set("dailyKindOrder", order);
     },
     trashRetentionDays: 7,
     async setTrashRetention(days) {
@@ -221,12 +291,21 @@ export const useVault = create<VaultStore>((set, get) => {
         const historyMax = (await store.get<number>("historyMax")) ?? 20;
         const historyIntervalSecs =
           (await store.get<number>("historyIntervalSecs")) ?? 300;
+        const todoPanel =
+          (await store.get<"bottom" | "right">("todoPanel")) ?? "bottom";
+        const todoBig = (await store.get<boolean>("todoBig")) ?? false;
+        const dailyKindOrder =
+          (await store.get<string[]>("dailyKindOrder")) ??
+          DEFAULT_DAILY_KIND_ORDER;
         set({
           deleteConfirm,
           bookPickerView,
           trashRetentionDays,
           historyMax,
           historyIntervalSecs,
+          todoPanel,
+          todoBig,
+          dailyKindOrder,
         });
         const saved = (await store.get<string>("vaultPath")) ?? null;
         if (saved) {
@@ -236,6 +315,7 @@ export const useVault = create<VaultStore>((set, get) => {
           await commands.setHistoryPolicy(historyMax, historyIntervalSecs);
           await get().refreshSchemas();
           await get().refresh();
+          await get().refreshCallouts();
           // 오래된 휴지통 항목 자동 정리 (실패는 무시)
           if (trashRetentionDays > 0) {
             commands.purgeTrash(trashRetentionDays).catch(() => {});
@@ -329,6 +409,10 @@ export const useVault = create<VaultStore>((set, get) => {
     async openNote(relPath) {
       const { dirty } = get();
       if (dirty) await get().saveCurrent();
+      // 다른 노트로 넘어가는 경우에만 자동 명명 (자기 자신을 다시 여는 건 제외)
+      if (get().pendingTitleRel && get().pendingTitleRel !== relPath) {
+        await autoTitleLeaving();
+      }
       await guard(async () => {
         const note = unwrap(await commands.readNote(relPath));
         set({ current: note, dirty: false, nav: note.note_type });
@@ -339,6 +423,7 @@ export const useVault = create<VaultStore>((set, get) => {
     },
 
     closeNote() {
+      autoTitleLeaving();
       set({ current: null, dirty: false });
       settings().then((s) => s.delete("lastNoteRel"));
     },
@@ -367,6 +452,8 @@ export const useVault = create<VaultStore>((set, get) => {
           );
           set({ dirty: false });
           await get().refresh();
+          // 같은 노트를 띄운 다른 창이 따라오도록 알린다
+          await notifyOtherWindows([cur.rel_path]);
           scheduleMirror();
         });
       } finally {
@@ -379,6 +466,21 @@ export const useVault = create<VaultStore>((set, get) => {
         const rel = unwrap(await commands.createNote(t, title, fields));
         await get().refresh();
         await get().openNote(rel);
+        scheduleMirror();
+      });
+    },
+
+    pendingTitleRel: null,
+    clearPendingTitle() {
+      set({ pendingTitleRel: null });
+    },
+
+    async createUntitled(t) {
+      await guard(async () => {
+        const rel = unwrap(await commands.createNote(t, "", {}));
+        await get().refresh();
+        await get().openNote(rel);
+        set({ pendingTitleRel: rel });
         scheduleMirror();
       });
     },
@@ -411,6 +513,37 @@ export const useVault = create<VaultStore>((set, get) => {
           await commands.appendReadingEntry(cur.rel_path, kind, text),
         );
         set({ current: updated, dirty: false });
+        await notifyOtherWindows([cur.rel_path]);
+        scheduleMirror();
+      });
+    },
+
+    async appendDaily(kind, text) {
+      const cur = get().current;
+      if (!cur) return;
+      if (get().dirty) await get().saveCurrent();
+      await guard(async () => {
+        const updated = unwrap(
+          await commands.appendDailyEntry(cur.rel_path, kind, text),
+        );
+        set({ current: updated, dirty: false });
+        await get().refresh();
+        await notifyOtherWindows([cur.rel_path]);
+        scheduleMirror();
+      });
+    },
+
+    async appendCalloutKind(label, text) {
+      const cur = get().current;
+      if (!cur) return;
+      if (get().dirty) await get().saveCurrent();
+      await guard(async () => {
+        const updated = unwrap(
+          await commands.appendCallout(cur.rel_path, label, text),
+        );
+        set({ current: updated, dirty: false });
+        await get().refresh();
+        await notifyOtherWindows([cur.rel_path]);
         scheduleMirror();
       });
     },
@@ -529,6 +662,9 @@ export const useVault = create<VaultStore>((set, get) => {
       });
     },
 
+    setError(message) {
+      set({ error: message });
+    },
     clearError() {
       set({ error: null });
     },

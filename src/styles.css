@@ -5,3 +5,25 @@ body,
 #root {
   height: 100%;
 }
+
+/* 데스크톱 앱답게: 브라우저처럼 텍스트가 아무데나 끌려 선택되지 않도록.
+   실제로 글을 쓰고 고르는 곳(에디터·입력칸·읽는 영역)에서만 선택을 허용한다. */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+.cm-editor,
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 한글 조합 중에는 placeholder를 감춘다 (useImeInput이 붙였다 뗀다).
+   조합 글자를 지웠다 다시 넣는 사이사이 브라우저가 값을 빈 것으로 보고
+   placeholder를 깜빡이게 하는 걸 막는다. */
+.ime-composing::placeholder {
+  color: transparent;
+}

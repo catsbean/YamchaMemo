@@ -23,7 +23,7 @@ pub use history::{HistoryItem, HistoryPolicy};
 pub use indexer::{Indexer, NoteRef, TagCount};
 pub use schema::{Builtin, EntryKind, FieldDef, FieldKind, TypeDef};
 pub use search::{SearchEngine, SearchFilter, SearchHit};
-pub use vault::{NoteContent, NoteSummary, ParsedNote, TrashItem, Vault};
+pub use vault::{CalloutDef, NoteContent, NoteSummary, ParsedNote, TrashItem, Vault};
 
 /// vault 전체를 다시 인덱싱한다 (SQLite + tantivy).
 pub fn reindex_all(

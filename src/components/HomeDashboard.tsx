@@ -1,6 +1,10 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { commands, type TodoItem } from "../bindings";
 import { typeLabel, useVault } from "../stores/vault";
 import { fmStr } from "../lib/note";
+import { noteItemHandlers, useContextMenu } from "../lib/contextMenu";
+import { openNoteWindow } from "../lib/trashWindow";
+import ContextMenu from "./ContextMenu";
 
 function isoDate(d: Date): string {
   const y = d.getFullYear();
@@ -12,7 +16,12 @@ function isoDate(d: Date): string {
 /** 홈: 독서·쓰기 통계 + 데일리 히트맵 + 최근 활동 */
 export default function HomeDashboard() {
   const { notes, schemas, openNote, openToday, setNav } = useVault();
+  const ctx = useContextMenu();
   const year = new Date().getFullYear();
+
+  /** 목록 항목 공통: 클릭=열기, Ctrl+클릭·가운데클릭=새 창, 우클릭=메뉴 */
+  const itemProps = (rel: string) =>
+    noteItemHandlers(rel, () => openNote(rel), openNoteWindow, ctx.open);
 
   const stats = useMemo(() => {
     const books = notes.filter((n) => n.note_type === "book");
@@ -80,6 +89,14 @@ export default function HomeDashboard() {
 
   const recent = useMemo(() => notes.slice(0, 8), [notes]);
 
+  // 미완 할 일 (데일리 우선). 노트가 바뀔 때마다 다시 읽는다
+  const [todos, setTodos] = useState<TodoItem[]>([]);
+  useEffect(() => {
+    commands.listOpenTodos(50).then((r) => {
+      if (r.status === "ok") setTodos(r.data);
+    });
+  }, [notes]);
+
   return (
     <div className="flex h-full flex-col overflow-y-auto">
       <header className="border-b border-neutral-200 px-6 py-3">
@@ -109,7 +126,7 @@ export default function HomeDashboard() {
                 <li key={b.rel_path}>
                   <button
                     className="w-full truncate rounded px-2 py-1 text-left text-xs text-neutral-600 hover:bg-neutral-50"
-                    onClick={() => openNote(b.rel_path)}
+                    {...itemProps(b.rel_path)}
                   >
                     📖 {b.title}
                     {fmStr(b, "author") && (
@@ -148,7 +165,7 @@ export default function HomeDashboard() {
                 <li key={p.rel_path}>
                   <button
                     className="w-full truncate rounded px-2 py-1 text-left text-xs text-neutral-600 hover:bg-neutral-50"
-                    onClick={() => openNote(p.rel_path)}
+                    {...itemProps(p.rel_path)}
                   >
                     ✏️ {p.title}
                     <span className="text-neutral-400">
@@ -158,6 +175,54 @@ export default function HomeDashboard() {
                   </button>
                 </li>
               ))}
+            </ul>
+          )}
+        </section>
+
+        {/* 할 일 */}
+        <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-bold">
+              ☑ 할 일{" "}
+              {todos.length > 0 && (
+                <span className="ml-1 text-xs font-normal text-amber-600">
+                  {todos.length}건
+                </span>
+              )}
+            </h2>
+            <button
+              className="text-xs text-neutral-400 hover:text-neutral-600"
+              onClick={openToday}
+            >
+              오늘 노트 →
+            </button>
+          </div>
+          {todos.length === 0 ? (
+            <p className="py-4 text-center text-xs text-neutral-400">
+              끝내지 않은 할 일이 없습니다
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-0.5">
+              {todos.slice(0, 8).map((t, i) => (
+                <li key={`${t.rel_path}#${i}`}>
+                  <button
+                    className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-50"
+                    {...itemProps(t.rel_path)}
+                    title={`${t.note_title} 에서 열기`}
+                  >
+                    <span className="shrink-0 text-neutral-300">☐</span>
+                    <span className="truncate text-neutral-700">{t.text}</span>
+                    <span className="ml-auto shrink-0 text-[10px] text-neutral-400">
+                      {t.note_type === "daily" ? t.date : t.note_title}
+                    </span>
+                  </button>
+                </li>
+              ))}
+              {todos.length > 8 && (
+                <li className="px-2 pt-1 text-[10px] text-neutral-400">
+                  외 {todos.length - 8}건
+                </li>
+              )}
             </ul>
           )}
         </section>
@@ -202,7 +267,7 @@ export default function HomeDashboard() {
               <li key={n.rel_path}>
                 <button
                   className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-50"
-                  onClick={() => openNote(n.rel_path)}
+                  {...itemProps(n.rel_path)}
                 >
                   <span className="w-16 shrink-0 rounded bg-neutral-100 px-1 py-0.5 text-center text-[10px] text-neutral-500">
                     {typeLabel(schemas, n.note_type)}
@@ -222,6 +287,8 @@ export default function HomeDashboard() {
           </ul>
         </section>
       </div>
+
+      {ctx.menu && <ContextMenu state={ctx.menu} onClose={ctx.close} />}
     </div>
   );
 }

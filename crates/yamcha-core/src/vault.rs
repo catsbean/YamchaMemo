@@ -9,8 +9,33 @@ use serde_json::{json, Map, Value};
 
 use crate::error::CoreError;
 use crate::parse;
-use crate::schema::{builtin_defs, normalize_frontmatter, Builtin, EntryKind, TypeDef};
+use crate::schema::{builtin_defs, normalize_frontmatter, Builtin, DailyKind, EntryKind, TypeDef};
 use crate::template;
+
+/// 사용자 정의 콜아웃 종류 (vault의 `_callouts.json`에 저장 — vault를 옮기면 함께 간다)
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct CalloutDef {
+    pub label: String,
+    /// 이모지 아이콘
+    pub icon: String,
+    /// 고정 팔레트 이름 (amber/sky/emerald/violet/rose/neutral)
+    pub color: String,
+    /// 어디에 쓸지: "daily" | "book" | "both"
+    pub scope: String,
+}
+
+const CALLOUTS_FILE: &str = "_callouts.json";
+/// 일지·책 각각 최대 몇 개까지 추가할 수 있는지
+pub const MAX_CALLOUTS_PER_SCOPE: usize = 5;
+/// 종류 이름으로 쓸 수 없는 기본 이름들
+pub const BUILTIN_KIND_LABELS: [&str; 7] =
+    ["발췌", "생각", "요약", "질문", "기록", "느낌", "할 일"];
+/// 종류 변경에서 "할 일"을 뜻하는 값 (콜아웃이 아니라 체크박스로 간다)
+pub const TODO_KIND: &str = "할 일";
+
+fn visible_in(scope: &str, target: &str) -> bool {
+    scope == target || scope == "both"
+}
 
 /// 휴지통에 있는 삭제된 노트 한 건
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
@@ -730,6 +755,83 @@ impl Vault {
             .replace('\\', "/")
     }
 
+    /// 타입별 제목 머릿글 템플릿 파일 경로 (`.yamcha/templates/title-{type}.txt`)
+    fn title_template_path(&self, type_id: &str) -> PathBuf {
+        let safe = Self::sanitize_filename(type_id);
+        self.root
+            .join(".yamcha")
+            .join("templates")
+            .join(format!("title-{safe}.txt"))
+    }
+
+    /// 제목 머릿글을 쓸 수 있는 타입인가.
+    /// 책·글쓰기·데일리는 파일명 규칙(제목/시리즈/날짜)이 이미 확고해서 제외한다.
+    pub fn supports_title_prefix(type_id: &str) -> bool {
+        !matches!(
+            Builtin::from_id(type_id),
+            Some(Builtin::Book) | Some(Builtin::Writing) | Some(Builtin::Daily)
+        )
+    }
+
+    /// 타입별 기본 머릿글. 정보노트는 원래부터 파일명이 `{날짜} {제목}`이었고,
+    /// 그 규칙을 이 템플릿으로 옮겨 이제 사용자가 바꿀 수 있게 했다.
+    fn default_title_template(type_id: &str) -> &'static str {
+        if type_id == Builtin::Info.id() {
+            "{{date}} "
+        } else {
+            ""
+        }
+    }
+
+    /// 설정 화면용: 저장된 머릿글이 있으면 그것, 없으면 기본값
+    pub fn read_title_template(&self, type_id: &str) -> Result<String, CoreError> {
+        if !Self::supports_title_prefix(type_id) {
+            return Ok(String::new());
+        }
+        match fs::read_to_string(self.title_template_path(type_id)) {
+            Ok(s) => Ok(s),
+            Err(_) => Ok(Self::default_title_template(type_id).to_string()),
+        }
+    }
+
+    /// 머릿글 저장. 기본값과 같으면 파일을 지워 기본값으로 되돌린다.
+    pub fn write_title_template(&self, type_id: &str, content: &str) -> Result<(), CoreError> {
+        if !Self::supports_title_prefix(type_id) {
+            return Err(CoreError::Invalid(format!(
+                "'{type_id}' 분류는 제목 머릿글을 쓸 수 없습니다."
+            )));
+        }
+        let path = self.title_template_path(type_id);
+        if content == Self::default_title_template(type_id) {
+            if path.exists() {
+                fs::remove_file(&path)?;
+            }
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, content)?;
+        Ok(())
+    }
+
+    /// 제목 앞에 머릿글을 붙인다 (플레이스홀더는 template::render_template과 동일)
+    fn apply_title_prefix(&self, type_id: &str, date: &str, title: &str) -> String {
+        if !Self::supports_title_prefix(type_id) {
+            return title.to_string();
+        }
+        let prefix = self
+            .read_title_template(type_id)
+            .unwrap_or_default();
+        if prefix.trim().is_empty() {
+            return title.to_string();
+        }
+        format!(
+            "{}{title}",
+            template::render_template(&prefix, date, title)
+        )
+    }
+
     /// 데일리/자유 커스텀 템플릿 파일 경로 (kind: "daily"|"free")
     fn template_file_path(&self, kind: &str) -> Option<PathBuf> {
         let name = match kind {
@@ -817,14 +919,18 @@ impl Vault {
                 (abs, template::render_template(&def.template, &today, &title))
             }
             Some(Builtin::Info) => {
-                let title = Self::sanitize_filename(title);
-                let stem = format!("{today} {title}");
+                // 머릿글(기본 "{{date}} ")이 붙은 결과가 곧 제목이자 파일명이다
+                let raw = Self::sanitize_filename(title);
+                let stem =
+                    Self::sanitize_filename(&self.apply_title_prefix(type_id, &today, &raw));
                 let abs = self.unique_path(&self.root.join(&def.folder), &stem);
-                (abs, template::render_template(&def.template, &today, &title))
+                (abs, template::render_template(&def.template, &today, &raw))
             }
             Some(Builtin::Free) | Some(Builtin::Writing) | None => {
                 // 자유노트·글쓰기·사용자 정의 타입은 제목 = 파일명
-                let title = Self::sanitize_filename(title);
+                let raw = Self::sanitize_filename(title);
+                let title =
+                    Self::sanitize_filename(&self.apply_title_prefix(type_id, &today, &raw));
                 if title != "무제" {
                     fm.insert("title".into(), json!(title));
                 }
@@ -839,7 +945,8 @@ impl Vault {
                     def.template.clone()
                 };
                 let abs = self.unique_path(&self.root.join(&def.folder), &title);
-                (abs, template::render_template(&tmpl, &today, &title))
+                // 본문의 {{title}}은 머릿글을 뺀, 사용자가 실제로 입력한 제목
+                (abs, template::render_template(&tmpl, &today, &raw))
             }
         };
 
@@ -874,6 +981,73 @@ impl Vault {
             return Err(CoreError::Invalid("book 노트가 아닙니다".into()));
         }
         Ok(book_rel.to_string())
+    }
+
+    /// 본문 첫 줄에서 제목감을 뽑는다 (마크다운 기호·콜아웃 기호를 걷어내고 앞 24자).
+    fn title_from_body(body: &str) -> String {
+        for line in body.lines() {
+            let t = line
+                .trim()
+                .trim_start_matches('>')
+                .trim_start()
+                .trim_start_matches(['#', '-', '*', '+'])
+                .trim_start();
+            // 빈 체크박스만 있는 템플릿 줄은 건너뛴다
+            let t = t.strip_prefix("[ ]").unwrap_or(t).trim();
+            let t = t.strip_prefix("[x]").or_else(|| t.strip_prefix("[X]")).unwrap_or(t).trim();
+            if t.is_empty() {
+                continue;
+            }
+            let short: String = t.chars().take(24).collect();
+            return short.trim().to_string();
+        }
+        String::new()
+    }
+
+    /// 제목을 정하지 않고 닫은 노트에 이름을 붙여 준다.
+    /// 이미 이름이 있으면 그대로 두고, 없을 때만 `{날짜} {본문 첫머리}`로 바꾼다.
+    /// 바뀌었으면 새 rel, 아니면 원래 rel을 돌려준다.
+    pub fn auto_title_if_untitled(&self, rel: &str) -> Result<String, CoreError> {
+        let note = self.read_note(rel)?;
+        if !Self::supports_title_prefix(&note.note_type) {
+            return Ok(rel.to_string());
+        }
+        let stem = Path::new(rel)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let fm_title = note
+            .frontmatter
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let current = if fm_title.is_empty() { stem.clone() } else { fm_title };
+
+        // "무제" 또는 "무제 (2)"처럼 자동 부여된 이름만 대상으로 한다
+        let untitled = current == "무제"
+            || (current.starts_with("무제 (") && current.ends_with(')'));
+        if !untitled {
+            return Ok(rel.to_string());
+        }
+
+        let head = Self::title_from_body(&note.body);
+        if head.is_empty() {
+            return Ok(rel.to_string()); // 본문도 비었으면 건드리지 않는다
+        }
+        let date = note
+            .frontmatter
+            .get("date")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let date = if date.is_empty() { Self::today() } else { date };
+        // 정보노트는 rename_note가 스스로 날짜 접두어를 붙이므로 중복해서 넣지 않는다
+        if note.note_type == Builtin::Info.id() {
+            self.rename_note(rel, &head)
+        } else {
+            self.rename_note(rel, &format!("{date} {head}"))
+        }
     }
 
     /// 인덱싱용 완전 파싱
@@ -955,6 +1129,357 @@ impl Vault {
         self.snapshot_before(rel, Some(&content));
         self.atomic_write(&self.abs(rel)?, &content)?;
         self.read_note(rel)
+    }
+
+    /// 데일리노트에 빠른 입력을 추가한다.
+    /// 할 일은 `## 할 일`에 체크박스로, 기록·느낌은 `## 기록`에 시각이 붙은 콜아웃으로 들어간다.
+    /// 해당 섹션이 없으면(사용자가 템플릿을 고친 경우) 본문 끝에 새로 만든다.
+    pub fn append_daily_entry(
+        &self,
+        rel: &str,
+        kind: DailyKind,
+        text: &str,
+    ) -> Result<NoteContent, CoreError> {
+        let note = self.read_note(rel)?;
+        if note.note_type != Builtin::Daily.id() {
+            return Err(CoreError::Invalid("데일리노트가 아닙니다".into()));
+        }
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(CoreError::Invalid("내용을 입력해주세요".into()));
+        }
+        let time = Local::now().format("%H:%M").to_string();
+        let block = template::daily_entry_block(kind, &time, text);
+        let tight = matches!(kind, DailyKind::Todo);
+        let new_body = template::append_to_section(&note.body, kind.section(), &block, tight);
+        let fm = note.frontmatter.as_object().cloned().unwrap_or_default();
+        let content = parse::compose(&fm, &new_body)?;
+        self.snapshot_before(rel, Some(&content));
+        self.atomic_write(&self.abs(rel)?, &content)?;
+        self.read_note(rel)
+    }
+
+    /// 노트의 `## 기록` 섹션을 꺼낸다 (책·일지 공통).
+    fn records_of(&self, note: &NoteContent) -> Result<String, CoreError> {
+        template::section_text(&note.body, "## 기록")
+            .ok_or_else(|| CoreError::Invalid("기록 섹션이 없습니다".into()))
+    }
+
+    /// 수정·삭제 대상이 화면에서 본 그 항목이 맞는지 확인한다.
+    /// 그 사이 파일이 바뀌었으면(외부 편집·다른 창) 엉뚱한 항목을 건드리지 않도록 막는다.
+    fn check_entry(
+        entries: &[template::ParsedEntry],
+        index: u32,
+        expected_text: &str,
+    ) -> Result<(), CoreError> {
+        let e = entries.get(index as usize).ok_or_else(|| {
+            CoreError::Invalid("기록 목록이 바뀌었습니다. 새로고침 후 다시 시도해주세요.".into())
+        })?;
+        if e.text.trim() != expected_text.trim() {
+            return Err(CoreError::Invalid(
+                "기록 목록이 바뀌었습니다. 새로고침 후 다시 시도해주세요.".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// 기록 섹션의 index번째 콜아웃 본문을 고친다 (종류·날짜는 유지).
+    /// `expected_text`가 현재 내용과 다르면 거부한다.
+    pub fn update_entry(
+        &self,
+        rel: &str,
+        index: u32,
+        expected_text: &str,
+        new_text: &str,
+    ) -> Result<NoteContent, CoreError> {
+        let new_text = new_text.trim();
+        if new_text.is_empty() {
+            return Err(CoreError::Invalid("내용을 입력해주세요".into()));
+        }
+        let note = self.read_note(rel)?;
+        let records = self.records_of(&note)?;
+        Self::check_entry(&template::parse_entries(&records), index, expected_text)?;
+        let new_records = template::replace_entry_text(&records, index as usize, new_text)
+            .ok_or_else(|| CoreError::Invalid("기록을 찾을 수 없습니다".into()))?;
+        self.write_records(rel, &note, &new_records)
+    }
+
+    /// 기록 섹션의 index번째 콜아웃을 지운다. `expected_text`가 다르면 거부한다.
+    pub fn delete_entry(
+        &self,
+        rel: &str,
+        index: u32,
+        expected_text: &str,
+    ) -> Result<NoteContent, CoreError> {
+        let note = self.read_note(rel)?;
+        let records = self.records_of(&note)?;
+        Self::check_entry(&template::parse_entries(&records), index, expected_text)?;
+        let new_records = template::remove_entry(&records, index as usize)
+            .ok_or_else(|| CoreError::Invalid("기록을 찾을 수 없습니다".into()))?;
+        self.write_records(rel, &note, &new_records)
+    }
+
+    /// 바뀐 기록 섹션을 본문에 되붙여 저장한다 (되돌리기용 스냅샷 포함).
+    fn write_records(
+        &self,
+        rel: &str,
+        note: &NoteContent,
+        new_records: &str,
+    ) -> Result<NoteContent, CoreError> {
+        let new_body = template::replace_section_text(&note.body, "## 기록", new_records)
+            .ok_or_else(|| CoreError::Invalid("기록 섹션이 없습니다".into()))?;
+        let fm = note.frontmatter.as_object().cloned().unwrap_or_default();
+        let content = parse::compose(&fm, &new_body)?;
+        self.snapshot_before(rel, Some(&content));
+        self.atomic_write(&self.abs(rel)?, &content)?;
+        self.read_note(rel)
+    }
+
+    /// 할 일이 적힌 범위: `## 할 일` 섹션이 있으면 그 안, 없으면(템플릿을 고친 경우) 본문 전체.
+    fn todos_scope(note: &NoteContent) -> (String, bool) {
+        match template::section_text(&note.body, "## 할 일") {
+            Some(s) => (s, true),
+            None => (note.body.clone(), false),
+        }
+    }
+
+    /// 바뀐 할 일 범위를 본문에 되붙여 저장한다.
+    fn write_todos(
+        &self,
+        rel: &str,
+        note: &NoteContent,
+        in_section: bool,
+        new_text: &str,
+    ) -> Result<NoteContent, CoreError> {
+        let new_body = if in_section {
+            template::replace_section_text(&note.body, "## 할 일", new_text)
+                .ok_or_else(|| CoreError::Invalid("할 일 섹션이 없습니다".into()))?
+        } else {
+            new_text.to_string()
+        };
+        let fm = note.frontmatter.as_object().cloned().unwrap_or_default();
+        let content = parse::compose(&fm, &new_body)?;
+        self.snapshot_before(rel, Some(&content));
+        self.atomic_write(&self.abs(rel)?, &content)?;
+        self.read_note(rel)
+    }
+
+    /// 화면에서 본 그 할 일이 맞는지 확인 (엉뚱한 줄을 건드리지 않도록)
+    fn check_todo(
+        todos: &[template::ParsedTodo],
+        index: u32,
+        expected_text: &str,
+    ) -> Result<(), CoreError> {
+        let t = todos.get(index as usize).ok_or_else(|| {
+            CoreError::Invalid("할 일 목록이 바뀌었습니다. 새로고침 후 다시 시도해주세요.".into())
+        })?;
+        if t.text.trim() != expected_text.trim() {
+            return Err(CoreError::Invalid(
+                "할 일 목록이 바뀌었습니다. 새로고침 후 다시 시도해주세요.".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// 할 일 완료 여부 토글
+    pub fn toggle_todo(
+        &self,
+        rel: &str,
+        index: u32,
+        expected_text: &str,
+        done: bool,
+    ) -> Result<NoteContent, CoreError> {
+        let note = self.read_note(rel)?;
+        let (scope, in_section) = Self::todos_scope(&note);
+        Self::check_todo(&template::parse_todos(&scope), index, expected_text)?;
+        let updated = template::set_todo_done(&scope, index as usize, done)
+            .ok_or_else(|| CoreError::Invalid("할 일을 찾을 수 없습니다".into()))?;
+        self.write_todos(rel, &note, in_section, &updated)
+    }
+
+    /// 할 일 내용 수정 (완료 여부는 유지)
+    pub fn update_todo(
+        &self,
+        rel: &str,
+        index: u32,
+        expected_text: &str,
+        new_text: &str,
+    ) -> Result<NoteContent, CoreError> {
+        let new_text = new_text.trim();
+        if new_text.is_empty() {
+            return Err(CoreError::Invalid("내용을 입력해주세요".into()));
+        }
+        let note = self.read_note(rel)?;
+        let (scope, in_section) = Self::todos_scope(&note);
+        Self::check_todo(&template::parse_todos(&scope), index, expected_text)?;
+        let updated = template::replace_todo_text(&scope, index as usize, new_text)
+            .ok_or_else(|| CoreError::Invalid("할 일을 찾을 수 없습니다".into()))?;
+        self.write_todos(rel, &note, in_section, &updated)
+    }
+
+    /// 할 일 삭제
+    pub fn delete_todo(
+        &self,
+        rel: &str,
+        index: u32,
+        expected_text: &str,
+    ) -> Result<NoteContent, CoreError> {
+        let note = self.read_note(rel)?;
+        let (scope, in_section) = Self::todos_scope(&note);
+        Self::check_todo(&template::parse_todos(&scope), index, expected_text)?;
+        let updated = template::remove_todo(&scope, index as usize)
+            .ok_or_else(|| CoreError::Invalid("할 일을 찾을 수 없습니다".into()))?;
+        self.write_todos(rel, &note, in_section, &updated)
+    }
+
+    /// 항목의 종류를 바꾼다. `new_kind`가 "할 일"이면 체크박스로, 아니면 콜아웃으로 —
+    /// 형식이 바뀌면 섹션(`## 기록` ↔ `## 할 일`)도 함께 옮긴다.
+    /// `source`: "entry"(기록 콜아웃) 또는 "todo"(할 일).
+    pub fn change_kind(
+        &self,
+        rel: &str,
+        source: &str,
+        index: u32,
+        expected_text: &str,
+        new_kind: &str,
+    ) -> Result<NoteContent, CoreError> {
+        let note = self.read_note(rel)?;
+        let new_kind = new_kind.trim();
+        let to_todo = new_kind == TODO_KIND;
+        let time = Local::now().format("%H:%M").to_string();
+
+        let new_body = match source {
+            "entry" => {
+                let records = self.records_of(&note)?;
+                let entries = template::parse_entries(&records);
+                Self::check_entry(&entries, index, expected_text)?;
+                let entry = &entries[index as usize];
+
+                if !to_todo {
+                    // 같은 섹션 안에서 이름만 교체
+                    let updated = template::replace_entry_kind(&records, index as usize, new_kind)
+                        .ok_or_else(|| CoreError::Invalid("기록을 찾을 수 없습니다".into()))?;
+                    return self.write_records(rel, &note, &updated);
+                }
+                // 콜아웃 → 할 일: 기록에서 빼고 할 일에 체크박스로 넣는다
+                let text = entry.text.replace('\n', " ");
+                let removed = template::remove_entry(&records, index as usize)
+                    .ok_or_else(|| CoreError::Invalid("기록을 찾을 수 없습니다".into()))?;
+                let body = template::replace_section_text(&note.body, "## 기록", &removed)
+                    .ok_or_else(|| CoreError::Invalid("기록 섹션이 없습니다".into()))?;
+                template::append_to_section(&body, "## 할 일", &format!("- [ ] {text}"), true)
+            }
+            "todo" => {
+                let (scope, in_section) = Self::todos_scope(&note);
+                let todos = template::parse_todos(&scope);
+                Self::check_todo(&todos, index, expected_text)?;
+                if to_todo {
+                    return Ok(note); // 바꿀 게 없다
+                }
+                let text = todos[index as usize].text.clone();
+                let removed = template::remove_todo(&scope, index as usize)
+                    .ok_or_else(|| CoreError::Invalid("할 일을 찾을 수 없습니다".into()))?;
+                let body = if in_section {
+                    template::replace_section_text(&note.body, "## 할 일", &removed)
+                        .ok_or_else(|| CoreError::Invalid("할 일 섹션이 없습니다".into()))?
+                } else {
+                    removed
+                };
+                let block = template::callout_block(new_kind, &time, &text);
+                template::append_to_section(&body, "## 기록", &block, false)
+            }
+            _ => return Err(CoreError::Invalid("알 수 없는 항목 종류입니다".into())),
+        };
+
+        let fm = note.frontmatter.as_object().cloned().unwrap_or_default();
+        let content = parse::compose(&fm, &new_body)?;
+        self.snapshot_before(rel, Some(&content));
+        self.atomic_write(&self.abs(rel)?, &content)?;
+        self.read_note(rel)
+    }
+
+    /// 임의 이름의 콜아웃을 `## 기록`에 붙인다 (사용자 정의 종류용 — 책·일지 공통).
+    pub fn append_callout(
+        &self,
+        rel: &str,
+        label: &str,
+        text: &str,
+    ) -> Result<NoteContent, CoreError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(CoreError::Invalid("내용을 입력해주세요".into()));
+        }
+        let note = self.read_note(rel)?;
+        let time = Local::now().format("%H:%M").to_string();
+        let block = template::callout_block(label, &time, text);
+        let new_body = template::append_to_section(&note.body, "## 기록", &block, false);
+        let fm = note.frontmatter.as_object().cloned().unwrap_or_default();
+        let content = parse::compose(&fm, &new_body)?;
+        self.snapshot_before(rel, Some(&content));
+        self.atomic_write(&self.abs(rel)?, &content)?;
+        self.read_note(rel)
+    }
+
+    // ---------- 사용자 정의 콜아웃 ----------
+
+    fn callouts_path(&self) -> PathBuf {
+        self.root.join(CALLOUTS_FILE)
+    }
+
+    /// vault에 저장된 사용자 정의 콜아웃 (파일이 없거나 깨졌으면 빈 목록)
+    pub fn list_callouts(&self) -> Vec<CalloutDef> {
+        fs::read_to_string(self.callouts_path())
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<CalloutDef>>(&s).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_callouts(&self, list: &[CalloutDef]) -> Result<(), CoreError> {
+        let json = serde_json::to_string_pretty(list)
+            .map_err(|e| CoreError::Invalid(format!("콜아웃 저장 실패: {e}")))?;
+        fs::write(self.callouts_path(), json)?;
+        Ok(())
+    }
+
+    /// 사용자 정의 콜아웃 추가. 이름 중복·기본 종류와 충돌·화면당 상한을 검사한다.
+    pub fn add_callout(&self, def: CalloutDef) -> Result<Vec<CalloutDef>, CoreError> {
+        let label = def.label.trim().to_string();
+        if label.is_empty() {
+            return Err(CoreError::Invalid("이름을 입력하세요".into()));
+        }
+        if BUILTIN_KIND_LABELS.contains(&label.as_str()) {
+            return Err(CoreError::Invalid(format!(
+                "'{label}'은 기본 종류라 쓸 수 없습니다"
+            )));
+        }
+        let mut list = self.list_callouts();
+        if list.iter().any(|c| c.label == label) {
+            return Err(CoreError::Invalid(format!("이미 있는 이름입니다: {label}")));
+        }
+        // 일지·책 각각 최대 5개까지
+        for target in ["daily", "book"] {
+            if !visible_in(&def.scope, target) {
+                continue;
+            }
+            let used = list.iter().filter(|c| visible_in(&c.scope, target)).count();
+            if used >= MAX_CALLOUTS_PER_SCOPE {
+                let where_ = if target == "daily" { "일지" } else { "책" };
+                return Err(CoreError::Invalid(format!(
+                    "{where_}에 쓸 수 있는 콜아웃은 {MAX_CALLOUTS_PER_SCOPE}개까지입니다"
+                )));
+            }
+        }
+        list.push(CalloutDef { label, ..def });
+        self.save_callouts(&list)?;
+        Ok(list)
+    }
+
+    /// 사용자 정의 콜아웃 제거 (이미 쓴 노트의 내용은 그대로 두고 목록에서만 뺀다)
+    pub fn remove_callout(&self, label: &str) -> Result<Vec<CalloutDef>, CoreError> {
+        let mut list = self.list_callouts();
+        list.retain(|c| c.label != label);
+        self.save_callouts(&list)?;
+        Ok(list)
     }
 
     // ---------- 독서기록 → 책 통합 마이그레이션 ----------
@@ -1339,6 +1864,207 @@ mod tests {
     }
 
     #[test]
+    fn daily_entry_appends_to_matching_sections() {
+        let (_d, v) = vault();
+        let rel = v.open_daily(&Vault::today()).unwrap();
+
+        v.append_daily_entry(&rel, DailyKind::Todo, "우유 사기").unwrap();
+        v.append_daily_entry(&rel, DailyKind::Log, "회의함").unwrap();
+        let note = v
+            .append_daily_entry(&rel, DailyKind::Feeling, "후련하다")
+            .unwrap();
+
+        // 할 일은 체크박스로, 나머지는 기록 섹션 콜아웃으로
+        assert!(note.body.contains("- [ ] 우유 사기"), "got: {}", note.body);
+        assert!(note.body.contains("> [!기록]"), "got: {}", note.body);
+        assert!(note.body.contains("> 회의함"), "got: {}", note.body);
+        assert!(note.body.contains("> [!느낌]"), "got: {}", note.body);
+        assert!(note.body.contains("> 후련하다"), "got: {}", note.body);
+        // 섹션 구조는 유지되고, 할 일이 기록 섹션으로 새지 않는다
+        let todo_pos = note.body.find("- [ ] 우유 사기").unwrap();
+        let record_pos = note.body.find("## 기록").unwrap();
+        assert!(todo_pos < record_pos, "할 일이 기록 섹션 뒤로 갔음: {}", note.body);
+    }
+
+    #[test]
+    fn todo_toggle_update_delete_on_daily() {
+        let (_d, v) = vault();
+        let rel = v.open_daily(&Vault::today()).unwrap();
+        v.append_daily_entry(&rel, DailyKind::Todo, "우유 사기").unwrap();
+        v.append_daily_entry(&rel, DailyKind::Todo, "설거지").unwrap();
+        v.append_daily_entry(&rel, DailyKind::Log, "기록 한 줄").unwrap();
+
+        // 완료 표시 — 기록 섹션은 건드리지 않는다
+        let note = v.toggle_todo(&rel, 0, "우유 사기", true).unwrap();
+        assert!(note.body.contains("- [x] 우유 사기"), "got: {}", note.body);
+        assert!(note.body.contains("> 기록 한 줄"), "got: {}", note.body);
+
+        // 내용 수정 — 완료 여부 유지
+        let note = v.update_todo(&rel, 0, "우유 사기", "두유 사기").unwrap();
+        assert!(note.body.contains("- [x] 두유 사기"), "got: {}", note.body);
+
+        // 삭제
+        let note = v.delete_todo(&rel, 0, "두유 사기").unwrap();
+        assert!(!note.body.contains("두유 사기"), "got: {}", note.body);
+        assert!(note.body.contains("- [ ] 설거지"), "got: {}", note.body);
+    }
+
+    #[test]
+    fn change_kind_between_callout_and_todo() {
+        let (_d, v) = vault();
+        let rel = v.open_daily(&Vault::today()).unwrap();
+        v.append_daily_entry(&rel, DailyKind::Log, "회의함").unwrap();
+
+        // 콜아웃 → 콜아웃: 이름만 바뀌고 자리는 그대로
+        let note = v.change_kind(&rel, "entry", 0, "회의함", "느낌").unwrap();
+        assert!(note.body.contains("> [!느낌]"), "got: {}", note.body);
+        assert!(!note.body.contains("[!기록]"), "got: {}", note.body);
+
+        // 콜아웃 → 할 일: 기록에서 빠지고 할 일에 체크박스로 들어간다
+        let note = v.change_kind(&rel, "entry", 0, "회의함", "할 일").unwrap();
+        assert!(note.body.contains("- [ ] 회의함"), "got: {}", note.body);
+        assert!(!note.body.contains("[!느낌]"), "got: {}", note.body);
+        let todo_pos = note.body.find("- [ ] 회의함").unwrap();
+        let rec_pos = note.body.find("## 기록").unwrap();
+        assert!(todo_pos < rec_pos, "할 일 섹션에 있어야 함: {}", note.body);
+
+        // 할 일 → 콜아웃: 다시 기록으로 이동
+        let note = v.change_kind(&rel, "todo", 0, "회의함", "기록").unwrap();
+        assert!(note.body.contains("> [!기록]"), "got: {}", note.body);
+        assert!(!note.body.contains("- [ ] 회의함"), "got: {}", note.body);
+    }
+
+    #[test]
+    fn custom_callouts_limit_and_duplicates() {
+        let (_d, v) = vault();
+        let mk = |l: &str, scope: &str| CalloutDef {
+            label: l.into(),
+            icon: "🔖".into(),
+            color: "rose".into(),
+            scope: scope.into(),
+        };
+        for i in 0..MAX_CALLOUTS_PER_SCOPE {
+            v.add_callout(mk(&format!("일지{i}"), "daily")).unwrap();
+        }
+        // 일지는 꽉 찼지만 책은 아직 여유가 있다
+        assert!(v.add_callout(mk("초과", "daily")).is_err());
+        assert!(v.add_callout(mk("책것", "book")).is_ok());
+        // 이름 중복·기본 종류와 충돌은 거부
+        assert!(v.add_callout(mk("책것", "book")).is_err());
+        assert!(v.add_callout(mk("발췌", "book")).is_err());
+
+        assert_eq!(v.list_callouts().len(), MAX_CALLOUTS_PER_SCOPE + 1);
+        v.remove_callout("책것").unwrap();
+        assert!(!v.list_callouts().iter().any(|c| c.label == "책것"));
+    }
+
+    #[test]
+    fn todo_ops_refuse_when_content_moved() {
+        let (_d, v) = vault();
+        let rel = v.open_daily(&Vault::today()).unwrap();
+        v.append_daily_entry(&rel, DailyKind::Todo, "원래 할 일").unwrap();
+
+        assert!(v.toggle_todo(&rel, 0, "엉뚱한 것", true).is_err());
+        assert!(v.update_todo(&rel, 0, "엉뚱한 것", "새것").is_err());
+        assert!(v.delete_todo(&rel, 0, "엉뚱한 것").is_err());
+        assert!(v.delete_todo(&rel, 7, "원래 할 일").is_err());
+        // 원본 보존
+        let note = v.read_note(&rel).unwrap();
+        assert!(note.body.contains("- [ ] 원래 할 일"));
+    }
+
+    #[test]
+    fn update_and_delete_entry_on_book() {
+        let (_d, v) = vault();
+        let book = v.create_note("book", "책", serde_json::json!({})).unwrap();
+        v.append_reading_entry(&book, EntryKind::Excerpt, "첫 인용").unwrap();
+        v.append_reading_entry(&book, EntryKind::Thought, "둘째 생각").unwrap();
+
+        // 수정: 종류·날짜는 유지되고 본문만 바뀐다
+        let note = v.update_entry(&book, 0, "첫 인용", "고친 인용").unwrap();
+        assert!(note.body.contains("> [!발췌]"), "got: {}", note.body);
+        assert!(note.body.contains("> 고친 인용"), "got: {}", note.body);
+        assert!(!note.body.contains("첫 인용"), "got: {}", note.body);
+        // 소개 섹션과 옆 엔트리는 그대로
+        assert!(note.body.contains("## 소개"));
+        assert!(note.body.contains("> 둘째 생각"));
+
+        // 삭제
+        let note = v.delete_entry(&book, 0, "고친 인용").unwrap();
+        let records = template::section_text(&note.body, "## 기록").unwrap();
+        let left = template::parse_entries(&records);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].text, "둘째 생각");
+    }
+
+    /// 외부 에디터(옵시디언 등)에서 콜아웃 없이 써 넣은 내용은 보기 화면에 안 보이지만,
+    /// 항목을 고치거나 지워도 **파일에서 사라지지 않아야** 한다.
+    #[test]
+    fn non_callout_text_survives_entry_ops() {
+        let (_d, v) = vault();
+        let book = v.create_note("book", "책", serde_json::json!({})).unwrap();
+        v.append_reading_entry(&book, EntryKind::Excerpt, "앱에서 넣은 인용").unwrap();
+
+        // 외부 편집기로 평문·일반 인용문을 섞어 넣은 상황을 만든다
+        let note = v.read_note(&book).unwrap();
+        let records = template::section_text(&note.body, "## 기록").unwrap();
+        let mixed = format!("{records}\n\n옵시디언에서 쓴 평문\n\n> 그냥 인용문\n");
+        let body = template::replace_section_text(&note.body, "## 기록", &mixed).unwrap();
+        v.save_note(&book, note.frontmatter.clone(), &body).unwrap();
+
+        // 콜아웃 수정 → 평문·인용문은 그대로 남아야 한다
+        let note = v.update_entry(&book, 0, "앱에서 넣은 인용", "고친 인용").unwrap();
+        assert!(note.body.contains("옵시디언에서 쓴 평문"), "평문 유실: {}", note.body);
+        assert!(note.body.contains("> 그냥 인용문"), "인용문 유실: {}", note.body);
+
+        // 콜아웃 삭제 → 여전히 남아야 한다
+        let note = v.delete_entry(&book, 0, "고친 인용").unwrap();
+        assert!(note.body.contains("옵시디언에서 쓴 평문"), "평문 유실: {}", note.body);
+        assert!(note.body.contains("> 그냥 인용문"), "인용문 유실: {}", note.body);
+    }
+
+    #[test]
+    fn entry_ops_refuse_when_content_moved() {
+        let (_d, v) = vault();
+        let book = v.create_note("book", "책", serde_json::json!({})).unwrap();
+        v.append_reading_entry(&book, EntryKind::Excerpt, "원래 내용").unwrap();
+
+        // 화면에서 본 내용과 다르면 (그 사이 파일이 바뀐 것) 건드리지 않는다
+        assert!(v.update_entry(&book, 0, "엉뚱한 내용", "새 내용").is_err());
+        assert!(v.delete_entry(&book, 0, "엉뚱한 내용").is_err());
+        // 범위 밖도 거부
+        assert!(v.delete_entry(&book, 5, "원래 내용").is_err());
+        // 원본은 그대로 남아 있다
+        let note = v.read_note(&book).unwrap();
+        assert!(note.body.contains("> 원래 내용"));
+    }
+
+    #[test]
+    fn update_entry_works_on_daily_records() {
+        let (_d, v) = vault();
+        let rel = v.open_daily(&Vault::today()).unwrap();
+        v.append_daily_entry(&rel, DailyKind::Todo, "할 일 하나").unwrap();
+        v.append_daily_entry(&rel, DailyKind::Log, "원래 기록").unwrap();
+
+        let note = v.update_entry(&rel, 0, "원래 기록", "고친 기록").unwrap();
+        assert!(note.body.contains("> 고친 기록"), "got: {}", note.body);
+        // 할 일 섹션은 손대지 않는다
+        assert!(note.body.contains("- [ ] 할 일 하나"), "got: {}", note.body);
+    }
+
+    #[test]
+    fn daily_entry_rejects_non_daily_and_empty() {
+        let (_d, v) = vault();
+        let book = v
+            .create_note("book", "책", serde_json::json!({}))
+            .unwrap();
+        assert!(v.append_daily_entry(&book, DailyKind::Todo, "x").is_err());
+
+        let daily = v.open_daily(&Vault::today()).unwrap();
+        assert!(v.append_daily_entry(&daily, DailyKind::Todo, "   ").is_err());
+    }
+
+    #[test]
     fn trash_list_and_restore_roundtrip() {
         let (_d, v) = vault();
         let rel = v
@@ -1501,6 +2227,79 @@ mod tests {
         let today = Vault::today();
         assert_eq!(new_rel, format!("Info/{today} 고친 정보.md"));
         assert_eq!(v.read_note(&new_rel).unwrap().frontmatter["title"], "고친 정보");
+    }
+
+    #[test]
+    fn info_date_prefix_comes_from_title_template() {
+        let (_d, v) = vault();
+        let today = Vault::today();
+        // 기본 머릿글이 "{{date}} "이라 예전과 같은 파일명이 나온다
+        let rel = v.create_note("info", "어떤 정보", serde_json::json!({})).unwrap();
+        assert_eq!(rel, format!("Info/{today} 어떤 정보.md"));
+
+        // 머릿글을 비우면 날짜 없이 만들어진다
+        v.write_title_template("info", "").unwrap();
+        let bare = v.create_note("info", "머릿글 없음", serde_json::json!({})).unwrap();
+        assert_eq!(bare, "Info/머릿글 없음.md");
+    }
+
+    #[test]
+    fn free_note_title_prefix_applies() {
+        let (_d, v) = vault();
+        let today = Vault::today();
+        v.write_title_template("free", "{{date}} ").unwrap();
+        let rel = v.create_note("free", "회의", serde_json::json!({})).unwrap();
+        assert_eq!(rel, format!("Free/{today} 회의.md"));
+        // 제목(frontmatter)도 머릿글이 붙은 값으로 맞춰진다
+        assert_eq!(
+            v.read_note(&rel).unwrap().frontmatter["title"],
+            format!("{today} 회의")
+        );
+    }
+
+    #[test]
+    fn title_prefix_rejected_for_fixed_naming_types() {
+        let (_d, v) = vault();
+        assert!(v.write_title_template("book", "{{date}} ").is_err());
+        assert!(v.write_title_template("daily", "x").is_err());
+        assert!(v.read_title_template("book").unwrap().is_empty());
+    }
+
+    #[test]
+    fn auto_title_names_untitled_note_from_body() {
+        let (_d, v) = vault();
+        let today = Vault::today();
+        let rel = v.create_note("free", "", serde_json::json!({})).unwrap();
+        assert_eq!(rel, "Free/무제.md");
+
+        v.save_note(&rel, serde_json::json!({}), "# 오늘 배운 것\n\n본문이 이어진다")
+            .unwrap();
+        let new_rel = v.auto_title_if_untitled(&rel).unwrap();
+        assert_eq!(new_rel, format!("Free/{today} 오늘 배운 것.md"));
+    }
+
+    #[test]
+    fn auto_title_leaves_named_and_empty_notes_alone() {
+        let (_d, v) = vault();
+        // 이름이 있으면 그대로
+        let named = v.create_note("free", "이미 제목 있음", serde_json::json!({})).unwrap();
+        v.save_note(&named, serde_json::json!({}), "본문").unwrap();
+        assert_eq!(v.auto_title_if_untitled(&named).unwrap(), named);
+
+        // 본문이 비었으면 이름을 지어낼 근거가 없으니 그대로
+        let empty = v.create_note("free", "", serde_json::json!({})).unwrap();
+        assert_eq!(v.auto_title_if_untitled(&empty).unwrap(), empty);
+    }
+
+    #[test]
+    fn auto_title_skips_template_scaffolding() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "", serde_json::json!({})).unwrap();
+        // 빈 체크박스·헤딩만 있는 줄은 건너뛰고 실제 내용이 있는 첫 줄을 쓴다
+        v.save_note(&rel, serde_json::json!({}), "## 할 일\n\n- [ ] \n- [ ] 장보기\n")
+            .unwrap();
+        let new_rel = v.auto_title_if_untitled(&rel).unwrap();
+        assert!(new_rel.ends_with("할 일.md"), "{new_rel}");
     }
 
     #[test]

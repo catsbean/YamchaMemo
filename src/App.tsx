@@ -5,6 +5,7 @@ import EditorPane from "./components/EditorPane";
 import SearchModal from "./components/SearchModal";
 import Sidebar from "./components/Sidebar";
 import { commands, type StorageDir } from "./bindings";
+import { useSuppressNativeContextMenu } from "./lib/contextMenu";
 import { useVault } from "./stores/vault";
 
 export default function App() {
@@ -24,6 +25,9 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [storageDirs, setStorageDirs] = useState<StorageDir[]>([]);
 
+  // 웹뷰 기본 우클릭 메뉴(새로고침·검사 등)를 막는다 — 앱에 맞는 메뉴만 띄운다
+  useSuppressNativeContextMenu();
+
   // 첫 실행 화면: 감지된 저장 위치 후보 로드
   useEffect(() => {
     if (initialized && !vaultPath) {
@@ -42,10 +46,14 @@ export default function App() {
     let disposed = false;
     getCurrentWindow()
       .onCloseRequested(async (e) => {
-        if (!useVault.getState().dirty) return;
+        const s = useVault.getState();
+        if (!s.dirty && !s.pendingTitleRel) return;
         e.preventDefault();
         try {
-          await useVault.getState().saveCurrent();
+          if (s.dirty) await useVault.getState().saveCurrent();
+          // 제목 없이 닫는 노트에 이름을 붙여 준다
+          const rel = useVault.getState().pendingTitleRel;
+          if (rel) await commands.autoTitleNote(rel);
         } finally {
           await getCurrentWindow().destroy();
         }

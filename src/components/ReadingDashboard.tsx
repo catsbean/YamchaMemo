@@ -20,7 +20,14 @@ const PERIODS: [number, string][] = [
   [365, "최근 1년"],
 ];
 
-type Sort = "new" | "old" | "book";
+const SORTS: [Sort, string][] = [
+  ["new", "최신순"],
+  ["old", "오래된순"],
+  ["book", "책별"],
+  ["genre", "장르별"],
+];
+
+type Sort = "new" | "old" | "book" | "genre";
 
 /** n일 전 날짜 (로컬 기준 — toISOString은 UTC라 하루가 밀린다) */
 function daysAgo(n: number): string {
@@ -40,6 +47,8 @@ export default function ReadingDashboard() {
 
   const [kinds, setKinds] = useState<string[]>([]);
   const [book, setBook] = useState("");
+  const [genre, setGenre] = useState("");
+  const [tag, setTag] = useState("");
   const [days, setDays] = useState(0);
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<Sort>("new");
@@ -71,12 +80,26 @@ export default function ReadingDashboard() {
     return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1], "ko"));
   }, [all]);
 
+  const genres = useMemo(() => {
+    const s = new Set<string>();
+    for (const e of all) if (e.genre) s.add(e.genre);
+    return [...s].sort((a, b) => a.localeCompare(b, "ko"));
+  }, [all]);
+
+  const tags = useMemo(() => {
+    const s = new Set<string>();
+    for (const e of all) for (const t of e.tags) s.add(t);
+    return [...s].sort((a, b) => a.localeCompare(b, "ko"));
+  }, [all]);
+
   const filtered = useMemo(() => {
     const since = days > 0 ? daysAgo(days) : "";
     const needle = q.trim().toLowerCase();
     const list = all.filter((e) => {
       if (kinds.length > 0 && !kinds.includes(e.kind_label)) return false;
       if (book && e.book_rel !== book) return false;
+      if (genre && e.genre !== genre) return false;
+      if (tag && !e.tags.includes(tag)) return false;
       // 날짜가 없는 기록(외부에서 넣은 콜아웃)은 기간 필터에서 걸러내지 않는다
       if (since && e.date && e.date < since) return false;
       if (needle && !e.text.toLowerCase().includes(needle)) return false;
@@ -86,13 +109,23 @@ export default function ReadingDashboard() {
       if (sort === "book") {
         return a.book_title.localeCompare(b.book_title, "ko") || b.date.localeCompare(a.date);
       }
+      if (sort === "genre") {
+        // 분야가 없는 책은 뒤로 (빈 문자열이 앞에 몰리면 읽기 나쁘다)
+        const ga = a.genre || "￿";
+        const gb = b.genre || "￿";
+        return (
+          ga.localeCompare(gb, "ko") ||
+          a.book_title.localeCompare(b.book_title, "ko") ||
+          b.date.localeCompare(a.date)
+        );
+      }
       const cmp = a.date.localeCompare(b.date);
       return sort === "old" ? cmp : -cmp;
     });
     return list;
-  }, [all, kinds, book, days, q, sort]);
+  }, [all, kinds, book, genre, tag, days, q, sort]);
 
-  // 🎲 다시 보기: 필터 결과에서 무작위 3개
+  // 🎲 랜덤 보기: 필터 결과에서 무작위 3개
   const shown = useMemo(() => {
     if (shuffleSeed === 0) return filtered;
     const pool = [...filtered];
@@ -103,7 +136,8 @@ export default function ReadingDashboard() {
     return out;
   }, [filtered, shuffleSeed]);
 
-  const hasFilter = kinds.length > 0 || !!book || days > 0 || !!q.trim();
+  const hasFilter =
+    kinds.length > 0 || !!book || !!genre || !!tag || days > 0 || !!q.trim();
 
   function toggleKind(k: string) {
     setKinds((cur) => (cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]));
@@ -113,6 +147,8 @@ export default function ReadingDashboard() {
   function resetFilters() {
     setKinds([]);
     setBook("");
+    setGenre("");
+    setTag("");
     setDays(0);
     setQ("");
     setShuffleSeed(0);
@@ -135,9 +171,9 @@ export default function ReadingDashboard() {
                 : "border-neutral-300 hover:border-neutral-500"
             }`}
             onClick={() => setShuffleSeed(shuffleSeed > 0 ? 0 : Date.now())}
-            title="필터 결과에서 무작위로 3개만 보여줍니다"
+            title="지금 조건에 맞는 기록 중 무작위 3개만 보여줍니다 (다시 누르면 해제)"
           >
-            🎲 다시 보기
+            🎲 랜덤 보기
           </button>
           <button
             className="rounded bg-neutral-800 px-3 py-1.5 text-sm text-white hover:bg-neutral-600"
@@ -180,6 +216,42 @@ export default function ReadingDashboard() {
           ))}
         </select>
 
+        {genres.length > 0 && (
+          <select
+            className="rounded border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-500 focus:outline-none"
+            value={genre}
+            onChange={(e) => {
+              setGenre(e.target.value);
+              setShuffleSeed(0);
+            }}
+          >
+            <option value="">모든 분야</option>
+            {genres.map((g) => (
+              <option key={g} value={g}>
+                {g}
+              </option>
+            ))}
+          </select>
+        )}
+
+        {tags.length > 0 && (
+          <select
+            className="rounded border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-500 focus:outline-none"
+            value={tag}
+            onChange={(e) => {
+              setTag(e.target.value);
+              setShuffleSeed(0);
+            }}
+          >
+            <option value="">모든 태그</option>
+            {tags.map((t) => (
+              <option key={t} value={t}>
+                #{t}
+              </option>
+            ))}
+          </select>
+        )}
+
         <select
           className="rounded border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-500 focus:outline-none"
           value={days}
@@ -210,9 +282,11 @@ export default function ReadingDashboard() {
           value={sort}
           onChange={(e) => setSort(e.target.value as Sort)}
         >
-          <option value="new">최신순</option>
-          <option value="old">오래된순</option>
-          <option value="book">책별</option>
+          {SORTS.map(([v, label]) => (
+            <option key={v} value={v}>
+              {label}
+            </option>
+          ))}
         </select>
 
         {hasFilter && (
@@ -277,6 +351,9 @@ export default function ReadingDashboard() {
                         {e.book_title}
                         {e.book_author && (
                           <span className="text-neutral-400"> · {e.book_author}</span>
+                        )}
+                        {e.genre && (
+                          <span className="text-neutral-400"> · {e.genre}</span>
                         )}
                       </button>
                       <span

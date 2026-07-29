@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import type { NoteSummary } from "../bindings";
+import { isImeEnter } from "../lib/ime";
 import { useVault } from "../stores/vault";
 import {
   BOOK_STATUS_LABELS as STATUS_LABELS,
@@ -524,7 +525,7 @@ function NewBookInlineRow({ onCreated }: { onCreated: () => Promise<void> }) {
   const cellCls =
     "w-full rounded border border-dashed border-neutral-200 bg-transparent px-1.5 py-1 placeholder-neutral-300 focus:border-solid focus:border-neutral-400 focus:bg-white focus:outline-none";
   const onEnter = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") commit();
+    if (e.key === "Enter" && !isImeEnter(e)) commit();
   };
 
   return (

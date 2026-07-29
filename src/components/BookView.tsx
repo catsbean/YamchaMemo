@@ -8,10 +8,17 @@ import {
   fmStr,
 } from "../lib/note";
 import Editor from "../editor/Editor";
+import { editorMenuItems } from "../editor/editorMenu";
+import { useContextMenu } from "../lib/contextMenu";
+import ContextMenu from "./ContextMenu";
 import BacklinksPanel from "./BacklinksPanel";
 import BookInfoModal from "./BookInfoModal";
 import { HistoryButton } from "./HistoryModal";
 import ReadingEntryBar from "./ReadingEntryBar";
+import DeleteButton from "./DeleteButton";
+import EntryList from "./EntryList";
+import { BOOK_KINDS } from "../lib/callouts";
+import { notifyOtherWindows } from "../lib/windowSync";
 
 /** 책 = 독서기록. 정보 바 + 접힌 소개 + 기록 입력 + 기록 편집기 */
 export default function BookView({ note }: { note: NoteContent }) {
@@ -25,12 +32,20 @@ export default function BookView({ note }: { note: NoteContent }) {
     openByTitle,
     closeNote,
     layout,
-    deleteConfirm,
     updateFrontmatter,
     openNote,
+    reloadCurrent,
   } = useVault();
   const [showIntro, setShowIntro] = useState(false);
   const [editing, setEditing] = useState(false);
+  // 기본은 기록 카드 보기 — [원문 편집]을 눌러야 생 마크다운이 나온다
+  const [rawEdit, setRawEdit] = useState(false);
+
+  async function toggleRawEdit() {
+    if (rawEdit && dirty) await saveCurrent();
+    setRawEdit((v) => !v);
+  }
+  const ctx = useContextMenu();
 
   const fm = fmObject(note) as Record<string, unknown>;
   const { intro, records } = useMemo(() => splitBookBody(note.body), [note.body]);
@@ -93,6 +108,21 @@ export default function BookView({ note }: { note: NoteContent }) {
           >
             정보 수정
           </button>
+          <button
+            className={`rounded border px-2 py-1 text-xs ${
+              rawEdit
+                ? "border-neutral-800 bg-neutral-800 text-white hover:bg-neutral-600"
+                : "border-neutral-300 text-neutral-600 hover:border-neutral-500"
+            }`}
+            onClick={toggleRawEdit}
+            title={
+              rawEdit
+                ? "기록 보기로 돌아갑니다 (편집분은 저장됩니다)"
+                : "기록 원문을 직접 편집합니다"
+            }
+          >
+            {rawEdit ? "보기" : "원문 편집"}
+          </button>
           <HistoryButton relPath={note.rel_path} />
           <button
             className="rounded bg-neutral-800 px-3 py-1 text-xs text-white hover:bg-neutral-600 disabled:opacity-40"
@@ -102,7 +132,7 @@ export default function BookView({ note }: { note: NoteContent }) {
           >
             저장
           </button>
-          <DeleteButton onDelete={deleteCurrent} confirm={deleteConfirm} />
+          <DeleteButton onDelete={deleteCurrent} />
           {layout !== "replace" && (
             <button
               className="rounded px-2 py-1 text-xs text-neutral-400 hover:bg-neutral-100"
@@ -197,7 +227,24 @@ export default function BookView({ note }: { note: NoteContent }) {
       {/* 기록 입력 */}
       <ReadingEntryBar />
 
-      {/* 기록 타임라인 (편집 가능) */}
+      {/* 기록 항목별 수정·삭제 (보기 모드) */}
+      {!rawEdit && (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <EntryList
+            relPath={note.rel_path}
+            body={note.body}
+            onChanged={async () => {
+              await reloadCurrent();
+              await notifyOtherWindows([note.rel_path]);
+            }}
+            onOpenRaw={() => setRawEdit(true)}
+            kinds={BOOK_KINDS}
+          />
+        </div>
+      )}
+
+      {/* 기록 원문 편집 */}
+      {rawEdit && (
       <div className="min-h-0 flex-1">
         <Editor
           key={note.rel_path}
@@ -209,14 +256,17 @@ export default function BookView({ note }: { note: NoteContent }) {
               .map((n: NoteSummary) => n.rel_path.split("/").pop()?.replace(/\.md$/, "") ?? n.title)
               .filter(Boolean)
           }
+          onContextMenu={(e, view) => ctx.open(e, editorMenuItems(view, BOOK_KINDS))}
         />
       </div>
+      )}
 
       <BacklinksPanel relPath={note.rel_path} />
 
       {editing && (
         <BookInfoModal note={note} intro={intro} records={records} onClose={() => setEditing(false)} />
       )}
+      {ctx.menu && <ContextMenu state={ctx.menu} onClose={ctx.close} />}
     </div>
   );
 }
@@ -302,52 +352,3 @@ function TagEditor({
   );
 }
 
-function DeleteButton({
-  onDelete,
-  confirm,
-}: {
-  onDelete: () => void;
-  confirm: boolean;
-}) {
-  const [stage, setStage] = useState(0);
-  if (stage === 2) {
-    return (
-      <span className="flex gap-1">
-        <button
-          className="rounded bg-rose-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-rose-500"
-          onClick={() => {
-            setStage(0);
-            onDelete();
-          }}
-        >
-          삭제 확인
-        </button>
-        <button
-          className="rounded px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-100"
-          onClick={() => setStage(0)}
-        >
-          취소
-        </button>
-      </span>
-    );
-  }
-  return (
-    <button
-      className={`rounded px-2 py-1 text-xs ${
-        stage === 1
-          ? "bg-rose-100 font-bold text-rose-600 ring-1 ring-rose-300"
-          : "text-rose-500 hover:bg-rose-50"
-      }`}
-      onClick={() => {
-        if (stage === 0) setStage(1);
-        else if (confirm) setStage(2);
-        else {
-          setStage(0);
-          onDelete();
-        }
-      }}
-    >
-      {stage === 1 ? "삭제하시겠어요?" : "삭제"}
-    </button>
-  );
-}

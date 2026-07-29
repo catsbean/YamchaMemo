@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { load } from "@tauri-apps/plugin-store";
 import { commands, type BookSearchHit } from "../bindings";
+import { isImeEnter } from "../lib/ime";
 import { useVault } from "../stores/vault";
 import Modal from "./Modal";
 
@@ -32,24 +33,52 @@ export default function BookSearchDialog({ onClose }: { onClose: () => void }) {
     setBusy(false);
   }
 
+  /** 책장에 추가 — 검색 결과의 기본 정보에 더해 분야·소개·평점까지 자동으로 채운다.
+   *  (자동 채우기가 실패해도 책 자체는 만들어 둔다 — 나중에 [자동 채우기]로 보완 가능) */
   async function addBook(hit: BookSearchHit) {
     if (addingIsbn) return;
     setAddingIsbn(hit.isbn || hit.title);
     setError("");
+
     const fields: Record<string, string> = {};
     if (hit.authors) fields.author = hit.authors;
     if (hit.publisher) fields.publisher = hit.publisher;
     if (hit.isbn) fields.isbn = hit.isbn;
-    const r = await commands.createNote("book", hit.title, fields);
-    if (r.status === "ok") {
-      if (hit.thumbnail_url) {
-        await commands.attachCoverFromUrl(r.data, hit.thumbnail_url);
-      }
-      await refresh();
-      setAdded((a) => [...a, hit.isbn || hit.title]);
-    } else {
-      setError(r.error);
+
+    // 분야·소개·평점은 교보에서 따로 가져온다 (검색 결과에는 없는 값)
+    let intro = "";
+    const meta = await commands.autofillBook(hit.title, hit.authors, apiKey ?? "");
+    if (meta.status === "ok") {
+      if (meta.data.genre) fields.genre = meta.data.genre;
+      if (meta.data.rating) fields.rating = meta.data.rating;
+      if (!fields.author && meta.data.author) fields.author = meta.data.author;
+      if (!fields.publisher && meta.data.publisher)
+        fields.publisher = meta.data.publisher;
+      if (!fields.isbn && meta.data.isbn) fields.isbn = meta.data.isbn;
+      intro = meta.data.intro;
     }
+
+    const r = await commands.createNote("book", hit.title, fields);
+    if (r.status !== "ok") {
+      setError(r.error);
+      setAddingIsbn(null);
+      return;
+    }
+
+    // 소개는 본문 `## 소개` 섹션에 넣는다
+    if (intro) {
+      const cur = await commands.readNote(r.data);
+      if (cur.status === "ok") {
+        const body = `## 소개\n\n${intro}\n\n## 기록\n\n`;
+        await commands.saveNote(r.data, cur.data.frontmatter, body);
+      }
+    }
+    if (hit.thumbnail_url) {
+      await commands.attachCoverFromUrl(r.data, hit.thumbnail_url);
+    }
+
+    await refresh();
+    setAdded((a) => [...a, hit.isbn || hit.title]);
     setAddingIsbn(null);
   }
 
@@ -67,7 +96,7 @@ export default function BookSearchDialog({ onClose }: { onClose: () => void }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") search();
+              if (e.key === "Enter" && !isImeEnter(e)) search();
               if (e.key === "Escape") onClose();
             }}
           />
@@ -117,7 +146,7 @@ export default function BookSearchDialog({ onClose }: { onClose: () => void }) {
                   {isAdded
                     ? "추가됨 ✓"
                     : addingIsbn === key
-                      ? "추가 중…"
+                      ? "채우는 중…"
                       : "책장에 추가"}
                 </button>
               </li>
@@ -125,7 +154,8 @@ export default function BookSearchDialog({ onClose }: { onClose: () => void }) {
           })}
           {hits.length === 0 && !busy && (
             <li className="px-4 py-8 text-center text-sm text-neutral-400">
-              제목이나 ISBN을 검색하면 저자·출판사·표지까지 자동으로 채워집니다
+              제목이나 ISBN을 검색해 추가하면 저자·출판사·표지에 더해
+              분야·소개·평점까지 자동으로 채워집니다
             </li>
           )}
         </ul>

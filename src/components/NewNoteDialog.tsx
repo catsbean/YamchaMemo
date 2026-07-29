@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { FieldDef, JsonValue } from "../bindings";
+import { isImeEnter } from "../lib/ime";
 import { useVault } from "../stores/vault";
 import Modal from "./Modal";
 
@@ -195,7 +196,7 @@ export default function NewNoteDialog({ noteType, onClose }: Props) {
                   value={series}
                   onChange={(e) => setSeries(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") submit();
+                    if (e.key === "Enter" && !isImeEnter(e)) submit();
                     if (e.key === "Escape") onClose();
                   }}
                 />
@@ -207,7 +208,7 @@ export default function NewNoteDialog({ noteType, onClose }: Props) {
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") submit();
+                    if (e.key === "Enter" && !isImeEnter(e)) submit();
                     if (e.key === "Escape") onClose();
                   }}
                 />
@@ -218,7 +219,7 @@ export default function NewNoteDialog({ noteType, onClose }: Props) {
                 placeholder="분야 (선택 — 예: 에세이, 소설)"
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submit()}
+                onKeyDown={(e) => e.key === "Enter" && !isImeEnter(e) && submit()}
               />
               <datalist id="ynd-series">
                 {seriesOptions.map((s) => (
@@ -240,7 +241,7 @@ export default function NewNoteDialog({ noteType, onClose }: Props) {
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") submit();
+                  if (e.key === "Enter" && !isImeEnter(e)) submit();
                   if (e.key === "Escape") onClose();
                 }}
               />
@@ -270,7 +271,7 @@ export default function NewNoteDialog({ noteType, onClose }: Props) {
                     onChange={(e) =>
                       setValues((v) => ({ ...v, [f.name]: e.target.value }))
                     }
-                    onKeyDown={(e) => e.key === "Enter" && submit()}
+                    onKeyDown={(e) => e.key === "Enter" && !isImeEnter(e) && submit()}
                   />
                 ),
               )}

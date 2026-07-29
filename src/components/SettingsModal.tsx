@@ -1,8 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { load } from "@tauri-apps/plugin-store";
 import { commands } from "../bindings";
-import { useVault, type LayoutMode } from "../stores/vault";
-import { openTrashWindow } from "../lib/trashWindow";
+import {
+  DEFAULT_DAILY_KIND_ORDER,
+  useVault,
+  type LayoutMode,
+} from "../stores/vault";
+import { styleOf } from "../lib/callouts";
+import { isImeEnter, useImeInput } from "../lib/ime";
+import { dailyKindOptions } from "./DailyEntryBar";
 import Modal from "./Modal";
 
 const LAYOUTS: { value: LayoutMode; label: string; desc: string }[] = [
@@ -23,7 +29,15 @@ const LAYOUTS: { value: LayoutMode; label: string; desc: string }[] = [
   },
 ];
 
+const TABS = [
+  { id: "general", label: "일반" },
+  { id: "record", label: "기록" },
+  { id: "storage", label: "저장" },
+  { id: "etc", label: "연동" },
+] as const;
+
 export default function SettingsModal({ onClose }: { onClose: () => void }) {
+  const [tab, setTab] = useState<string>("general");
   const {
     layout,
     setLayout,
@@ -81,10 +95,28 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
     <Modal
       onClose={onClose}
       locked={reindexing}
-      panelClassName="max-h-[85vh] w-[30rem] overflow-y-auto rounded-lg p-5 shadow-xl"
+      panelClassName="flex h-[38rem] max-h-[88vh] w-[32rem] flex-col rounded-lg p-5 shadow-xl"
     >
-        <h2 className="mb-4 text-base font-bold">설정</h2>
+        <h2 className="mb-3 text-base font-bold">설정</h2>
+        <div className="mb-4 flex gap-1 border-b border-neutral-200">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              className={`-mb-px border-b-2 px-3 py-1.5 text-sm ${
+                tab === t.id
+                  ? "border-neutral-800 font-medium text-neutral-800"
+                  : "border-transparent text-neutral-400 hover:text-neutral-600"
+              }`}
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
 
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
+        {tab === "general" && (
+          <>
         <section className="mb-5">
           <h3 className="mb-2 text-sm font-semibold text-neutral-600">
             편집 시 목록 표시
@@ -113,7 +145,81 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             ))}
           </div>
         </section>
+        <section className="mb-5">
+          <h3 className="mb-2 text-sm font-semibold text-neutral-600">
+            독서기록 책 선택 팝업
+          </h3>
+          <div className="flex gap-1.5 text-sm">
+            {(
+              [
+                ["grid", "책장(표지)"],
+                ["list", "목록"],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={v}
+                className={`rounded-md border px-3 py-1.5 ${
+                  bookPickerView === v
+                    ? "border-neutral-800 bg-neutral-50 font-medium"
+                    : "border-neutral-200 text-neutral-500 hover:border-neutral-400"
+                }`}
+                onClick={() => setBookPickerView(v)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </section>
+        <section className="mb-5">
+          <h3 className="mb-2 text-sm font-semibold text-neutral-600">삭제</h3>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={deleteConfirm}
+              onChange={(e) => setDeleteConfirm(e.target.checked)}
+            />
+            <span>
+              삭제 전 확인 단계 거치기
+              <span className="block text-xs text-neutral-400">
+                노트 삭제는 [삭제] → [삭제 확인] 두 번을 누릅니다. 끄면 확인
+                버튼 대신 [삭제]를 한 번 더 누르는 방식이 됩니다
+              </span>
+            </span>
+          </label>
+        </section>
+          </>
+        )}
 
+        {tab === "record" && (
+          <>
+        <CalloutSection />
+        <DailyKindOrderSection />
+        <NoteTemplateSection />
+
+        {tab === "record" && customs.length > 0 && (
+          <section className="mb-5">
+            <h3 className="mb-2 text-sm font-semibold text-neutral-600">
+              사용자 추가 분류
+            </h3>
+            <ul className="flex flex-col gap-1">
+              {customs.map((s) => (
+                <CustomTypeRow
+                  key={s.id}
+                  id={s.id}
+                  label={s.label}
+                  template={s.template}
+                  onRemoved={removeCustom}
+                  onTemplateSaved={removeCustom}
+                />
+              ))}
+            </ul>
+          </section>
+        )}
+          </>
+        )}
+
+        {tab === "storage" && (
+          <>
         <section className="mb-5">
           <h3 className="mb-2 text-sm font-semibold text-neutral-600">Vault</h3>
           <p className="mb-1 break-all text-xs text-neutral-500">{vaultPath}</p>
@@ -140,55 +246,6 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             )}
           </div>
         </section>
-
-        <TrashSection />
-
-        <section className="mb-5">
-          <h3 className="mb-2 text-sm font-semibold text-neutral-600">
-            독서기록 책 선택 팝업
-          </h3>
-          <div className="flex gap-1.5 text-sm">
-            {(
-              [
-                ["grid", "책장(표지)"],
-                ["list", "목록"],
-              ] as const
-            ).map(([v, label]) => (
-              <button
-                key={v}
-                className={`rounded-md border px-3 py-1.5 ${
-                  bookPickerView === v
-                    ? "border-neutral-800 bg-neutral-50 font-medium"
-                    : "border-neutral-200 text-neutral-500 hover:border-neutral-400"
-                }`}
-                onClick={() => setBookPickerView(v)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="mb-5">
-          <h3 className="mb-2 text-sm font-semibold text-neutral-600">삭제</h3>
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={deleteConfirm}
-              onChange={(e) => setDeleteConfirm(e.target.checked)}
-            />
-            <span>
-              삭제 전 확인 단계 거치기
-              <span className="block text-xs text-neutral-400">
-                삭제는 항상 두 번 눌러야 하며, 끄면 마지막 [삭제 확인] 버튼만
-                생략됩니다
-              </span>
-            </span>
-          </label>
-        </section>
-
-        <HistorySection />
-
         <section className="mb-5">
           <h3 className="mb-1 text-sm font-semibold text-neutral-600">
             미러(백업) 폴더
@@ -293,7 +350,13 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             )}
           </div>
         </section>
+        <TrashSection />
+        <HistorySection />
+          </>
+        )}
 
+        {tab === "etc" && (
+          <>
         <section className="mb-5">
           <h3 className="mb-1 text-sm font-semibold text-neutral-600">
             카카오 책 검색 API
@@ -323,30 +386,12 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             )}
           </div>
         </section>
-
-        <NoteTemplateSection />
-
-        {customs.length > 0 && (
-          <section className="mb-5">
-            <h3 className="mb-2 text-sm font-semibold text-neutral-600">
-              사용자 추가 분류
-            </h3>
-            <ul className="flex flex-col gap-1">
-              {customs.map((s) => (
-                <CustomTypeRow
-                  key={s.id}
-                  id={s.id}
-                  label={s.label}
-                  template={s.template}
-                  onRemoved={removeCustom}
-                  onTemplateSaved={removeCustom}
-                />
-              ))}
-            </ul>
-          </section>
+          </>
         )}
 
-        <div className="flex justify-end">
+        </div>
+
+        <div className="flex justify-end border-t border-neutral-100 pt-3">
           <button
             className="rounded bg-neutral-800 px-4 py-1.5 text-sm text-white hover:bg-neutral-600"
             onClick={onClose}
@@ -358,48 +403,352 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+const PALETTE = [
+  "red", "orange", "yellow", "lime", "emerald",
+  "sky", "indigo", "violet", "rose", "neutral", "black",
+] as const;
+const PALETTE_LABEL: Record<string, string> = {
+  red: "빨강", orange: "주황", yellow: "노랑", lime: "연두",
+  emerald: "초록", sky: "하늘", indigo: "남색", violet: "보라",
+  rose: "분홍", neutral: "회색", black: "검정",
+  // 아래는 기본 콜아웃·기존 설정이 쓰던 색 (새로 고를 수는 없다)
+  amber: "호박", teal: "청록", blue: "파랑", fuchsia: "자주", stone: "갈회",
+};
+// 문장처럼 읽히도록: "[데일리노트에] [아이콘] [이름] 추가"
+const SCOPES: [string, string][] = [
+  ["daily", "데일리노트에"],
+  ["book", "독서기록에"],
+  ["both", "둘 다에"],
+];
+/** 목록에 짧게 표시할 이름 */
+const SCOPE_SHORT: Record<string, string> = {
+  daily: "데일리노트",
+  book: "독서기록",
+  both: "둘 다",
+};
+/** 고를 수 있는 아이콘 (맨 앞은 '없음') */
+const ICONS = [
+  "",
+  "📌","💭","📋","❓","🕘","💛","🔖","⭐","✅","📖",
+  "✍️","💡","🔥","🌱","🎯","🧩","📎","🗒️","🔔","💬",
+  "📝","🗓️","⏰","🏷️","🔍","📊","📈","🧠","🫀","👍",
+  "👎","⚠️","❗","‼️","❤️","🧡","💚","💙","💜","🤍",
+  "🌟","✨","🌈","☀️","🌙","☁️","🌊","🍀","🌸","🍂",
+  "🎵","🎬","🎨","🏃","🍽️","☕","🛏️","💊","💰","🎁",
+]; 
+
+/** 일지 빠른 입력 바의 버튼 순서 — ▲▼로 바꾸면 그 자리에서 저장된다.
+ *  맨 앞에 둔 종류가 일지를 열었을 때 기본으로 선택된다. */
+function DailyKindOrderSection() {
+  const callouts = useVault((s) => s.callouts);
+  const order = useVault((s) => s.dailyKindOrder);
+  const setDailyKindOrder = useVault((s) => s.setDailyKindOrder);
+
+  const options = useMemo(
+    () =>
+      dailyKindOptions(
+        callouts.filter((c) => c.scope === "daily" || c.scope === "both"),
+        order,
+      ),
+    [callouts, order],
+  );
+
+  /** 화면에 보이는 순서를 그대로 저장한다 (지금 없는 종류는 목록에서 빠진다) */
+  function move(index: number, delta: -1 | 1) {
+    const next = options.map((o) => o.key);
+    const to = index + delta;
+    if (to < 0 || to >= next.length) return;
+    [next[index], next[to]] = [next[to], next[index]];
+    setDailyKindOrder(next);
+  }
+
+  const isDefault =
+    options.map((o) => o.key).join() ===
+    dailyKindOptions(
+      callouts.filter((c) => c.scope === "daily" || c.scope === "both"),
+      DEFAULT_DAILY_KIND_ORDER,
+    )
+      .map((o) => o.key)
+      .join();
+
+  return (
+    <section className="mb-5">
+      <h3 className="mb-1 text-sm font-semibold text-neutral-600">
+        일지 빠른 입력 순서
+      </h3>
+      <p className="mb-2 text-xs text-neutral-400">
+        데일리노트 입력 바의 버튼 순서입니다. 맨 위에 둔 종류가 기본으로
+        선택됩니다.
+      </p>
+      <ul className="flex flex-col gap-1">
+        {options.map((o, i) => (
+          <li key={o.key} className="flex items-center gap-1.5">
+            <span
+              className={`min-w-20 rounded-md border border-current/10 px-3 py-1 text-center text-sm font-medium ${o.active}`}
+            >
+              {o.icon ? `${o.icon} ` : ""}
+              {o.label}
+            </span>
+            <button
+              className="rounded border border-neutral-300 px-1.5 py-0.5 text-xs text-neutral-600 hover:border-neutral-500 disabled:opacity-30"
+              disabled={i === 0}
+              onClick={() => move(i, -1)}
+              title="위로"
+            >
+              ▲
+            </button>
+            <button
+              className="rounded border border-neutral-300 px-1.5 py-0.5 text-xs text-neutral-600 hover:border-neutral-500 disabled:opacity-30"
+              disabled={i === options.length - 1}
+              onClick={() => move(i, 1)}
+              title="아래로"
+            >
+              ▼
+            </button>
+          </li>
+        ))}
+      </ul>
+      {!isDefault && (
+        <button
+          className="mt-2 rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:border-neutral-500"
+          onClick={() => setDailyKindOrder(DEFAULT_DAILY_KIND_ORDER)}
+        >
+          기본 순서로
+        </button>
+      )}
+    </section>
+  );
+}
+
+/** 사용자 정의 콜아웃 — 일지·책 각각 5개까지 */
+function CalloutSection() {
+  const { callouts, refreshCallouts } = useVault();
+  const [icon, setIcon] = useState("");
+  const [color, setColor] = useState<string>("rose");
+  const [scope, setScope] = useState("daily");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [iconOpen, setIconOpen] = useState(false);
+  const [colorOpen, setColorOpen] = useState(false);
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  async function add(value?: string) {
+    const name = (value ?? addIme.value()).trim();
+    if (busy || !name) return;
+    setBusy(true);
+    setError("");
+    const r = await commands.addCallout({
+      label: name,
+      icon,
+      color,
+      scope,
+    });
+    if (r.status === "ok") {
+      addIme.clear();
+      await refreshCallouts();
+    } else {
+      setError(r.error);
+    }
+    setBusy(false);
+  }
+
+  const addIme = useImeInput((v) => add(v), "enter");
+
+  async function remove(l: string) {
+    setBusy(true);
+    setConfirming(null);
+    const r = await commands.removeCallout(l);
+    if (r.status === "ok") await refreshCallouts();
+    else setError(r.error);
+    setBusy(false);
+  }
+
+  return (
+    <section className="mb-5">
+      <h3 className="mb-1 text-sm font-semibold text-neutral-600">기록 종류 추가</h3>
+      <p className="mb-2 text-xs text-neutral-400">
+        일지·책에서 쓸 기록 종류를 직접 만들 수 있습니다. 화면마다 5개까지이고,
+        만든 종류는 vault에 저장돼 다른 기기에서도 그대로 보입니다.
+      </p>
+
+      {callouts.length > 0 && (
+        <ul className="mb-2 flex flex-col gap-1">
+          {callouts.map((c) => (
+            <li
+              key={c.label}
+              className={`flex items-center justify-between rounded border px-3 py-1.5 text-xs ${styleOf(
+                c.color as never,
+              ).card}`}
+            >
+              <span>
+                {c.icon && `${c.icon} `}
+                {c.label}
+                <span className="ml-2 opacity-60">
+                  {SCOPE_SHORT[c.scope] ?? c.scope} ·{" "}
+                  {PALETTE_LABEL[c.color] ?? c.color}
+                </span>
+              </span>
+              {confirming === c.label ? (
+                <span className="flex shrink-0 items-center gap-1">
+                  <span className="text-[10px] opacity-70">
+                    이미 쓴 기록은 남습니다
+                  </span>
+                  <button
+                    className="rounded bg-rose-600 px-1.5 py-0.5 text-[11px] font-bold text-white hover:bg-rose-500 disabled:opacity-50"
+                    disabled={busy}
+                    onClick={() => remove(c.label)}
+                  >
+                    제거 확인
+                  </button>
+                  <button
+                    className="rounded px-1 py-0.5 text-[11px] opacity-70 hover:bg-white/60"
+                    onClick={() => setConfirming(null)}
+                  >
+                    취소
+                  </button>
+                </span>
+              ) : (
+                <button
+                  className="shrink-0 text-rose-400 hover:text-rose-600 disabled:opacity-50"
+                  disabled={busy}
+                  onClick={() => setConfirming(c.label)}
+                  title="목록에서만 뺍니다 — 이미 쓴 기록은 그대로 남습니다"
+                >
+                  제거
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <select
+          className="rounded border border-neutral-300 px-1.5 py-1 text-xs"
+          value={scope}
+          onChange={(e) => setScope(e.target.value)}
+        >
+          {SCOPES.map(([v, l]) => (
+            <option key={v} value={v}>{l}</option>
+          ))}
+        </select>
+
+        {/* 아이콘: 지금 고른 것만 보여주고 누르면 펼친다 */}
+        <div className="relative">
+          <button
+            className="h-7 w-10 rounded border border-neutral-300 text-sm hover:border-neutral-500"
+            onClick={() => {
+              setIconOpen((v) => !v);
+              setColorOpen(false);
+            }}
+            title="아이콘 고르기"
+          >
+            {icon || <span className="text-[10px] text-neutral-400">없음</span>}
+          </button>
+          {iconOpen && (
+            <div className="absolute left-0 z-10 mt-1 flex max-h-56 w-[17rem] flex-wrap gap-1 overflow-y-auto rounded-md border border-neutral-200 bg-white p-2 shadow-lg">
+              {ICONS.map((ic) => (
+                <button
+                  key={ic || "none"}
+                  className={`h-7 w-7 rounded border text-sm ${
+                    icon === ic
+                      ? "border-neutral-800 bg-neutral-100"
+                      : "border-transparent hover:border-neutral-300"
+                  }`}
+                  onClick={() => {
+                    setIcon(ic);
+                    setIconOpen(false);
+                  }}
+                  title={ic || "없음"}
+                >
+                  {ic || <span className="text-[10px] text-neutral-400">없음</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <input
+          className="w-24 rounded border border-neutral-300 px-2 py-1 text-sm focus:border-neutral-500 focus:outline-none"
+          placeholder="이름"
+          defaultValue=""
+          {...addIme.handlers}
+        />
+
+        {/* 색: 지금 고른 색만 보여주고 누르면 펼친다 */}
+        <div className="relative">
+          <button
+            className={`rounded border px-2.5 py-1 text-xs ${styleOf(color as never).card}`}
+            onClick={() => {
+              setColorOpen((v) => !v);
+              setIconOpen(false);
+            }}
+            title="색 고르기"
+          >
+            {PALETTE_LABEL[color] ?? color}
+          </button>
+          {colorOpen && (
+            <div className="absolute right-0 z-10 mt-1 grid w-[17rem] grid-cols-3 gap-1 rounded-md border border-neutral-200 bg-white p-2 shadow-lg">
+              {PALETTE.map((c) => (
+                <button
+                  key={c}
+                  className={`rounded border px-2 py-1 text-center text-xs ${styleOf(c).card} ${
+                    color === c ? "ring-2 ring-neutral-800" : ""
+                  }`}
+                  onClick={() => {
+                    setColor(c);
+                    setColorOpen(false);
+                  }}
+                >
+                  {PALETTE_LABEL[c] ?? c}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <button
+          className="rounded bg-neutral-800 px-3 py-1 text-xs text-white hover:bg-neutral-600 disabled:opacity-50"
+          disabled={busy}
+          onClick={() => add()}
+        >
+          추가
+        </button>
+      </div>
+      {error && <p className="mt-1.5 text-xs text-rose-500">{error}</p>}
+    </section>
+  );
+}
+
 const TRASH_RETENTION_OPTIONS: [number, string][] = [
   [0, "안 함 (직접 비울 때까지 보관)"],
   [7, "7일 지나면 자동 삭제"],
   [30, "30일 지나면 자동 삭제"],
 ];
 
-/** 휴지통 — 복구는 별도 창에서, 여기선 열기 버튼과 자동삭제 설정만 */
+/** 휴지통 자동 비우기 — 휴지통 자체는 사이드바 🗑️ 링크로 연다 */
 function TrashSection() {
   const { trashRetentionDays, setTrashRetention } = useVault();
-  const [count, setCount] = useState<number | null>(null);
-
-  useEffect(() => {
-    commands.listTrash().then((r) => {
-      if (r.status === "ok") setCount(r.data.length);
-    });
-  }, []);
 
   return (
     <section className="mb-5">
-      <h3 className="mb-2 text-sm font-semibold text-neutral-600">휴지통</h3>
-      <div className="flex items-center gap-2">
-        <button
-          className="rounded border border-neutral-300 px-3 py-1 text-xs hover:border-neutral-500"
-          onClick={openTrashWindow}
-        >
-          휴지통 열기{count != null ? ` (${count}개)` : ""}
-        </button>
-        <select
-          className="rounded border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-500 focus:outline-none"
-          value={trashRetentionDays}
-          onChange={(e) => setTrashRetention(Number(e.target.value))}
-          title="오래된 휴지통 항목을 자동으로 영구 삭제합니다"
-        >
-          {TRASH_RETENTION_OPTIONS.map(([v, label]) => (
-            <option key={v} value={v}>
-              {label}
-            </option>
-          ))}
-        </select>
-      </div>
+      <h3 className="mb-2 text-sm font-semibold text-neutral-600">
+        휴지통 자동 비우기
+      </h3>
+      <select
+        className="rounded border border-neutral-300 px-2 py-1 text-xs focus:border-neutral-500 focus:outline-none"
+        value={trashRetentionDays}
+        onChange={(e) => setTrashRetention(Number(e.target.value))}
+        title="오래된 휴지통 항목을 자동으로 영구 삭제합니다"
+      >
+        {TRASH_RETENTION_OPTIONS.map(([v, label]) => (
+          <option key={v} value={v}>
+            {label}
+          </option>
+        ))}
+      </select>
       <p className="mt-1.5 text-xs text-neutral-400">
-        삭제한 노트는 휴지통 창에서 원래 폴더로 되돌릴 수 있습니다.
+        휴지통 자체는 왼쪽 아래 <b>🗑️ 휴지통</b>에서 열 수 있습니다.
       </p>
     </section>
   );
@@ -585,9 +934,85 @@ function NoteTemplateSection() {
               placeholder="(기본은 빈 문서 — 원하는 템플릿을 넣어보세요)"
             />
           </div>
+
+          <TitlePrefixSection />
         </div>
       )}
     </section>
+  );
+}
+
+/** 제목 머릿글 — 새 노트의 제목 앞에 자동으로 붙는 글 (예: "{{date}} ") */
+function TitlePrefixSection() {
+  const schemas = useVault((s) => s.schemas);
+  // 파일명 규칙이 확고한 책·글쓰기·데일리는 대상이 아니다
+  const targets = schemas.filter(
+    (s) => !["book", "writing", "daily"].includes(s.id),
+  );
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [loaded, setLoaded] = useState(false);
+  const [saved, setSaved] = useState("");
+
+  useEffect(() => {
+    if (loaded || targets.length === 0) return;
+    (async () => {
+      const next: Record<string, string> = {};
+      for (const t of targets) {
+        const r = await commands.getTitleTemplate(t.id);
+        next[t.id] = r.status === "ok" ? r.data : "";
+      }
+      setDrafts(next);
+      setLoaded(true);
+    })();
+  }, [loaded, targets]);
+
+  async function save(id: string) {
+    const r = await commands.setTitleTemplate(id, drafts[id] ?? "");
+    if (r.status === "ok") {
+      setSaved(id);
+      setTimeout(() => setSaved(""), 2000);
+    }
+  }
+
+  if (targets.length === 0) return null;
+
+  return (
+    <div className="border-t border-neutral-100 pt-3">
+      <p className="mb-1 text-xs font-medium text-neutral-600">제목 머릿글</p>
+      <p className="mb-2 text-xs text-neutral-400">
+        새 노트를 만들 때 제목 앞에 자동으로 붙는 글입니다. 예를 들어{" "}
+        <code>{"{{date}} "}</code>를 넣으면 제목이{" "}
+        <b>2026-07-27 회의록</b>처럼 만들어집니다. 끝의 공백도 그대로 쓰이니
+        띄어쓰기를 잊지 마세요.
+      </p>
+      <div className="flex flex-col gap-1.5">
+        {targets.map((t) => (
+          <div key={t.id} className="flex items-center gap-2">
+            <span className="w-20 shrink-0 truncate text-xs text-neutral-500">
+              {t.label}
+            </span>
+            <input
+              className="min-w-0 flex-1 rounded border border-neutral-300 px-2 py-1 font-mono text-xs focus:border-neutral-500 focus:outline-none"
+              placeholder="(머릿글 없음)"
+              value={drafts[t.id] ?? ""}
+              onChange={(e) =>
+                setDrafts((d) => ({ ...d, [t.id]: e.target.value }))
+              }
+              onKeyDown={(e) => e.key === "Enter" && !isImeEnter(e) && save(t.id)}
+            />
+            {saved === t.id && (
+              <span className="shrink-0 text-xs text-emerald-600">저장됨</span>
+            )}
+            <button
+              className="shrink-0 rounded border border-neutral-300 px-2 py-0.5 text-xs hover:border-neutral-500"
+              onClick={() => save(t.id)}
+            >
+              저장
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

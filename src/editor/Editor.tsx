@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -54,6 +54,10 @@ interface Props {
   getTitles?: () => string[];
   /** 목차 등에서 특정 줄로 이동시키기 위한 훅 (1-based) */
   onReady?: (goToLine: (line: number) => void) => void;
+  /** 우클릭 — 서식 메뉴를 띄우기 위해 뷰와 위치를 넘긴다 */
+  onContextMenu?: (e: MouseEvent, view: EditorView) => void;
+  /** 읽기 전용 — 타이핑은 막고 체크박스 토글 같은 프로그램적 변경은 그대로 둔다 */
+  readOnly?: boolean;
 }
 
 function bufferToBase64(buf: ArrayBuffer): string {
@@ -97,9 +101,15 @@ export default function Editor({
   onNavigate,
   getTitles,
   onReady,
+  onContextMenu,
+  readOnly = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  // 읽기/편집 전환은 에디터를 다시 만들지 않고 이 칸만 갈아끼운다
+  const editableRef = useRef(new Compartment());
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const onNavigateRef = useRef(onNavigate);
@@ -108,12 +118,15 @@ export default function Editor({
   getTitlesRef.current = getTitles;
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
+  const onContextMenuRef = useRef(onContextMenu);
+  onContextMenuRef.current = onContextMenu;
 
   useEffect(() => {
     if (!containerRef.current) return;
     const state = EditorState.create({
       doc: value,
       extensions: [
+        editableRef.current.of(EditorView.editable.of(!readOnlyRef.current)),
         lineNumbers(),
         history(),
         drawSelection(),
@@ -134,6 +147,13 @@ export default function Editor({
         syntaxHighlighting(defaultHighlightStyle),
         livePreview(),
         pasteImage,
+        EditorView.domEventHandlers({
+          contextmenu(event, view) {
+            if (!onContextMenuRef.current) return false;
+            onContextMenuRef.current(event, view);
+            return true;
+          },
+        }),
         wikiLinkClick((target) => onNavigateRef.current?.(target)),
         wikiLinkCompletion(() => getTitlesRef.current?.() ?? []),
         EditorView.lineWrapping,
@@ -170,6 +190,17 @@ export default function Editor({
     // 노트 전환 시(컴포넌트 key 변경) 재생성하므로 value는 초기값으로만 사용
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 읽기/편집 전환
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: editableRef.current.reconfigure(
+        EditorView.editable.of(!readOnly),
+      ),
+    });
+  }, [readOnly]);
 
   // 외부에서 value가 바뀐 경우(엔트리 append 등) 동기화
   useEffect(() => {

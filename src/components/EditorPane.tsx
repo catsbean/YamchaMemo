@@ -1,9 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { commands } from "../bindings";
 import Editor from "../editor/Editor";
+import { editorMenuItems } from "../editor/editorMenu";
+import { useContextMenu } from "../lib/contextMenu";
+import { isImeEnter } from "../lib/ime";
+import { openNoteWindow } from "../lib/trashWindow";
+import ContextMenu from "./ContextMenu";
 import BacklinksPanel from "./BacklinksPanel";
 import BookView from "./BookView";
+import DailyEntryBar from "./DailyEntryBar";
+import EntryList from "./EntryList";
+import TodoList from "./TodoList";
+import { DAILY_KINDS } from "../lib/callouts";
+import DeleteButton from "./DeleteButton";
+import { notifyOtherWindows } from "../lib/windowSync";
 import DailyDigestBar from "./DailyDigestBar";
 import FrontmatterForm from "./FrontmatterForm";
 import { HistoryButton } from "./HistoryModal";
@@ -29,14 +40,54 @@ export default function EditorPane() {
     externalChanged,
     reloadCurrent,
     dismissExternalChange,
+    pendingTitleRel,
+    clearPendingTitle,
+    appendDaily,
+    appendCalloutKind,
+    todoPanel,
+    setTodoPanel,
+    todoBig,
+    toggleTodoBig,
   } = useVault();
   const [editingTitle, setEditingTitle] = useState<string | null>(null);
   const goToLine = useRef<((line: number) => void) | null>(null);
+  const ctx = useContextMenu();
+  const isDaily = current?.note_type === "daily";
+  // 일지는 기본이 보기 모드(기록·할 일). [원문 편집]을 눌러야 생 마크다운이 나온다
+  const [rawEdit, setRawEdit] = useState(false);
+
+  /** 입력 바 제출 — 기본 종류는 enum 경로, 사용자 정의는 임의 라벨 콜아웃으로 */
+  async function submitDaily(kind: string, text: string) {
+    if (kind === "todo" || kind === "log" || kind === "feeling") {
+      await appendDaily(kind, text);
+    } else {
+      await appendCalloutKind(kind, text);
+    }
+  }
+
+  /** 보기 모드에서 항목을 고친 뒤: 파일에서 다시 읽고 다른 창에도 알린다 */
+  async function onStructuredChange() {
+    await reloadCurrent();
+    if (current) await notifyOtherWindows([current.rel_path]);
+  }
+
+  /** 보기 ↔ 원문 편집 전환 (편집 중이던 내용은 흘리지 않고 저장한다) */
+  async function toggleRawEdit() {
+    if (rawEdit && dirty) await saveCurrent();
+    setRawEdit((v) => !v);
+  }
 
   async function backToList() {
     if (dirty) await saveCurrent();
     closeNote();
   }
+
+  // 방금 만든 노트는 제목칸을 열어 둔다 (제목을 미리 묻지 않고 바로 만들었으므로)
+  useEffect(() => {
+    if (current && pendingTitleRel === current.rel_path) {
+      setEditingTitle("");
+    }
+  }, [pendingTitleRel, current?.rel_path]);
 
   // Ctrl+S 저장
   useEffect(() => {
@@ -81,7 +132,10 @@ export default function EditorPane() {
   async function commitRename() {
     const t = editingTitle?.trim();
     setEditingTitle(null);
-    if (t && t !== displayTitle) await renameCurrent(t);
+    if (!t) return; // 비워 두고 나가면 나중에 본문 첫머리로 자동 명명된다
+    // 직접 이름을 지었으니 자동 명명 대상에서 뺀다
+    clearPendingTitle();
+    if (t !== displayTitle) await renameCurrent(t);
   }
 
   /** image 필드 [찾아보기]: 파일 선택 → 첨부 복사 → 값 갱신 */
@@ -125,11 +179,12 @@ export default function EditorPane() {
             <input
               autoFocus
               className="min-w-0 flex-1 rounded border border-neutral-300 px-2 py-0.5 text-base font-bold focus:border-neutral-500 focus:outline-none"
+              placeholder="제목 (비워 두면 본문 첫 줄로 정해집니다)"
               value={editingTitle}
               onChange={(e) => setEditingTitle(e.target.value)}
               onBlur={commitRename}
               onKeyDown={(e) => {
-                if (e.key === "Enter") commitRename();
+                if (e.key === "Enter" && !isImeEnter(e)) commitRename();
                 if (e.key === "Escape") setEditingTitle(null);
               }}
             />
@@ -161,10 +216,34 @@ export default function EditorPane() {
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {isDaily && (
+            <button
+              className={`rounded border px-2 py-1 text-xs ${
+                rawEdit
+                  ? "border-neutral-800 bg-neutral-800 text-white hover:bg-neutral-600"
+                  : "border-neutral-300 text-neutral-600 hover:border-neutral-500"
+              }`}
+              onClick={toggleRawEdit}
+              title={
+                rawEdit
+                  ? "기록·할 일 보기로 돌아갑니다 (편집분은 저장됩니다)"
+                  : "마크다운 원문을 직접 편집합니다"
+              }
+            >
+              {rawEdit ? "보기" : "원문 편집"}
+            </button>
+          )}
           <OutlineButton
             body={current.body}
             onJump={(line) => goToLine.current?.(line)}
           />
+          <button
+            className="rounded px-2 py-1 text-xs text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+            onClick={() => openNoteWindow(current!.rel_path)}
+            title="새 창으로 열기 (목록에서 Ctrl+클릭)"
+          >
+            ⧉
+          </button>
           <HistoryButton relPath={current.rel_path} />
           <button
             className="rounded bg-neutral-800 px-3 py-1 text-xs text-white hover:bg-neutral-600 disabled:opacity-40"
@@ -217,25 +296,76 @@ export default function EditorPane() {
         onPickImage={pickImage}
       />
 
-      <div className="min-h-0 flex-1">
-        <Editor
-          key={current.rel_path}
-          value={current.body}
-          onChange={setBody}
-          onNavigate={openByTitle}
-          onReady={(fn) => {
-            goToLine.current = fn;
-          }}
-          getTitles={() =>
-            notes
-              .map(
-                (n) =>
-                  n.rel_path.split("/").pop()?.replace(/\.md$/, "") ?? n.title,
-              )
-              .filter(Boolean)
-          }
-        />
-      </div>
+      {/* 일지 보기 모드: 입력 → 기록 → 할 일. 원문 편집으로 넘어가면 통째로 감춘다 */}
+      {isDaily && !rawEdit && (
+        <>
+          <DailyEntryBar onSubmit={submitDaily} />
+
+          {/* 할 일 자리: 아래(기본) 또는 오른쪽 — 설정에서 전환 */}
+          <div
+            className={`flex min-h-0 flex-1 ${
+              todoPanel === "right" ? "flex-row" : "flex-col"
+            }`}
+          >
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <EntryList
+                relPath={current.rel_path}
+                body={current.body}
+                onChanged={onStructuredChange}
+                onOpenRaw={() => setRawEdit(true)}
+                kinds={DAILY_KINDS}
+              />
+            </div>
+
+            <div
+              className={
+                todoPanel === "right"
+                  ? `${todoBig ? "w-[28rem]" : "w-[17rem]"} shrink-0 border-l border-neutral-200`
+                  : `${todoBig ? "h-[65%]" : "h-[8rem]"} shrink-0`
+              }
+            >
+              <TodoList
+                relPath={current.rel_path}
+                body={current.body}
+                onChanged={onStructuredChange}
+                kinds={DAILY_KINDS}
+                big={todoBig}
+                onToggleBig={toggleTodoBig}
+                panel={todoPanel}
+                onTogglePanel={() =>
+                  setTodoPanel(todoPanel === "right" ? "bottom" : "right")
+                }
+              />
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* 원문 편집 (일지가 아니면 항상 이 화면) */}
+      {(!isDaily || rawEdit) && (
+        <div className="min-h-0 flex-1">
+          <Editor
+            key={current.rel_path}
+            value={current.body}
+            onChange={setBody}
+            onNavigate={openByTitle}
+            onReady={(fn) => {
+              goToLine.current = fn;
+            }}
+            onContextMenu={(e, view) =>
+              ctx.open(e, editorMenuItems(view, isDaily ? DAILY_KINDS : []))
+            }
+            getTitles={() =>
+              notes
+                .map(
+                  (n) =>
+                    n.rel_path.split("/").pop()?.replace(/\.md$/, "") ?? n.title,
+                )
+                .filter(Boolean)
+            }
+          />
+        </div>
+      )}
 
       {current.note_type === "daily" && (
         <DailyDigestBar date={typeof fm.date === "string" ? fm.date : ""} />
@@ -251,69 +381,13 @@ export default function EditorPane() {
         }
       />
       <BacklinksPanel relPath={current.rel_path} />
+
+      {ctx.menu && <ContextMenu state={ctx.menu} onClose={ctx.close} />}
     </div>
   );
 }
 
-/** 삭제 버튼: 클릭 → 강조 → 다시 클릭 → (확인 켜짐: 확인/취소 → 삭제, 꺼짐: 바로 삭제).
- *  실수 방지를 위해 최소 2번은 눌러야 하며, 4초간 가만두면 원래대로. */
-function DeleteButton({ onDelete }: { onDelete: () => void }) {
-  const deleteConfirm = useVault((s) => s.deleteConfirm);
-  const [stage, setStage] = useState(0);
-
-  useEffect(() => {
-    if (stage === 0) return;
-    const t = setTimeout(() => setStage(0), 4000);
-    return () => clearTimeout(t);
-  }, [stage]);
-
-  if (stage === 2) {
-    return (
-      <span className="flex gap-1">
-        <button
-          className="rounded bg-rose-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-rose-500"
-          onClick={() => {
-            setStage(0);
-            onDelete();
-          }}
-        >
-          삭제 확인
-        </button>
-        <button
-          className="rounded px-2 py-1 text-xs text-neutral-500 hover:bg-neutral-100"
-          onClick={() => setStage(0)}
-        >
-          취소
-        </button>
-      </span>
-    );
-  }
-
-  return (
-    <button
-      className={`rounded px-2 py-1 text-xs transition-colors ${
-        stage === 1
-          ? "bg-rose-100 font-bold text-rose-600 ring-1 ring-rose-300"
-          : "text-rose-500 hover:bg-rose-50"
-      }`}
-      onClick={() => {
-        if (stage === 0) {
-          setStage(1);
-        } else if (deleteConfirm) {
-          setStage(2);
-        } else {
-          // 확인 단계 꺼짐: 두 번째 클릭에서 바로 삭제
-          setStage(0);
-          onDelete();
-        }
-      }}
-    >
-      {stage === 1 ? "삭제하시겠어요?" : "삭제"}
-    </button>
-  );
-}
-
-/** 하단 상태줄: 저장 상태 + 글자 수 (+ 글쓰기 목표 진행률) */
+/** 하단 상태줄: 저장 상태 + 분량 (+ 글쓰기 목표 진행률) */
 function StatusBar({
   body,
   dirty,
@@ -323,14 +397,23 @@ function StatusBar({
   dirty: boolean;
   goal: number;
 }) {
-  const total = [...body].length;
-  const noSpace = [...body].filter((c) => !/\s/.test(c)).length;
+  const { words, withSpace, noSpace } = useMemo(() => {
+    const chars = [...body];
+    return {
+      // 공백으로 끊어 센다 (한국어는 어절 수에 가깝다)
+      words: body.trim() ? body.trim().split(/\s+/).length : 0,
+      withSpace: chars.length,
+      noSpace: chars.filter((c) => !/\s/.test(c)).length,
+    };
+  }, [body]);
   const pct = goal > 0 ? Math.min(100, Math.round((noSpace / goal) * 100)) : 0;
+
   return (
     <div className="flex items-center justify-between border-t border-neutral-100 bg-white px-4 py-1 text-[11px] text-neutral-400">
       <span>{dirty ? "수정됨 · 잠시 후 자동 저장" : "저장됨"}</span>
-      <span>
-        {total.toLocaleString()}자 · 공백 제외 {noSpace.toLocaleString()}자
+      <span title="단어 수 · 공백 포함 글자수 · 공백 제외 글자수">
+        {words.toLocaleString()}단어 · 공백 포함 {withSpace.toLocaleString()}자 ·
+        공백 제외 {noSpace.toLocaleString()}자
         {goal > 0 && (
           <span className={pct >= 100 ? "ml-1 text-emerald-500" : "ml-1"}>
             · 목표 {goal.toLocaleString()}자의 {pct}%

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { styleOf } from "../lib/callouts";
+import { useImeInput } from "../lib/ime";
 import type { EntryKind } from "../bindings";
 import { useVault } from "../stores/vault";
 
@@ -42,26 +44,37 @@ const KINDS: {
 /** 독서기록 "기록 추가" 바 — 종류 버튼을 고르면 배경색이 바뀌고, 콜아웃으로 본문 끝에 누적 */
 export default function ReadingEntryBar() {
   const appendEntry = useVault((s) => s.appendEntry);
-  const [kind, setKind] = useState<EntryKind>("excerpt");
-  const [text, setText] = useState("");
+  const [kind, setKind] = useState<string>("excerpt");
+  // 값은 DOM이 소유한다 (한글 조합 충돌 방지). 타이핑 중 리렌더가 없도록 빈칸 상태도 두지 않는다.
   const [busy, setBusy] = useState(false);
 
+  const customs = useVault((s) => s.callouts).filter(
+    (c) => c.scope === "book" || c.scope === "both",
+  );
+  const appendCalloutKind = useVault((s) => s.appendCalloutKind);
   const current = KINDS.find((k) => k.value === kind) ?? KINDS[0];
+  const custom = customs.find((c) => c.label === kind);
+  const bar = custom ? styleOf(custom.color as never).bar : current.bar;
+  const activeCls = custom ? styleOf(custom.color as never).active : current.active;
 
-  async function submit() {
-    if (busy || !text.trim()) return;
+  async function submit(value?: string) {
+    const body = (value ?? ime.value()).trim();
+    if (busy || !body) return;
     setBusy(true);
     try {
-      await appendEntry(kind, text);
-      setText("");
+      if (custom) await appendCalloutKind(custom.label, body);
+      else await appendEntry(kind as EntryKind, body);
+      ime.clear();
     } finally {
       setBusy(false);
     }
   }
 
+  const ime = useImeInput<HTMLTextAreaElement>((v) => submit(v), "ctrl-enter");
+
   return (
     <div
-      className={`flex flex-col gap-1.5 border-b px-4 py-2 transition-colors ${current.bar}`}
+      className={`flex flex-col gap-1.5 border-b px-4 py-2 transition-colors ${bar}`}
     >
       <div className="flex gap-1.5">
         {KINDS.map((k) => (
@@ -75,21 +88,32 @@ export default function ReadingEntryBar() {
             {k.label}
           </button>
         ))}
+        {customs.map((c) => (
+          <button
+            key={c.label}
+            className={`rounded-md border border-current/10 px-3 py-1 text-sm font-medium transition-colors ${
+              kind === c.label
+                ? styleOf(c.color as never).active
+                : styleOf(c.color as never).idle
+            }`}
+            onClick={() => setKind(c.label)}
+          >
+            {c.icon ? `${c.icon} ` : ""}
+            {c.label}
+          </button>
+        ))}
       </div>
       <div className="flex items-start gap-2">
         <textarea
           className="min-h-9 flex-1 resize-y rounded border border-neutral-300 bg-white px-2 py-1 text-sm focus:outline-none"
           placeholder={`${current.label} 기록을 입력하고 [추가] 또는 Ctrl+Enter — 본문 끝에 날짜와 함께 누적됩니다`}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) submit();
-          }}
+          defaultValue=""
+          {...ime.handlers}
         />
         <button
-          className={`rounded px-3 py-1 text-sm text-white disabled:opacity-50 ${current.active} hover:opacity-90`}
-          disabled={busy || !text.trim()}
-          onClick={submit}
+          className={`rounded px-3 py-1 text-sm text-white disabled:opacity-50 ${activeCls} hover:opacity-90`}
+          disabled={busy}
+          onClick={() => submit()}
         >
           추가
         </button>

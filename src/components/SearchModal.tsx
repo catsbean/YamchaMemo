@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { commands, type SearchHit } from "../bindings";
 import { typeLabel, useVault } from "../stores/vault";
+import { isImeEnter } from "../lib/ime";
+import { openNoteWindow } from "../lib/trashWindow";
 import Modal from "./Modal";
 
 /** 쿼리 토큰을 <mark>로 강조 */
@@ -83,7 +85,7 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setSelected((s) => Math.max(s - 1, 0));
-    } else if (e.key === "Enter" && hits[selected]) {
+    } else if (e.key === "Enter" && !isImeEnter(e) && hits[selected]) {
       open(hits[selected]);
     }
   }
@@ -98,7 +100,7 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
           ref={inputRef}
           autoFocus
           className="w-full border-b border-neutral-200 px-4 py-3 text-base focus:outline-none"
-          placeholder="검색 (제목·본문·태그)…"
+          placeholder="검색 (제목·본문·태그) — Ctrl+클릭하면 새 창"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
@@ -150,7 +152,21 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
                   i === selected ? "bg-neutral-100" : "hover:bg-neutral-50"
                 }`}
                 onMouseEnter={() => setSelected(i)}
-                onClick={() => open(h)}
+                onClick={(e) => {
+                  // Ctrl+클릭이면 새 창으로 (검색창은 열어 둔다)
+                  if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    openNoteWindow(h.rel_path);
+                    return;
+                  }
+                  open(h);
+                }}
+                onAuxClick={(e) => {
+                  if (e.button === 1) {
+                    e.preventDefault();
+                    openNoteWindow(h.rel_path);
+                  }
+                }}
               >
                 <span className="w-16 shrink-0 self-start rounded bg-neutral-100 px-1.5 py-0.5 text-center text-[11px] text-neutral-500">
                   {typeLabel(schemas, h.note_type)}

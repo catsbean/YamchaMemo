@@ -1,11 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the main and trash windows",
-  "windows": ["main", "trash"],
+  "description": "Default capability for the main window, the trash window, and per-note windows (note-*)",
+  "windows": ["main", "trash", "note-*", "todos-*"],
   "permissions": [
     "core:default",
     "core:webview:allow-create-webview-window",
+    "core:event:allow-emit-to",
     "core:window:allow-destroy",
     "core:window:allow-close",
     "core:window:allow-set-focus",

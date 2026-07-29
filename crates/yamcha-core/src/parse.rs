@@ -105,23 +105,26 @@ pub fn extract_inline_tags(text: &str) -> Vec<String> {
 /// 넣어 두기 때문에, 그걸 세면 아무것도 안 쓴 날에도 "미완 1건"이 되어 버린다.
 /// 콜아웃(`>`) 안의 체크박스는 센다.
 pub fn count_open_todos(body: &str) -> u32 {
+    open_todo_texts(body).len() as u32
+}
+
+/// 미완 할 일의 내용만 뽑는다 (규칙은 `count_open_todos`와 동일).
+pub fn open_todo_texts(body: &str) -> Vec<String> {
     body.lines()
-        .filter(|line| {
+        .filter_map(|line| {
             let t = line.trim_start().trim_start_matches('>').trim_start();
-            let Some(rest) = t
+            let rest = t
                 .strip_prefix("- ")
                 .or_else(|| t.strip_prefix("* "))
-                .or_else(|| t.strip_prefix("+ "))
-            else {
-                return false;
-            };
-            let rest = rest.trim_start();
-            let Some(text) = rest.strip_prefix("[ ]") else {
-                return false;
-            };
-            !text.trim().is_empty()
+                .or_else(|| t.strip_prefix("+ "))?;
+            let text = rest.trim_start().strip_prefix("[ ]")?.trim();
+            if text.is_empty() {
+                None
+            } else {
+                Some(text.to_string())
+            }
         })
-        .count() as u32
+        .collect()
 }
 
 #[cfg(test)]

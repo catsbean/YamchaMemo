@@ -113,6 +113,153 @@ async appendReadingEntry(relPath: string, kind: EntryKind, text: string) : Promi
 }
 },
 /**
+ * 데일리노트 빠른 입력 (할 일/기록/느낌) → 갱신된 노트 반환
+ */
+async appendDailyEntry(relPath: string, kind: DailyKind, text: string) : Promise<Result<NoteContent, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("append_daily_entry", { relPath, kind, text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 보기 화면용 블록 목록.
+ * `## 기록`은 콜아웃/원문을 순서대로, 그 밖의 섹션은 원문 블록으로 덧붙인다 —
+ * 화면이 파일 내용을 조용히 숨기지 않도록.
+ */
+async noteBlocks(relPath: string) : Promise<Result<NoteBlock[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("note_blocks", { relPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 항목 종류 변경. `source`는 "entry"(기록 콜아웃) 또는 "todo".
+ * `new_kind`가 "할 일"이면 체크박스로 바뀌며 섹션도 함께 옮겨진다.
+ */
+async changeKind(relPath: string, source: string, index: number, expectedText: string, newKind: string) : Promise<Result<NoteContent, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_kind", { relPath, source, index, expectedText, newKind }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 사용자 정의 종류로 기록 추가 → 갱신된 노트
+ */
+async appendCallout(relPath: string, label: string, text: string) : Promise<Result<NoteContent, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("append_callout", { relPath, label, text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * vault에 저장된 사용자 정의 콜아웃 목록
+ */
+async listCallouts() : Promise<Result<CalloutDef[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_callouts") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 사용자 정의 콜아웃 추가 → 갱신된 목록
+ */
+async addCallout(def: CalloutDef) : Promise<Result<CalloutDef[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("add_callout", { def }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 사용자 정의 콜아웃 제거 → 갱신된 목록 (이미 쓴 노트 내용은 건드리지 않는다)
+ */
+async removeCallout(label: string) : Promise<Result<CalloutDef[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("remove_callout", { label }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 일지의 할 일 목록 (`## 할 일` 섹션, 없으면 본문 전체). 완료·미완료 모두.
+ */
+async noteTodos(relPath: string) : Promise<Result<NoteTodo[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("note_todos", { relPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 할 일 완료 여부 토글 → 갱신된 노트
+ */
+async toggleTodo(relPath: string, index: number, expectedText: string, done: boolean) : Promise<Result<NoteContent, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("toggle_todo", { relPath, index, expectedText, done }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 할 일 내용 수정 (완료 여부 유지) → 갱신된 노트
+ */
+async updateTodo(relPath: string, index: number, expectedText: string, newText: string) : Promise<Result<NoteContent, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_todo", { relPath, index, expectedText, newText }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 할 일 삭제 → 갱신된 노트
+ */
+async deleteTodo(relPath: string, index: number, expectedText: string) : Promise<Result<NoteContent, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_todo", { relPath, index, expectedText }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 기록 콜아웃 한 건의 본문 수정 (종류·날짜 유지) → 갱신된 노트.
+ * `expected_text`는 화면에서 보던 내용 — 그 사이 파일이 바뀌었으면 거부한다.
+ */
+async updateEntry(relPath: string, index: number, expectedText: string, newText: string) : Promise<Result<NoteContent, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_entry", { relPath, index, expectedText, newText }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 기록 콜아웃 한 건 삭제 → 갱신된 노트. `expected_text`가 다르면 거부한다.
+ */
+async deleteEntry(relPath: string, index: number, expectedText: string) : Promise<Result<NoteContent, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_entry", { relPath, index, expectedText }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 전문검색 (제목·본문·태그, 한국어 부분 문자열 지원). filter가 비면 전체 검색.
  */
 async search(query: string, filter: SearchFilter) : Promise<Result<SearchHit[], string>> {
@@ -184,6 +331,51 @@ async listEntries() : Promise<Result<ReadingEntry[], string>> {
 async dailyDigest(date: string) : Promise<Result<DailyDigest, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("daily_digest", { date }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * vault 전체의 미완 할 일 (내용이 있는 `- [ ]`만). 최근 노트가 앞에 온다.
+ */
+async listOpenTodos(limit: number) : Promise<Result<TodoItem[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("list_open_todos", { limit }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 타입별 제목 머릿글 템플릿 조회 (쓸 수 없는 타입이면 빈 문자열)
+ */
+async getTitleTemplate(typeId: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_title_template", { typeId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 타입별 제목 머릿글 템플릿 저장
+ */
+async setTitleTemplate(typeId: string, content: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_title_template", { typeId, content }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 제목 없이 닫은 노트에 `{날짜} {본문 첫머리}`로 이름을 붙인다.
+ * 이미 이름이 있거나 본문이 비었으면 아무것도 하지 않고 원래 rel을 돌려준다.
+ */
+async autoTitleNote(relPath: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("auto_title_note", { relPath }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -570,6 +762,22 @@ export type BookMeta = { author: string; publisher: string; isbn: string; genre:
  */
 export type BookSearchHit = { title: string; authors: string; publisher: string; isbn: string; thumbnail_url: string; published: string }
 /**
+ * 사용자 정의 콜아웃 종류 (vault의 `_callouts.json`에 저장 — vault를 옮기면 함께 간다)
+ */
+export type CalloutDef = { label: string; 
+/**
+ * 이모지 아이콘
+ */
+icon: string; 
+/**
+ * 고정 팔레트 이름 (amber/sky/emerald/violet/rose/neutral)
+ */
+color: string; 
+/**
+ * 어디에 쓸지: "daily" | "book" | "both"
+ */
+scope: string }
+/**
  * 데일리노트 하단 요약 바에 뿌릴 값들 (템플릿과 무관하게 항상 계산한다)
  */
 export type DailyDigest = { 
@@ -593,6 +801,22 @@ reading_rels: string[]; reading_count: number; finished_total: number; finished_
  * 그 날짜에 기록을 남긴 책들
  */
 today_entries: DigestBookEntry[]; today_entry_count: number }
+/**
+ * 데일리노트 빠른 입력 구분. 종류마다 들어가는 섹션과 형식이 다르다.
+ */
+export type DailyKind = 
+/**
+ * 체크박스 항목으로 `## 할 일`에 추가
+ */
+"todo" | 
+/**
+ * 콜아웃으로 `## 기록`에 추가
+ */
+"log" | 
+/**
+ * 콜아웃으로 `## 기록`에 추가
+ */
+"feeling"
 /**
  * 그 날짜에 기록이 추가된 책 하나
  */
@@ -712,6 +936,16 @@ export type MirrorReport = { target: string; copied: number; skipped: number;
  */
 conflicts: string[]; errors: string[] }
 /**
+ * 보기 화면에 그릴 블록 하나.
+ * `kind`가 "callout"이면 `entry_index`로 수정·삭제할 수 있고,
+ * "raw"면 외부 편집기에서 콜아웃 없이 써 넣은 원문이라 보여주기만 한다.
+ */
+export type NoteBlock = { kind: string; entry_index: number | null; kind_label: string; date: string; text: string; 
+/**
+ * raw 블록이 어느 섹션에서 왔는지 (기록 섹션 안이면 빈 문자열)
+ */
+section: string }
+/**
  * 편집기용 노트 전체 내용
  */
 export type NoteContent = { rel_path: string; note_type: string; frontmatter: JsonValue; body: string }
@@ -748,9 +982,21 @@ entry_count: number;
  */
 frontmatter: JsonValue }
 /**
+ * 일지의 할 일 한 건 (index는 문서에 적힌 순서 — 화면 정렬과 무관하게 이 값으로 조작한다)
+ */
+export type NoteTodo = { index: number; done: boolean; text: string }
+/**
  * 책 한 권의 기록 콜아웃 한 건 (어느 책의 것인지까지 붙여 평탄화한 형태)
  */
 export type ReadingEntry = { book_rel: string; book_title: string; book_author: string; 
+/**
+ * 책의 분야 (장르별 보기·필터용)
+ */
+genre: string; 
+/**
+ * 책에 달린 태그
+ */
+tags: string[]; 
 /**
  * 표지 rel 경로 (없으면 빈 문자열)
  */
@@ -781,6 +1027,10 @@ snippet: string }
  */
 export type StorageDir = { label: string; path: string }
 export type TagCount = { tag: string; count: number }
+/**
+ * 어느 노트에 있는 미완 할 일 한 줄
+ */
+export type TodoItem = { rel_path: string; note_type: string; note_title: string; date: string; text: string }
 /**
  * 휴지통에 있는 삭제된 노트 한 건
  */

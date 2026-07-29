@@ -171,6 +171,39 @@ impl EntryKind {
     }
 }
 
+/// 데일리노트 빠른 입력 구분. 종류마다 들어가는 섹션과 형식이 다르다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum DailyKind {
+    /// 체크박스 항목으로 `## 할 일`에 추가
+    Todo,
+    /// 콜아웃으로 `## 기록`에 추가
+    Log,
+    /// 콜아웃으로 `## 기록`에 추가
+    Feeling,
+}
+
+impl DailyKind {
+    pub const ALL: [DailyKind; 3] = [DailyKind::Todo, DailyKind::Log, DailyKind::Feeling];
+
+    /// 버튼·콜아웃 태그에 쓰이는 한글 라벨
+    pub fn label(self) -> &'static str {
+        match self {
+            DailyKind::Todo => "할 일",
+            DailyKind::Log => "기록",
+            DailyKind::Feeling => "느낌",
+        }
+    }
+
+    /// 이 종류가 들어갈 본문 섹션 헤더 (없으면 새로 만들어 붙인다)
+    pub fn section(self) -> &'static str {
+        match self {
+            DailyKind::Todo => "## 할 일",
+            DailyKind::Log | DailyKind::Feeling => "## 기록",
+        }
+    }
+}
+
 fn common_fields() -> Vec<FieldDef> {
     vec![
         FieldDef::new("date", "날짜", FieldKind::Date, true),

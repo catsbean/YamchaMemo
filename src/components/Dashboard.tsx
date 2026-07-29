@@ -4,6 +4,9 @@ import { useVault } from "../stores/vault";
 import { fmStr } from "../lib/note";
 import AuditDashboard from "./AuditDashboard";
 import Bookshelf from "./Bookshelf";
+import ContextMenu from "./ContextMenu";
+import { noteItemHandlers, useContextMenu } from "../lib/contextMenu";
+import { openNoteWindow } from "../lib/trashWindow";
 import NewNoteDialog from "./NewNoteDialog";
 import HomeDashboard from "./HomeDashboard";
 import ReadingDashboard from "./ReadingDashboard";
@@ -42,10 +45,16 @@ function hostOf(url: string): string {
   }
 }
 
+/** 제목을 미리 받지 않고 바로 만들어도 되는 타입.
+ *  정보·자유노트는 생성 폼에 받을 게 사실상 없어서, 편집기에서 바로 쓰기 시작하는 편이 빠르다. */
+const QUICK_CREATE = new Set(["free", "info"]);
+
 function ListDashboard({ noteType }: { noteType: string }) {
-  const { schemas, notes, current, openNote, openToday } = useVault();
+  const { schemas, notes, current, openNote, openToday, createUntitled } =
+    useVault();
   const [creating, setCreating] = useState(false);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const ctx = useContextMenu();
   const schema = schemas.find((s) => s.id === noteType);
 
   const all = useMemo(
@@ -84,7 +93,11 @@ function ListDashboard({ noteType }: { noteType: string }) {
         </h1>
         <button
           className="rounded bg-neutral-800 px-3 py-1.5 text-sm text-white hover:bg-neutral-600"
-          onClick={() => (noteType === "daily" ? openToday() : setCreating(true))}
+          onClick={() => {
+            if (noteType === "daily") openToday();
+            else if (QUICK_CREATE.has(noteType)) createUntitled(noteType);
+            else setCreating(true);
+          }}
         >
           {noteType === "daily" ? "오늘의 노트" : "새로 만들기"}
         </button>
@@ -129,7 +142,12 @@ function ListDashboard({ noteType }: { noteType: string }) {
                     className={`flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-neutral-50 ${
                       current?.rel_path === n.rel_path ? "bg-neutral-100" : ""
                     }`}
-                    onClick={() => openNote(n.rel_path)}
+                    {...noteItemHandlers(
+                      n.rel_path,
+                      () => openNote(n.rel_path),
+                      openNoteWindow,
+                      ctx.open,
+                    )}
                   >
                     <Row note={n} noteType={noteType} />
                   </button>
@@ -143,6 +161,7 @@ function ListDashboard({ noteType }: { noteType: string }) {
       {creating && (
         <NewNoteDialog noteType={noteType} onClose={() => setCreating(false)} />
       )}
+      {ctx.menu && <ContextMenu state={ctx.menu} onClose={ctx.close} />}
     </div>
   );
 }

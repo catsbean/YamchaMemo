@@ -661,6 +661,273 @@ pub fn append_reading_entry(
     })
 }
 
+/// 데일리노트 빠른 입력 (할 일/기록/느낌) → 갱신된 노트 반환
+#[tauri::command]
+#[specta::specta]
+pub fn append_daily_entry(
+    state: State<'_, AppState>,
+    rel_path: String,
+    kind: yamcha_core::schema::DailyKind,
+    text: String,
+) -> Result<NoteContent, String> {
+    with_ctx(&state, |c| {
+        let note = c.vault.append_daily_entry(&rel_path, kind, &text)?;
+        refresh_note(c, &rel_path)?;
+        Ok(note)
+    })
+}
+
+/// 일지의 할 일 한 건 (index는 문서에 적힌 순서 — 화면 정렬과 무관하게 이 값으로 조작한다)
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone)]
+pub struct NoteTodo {
+    pub index: u32,
+    pub done: bool,
+    pub text: String,
+}
+
+/// 일지의 할 일 목록 (`## 할 일` 섹션, 없으면 본문 전체). 완료·미완료 모두.
+#[tauri::command]
+#[specta::specta]
+pub fn note_todos(state: State<'_, AppState>, rel_path: String) -> Result<Vec<NoteTodo>, String> {
+    with_ctx(&state, |c| {
+        let note = c.vault.read_note(&rel_path)?;
+        let scope = yamcha_core::template::section_text(&note.body, "## 할 일")
+            .unwrap_or_else(|| note.body.clone());
+        Ok(yamcha_core::template::parse_todos(&scope)
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| NoteTodo {
+                index: i as u32,
+                done: t.done,
+                text: t.text,
+            })
+            .collect())
+    })
+}
+
+/// 할 일 완료 여부 토글 → 갱신된 노트
+#[tauri::command]
+#[specta::specta]
+pub fn toggle_todo(
+    state: State<'_, AppState>,
+    rel_path: String,
+    index: u32,
+    expected_text: String,
+    done: bool,
+) -> Result<NoteContent, String> {
+    with_ctx(&state, |c| {
+        let note = c.vault.toggle_todo(&rel_path, index, &expected_text, done)?;
+        refresh_note(c, &rel_path)?;
+        Ok(note)
+    })
+}
+
+/// 할 일 내용 수정 (완료 여부 유지) → 갱신된 노트
+#[tauri::command]
+#[specta::specta]
+pub fn update_todo(
+    state: State<'_, AppState>,
+    rel_path: String,
+    index: u32,
+    expected_text: String,
+    new_text: String,
+) -> Result<NoteContent, String> {
+    with_ctx(&state, |c| {
+        let note = c
+            .vault
+            .update_todo(&rel_path, index, &expected_text, &new_text)?;
+        refresh_note(c, &rel_path)?;
+        Ok(note)
+    })
+}
+
+/// 할 일 삭제 → 갱신된 노트
+#[tauri::command]
+#[specta::specta]
+pub fn delete_todo(
+    state: State<'_, AppState>,
+    rel_path: String,
+    index: u32,
+    expected_text: String,
+) -> Result<NoteContent, String> {
+    with_ctx(&state, |c| {
+        let note = c.vault.delete_todo(&rel_path, index, &expected_text)?;
+        refresh_note(c, &rel_path)?;
+        Ok(note)
+    })
+}
+
+/// 사용자 정의 종류로 기록 추가 → 갱신된 노트
+#[tauri::command]
+#[specta::specta]
+pub fn append_callout(
+    state: State<'_, AppState>,
+    rel_path: String,
+    label: String,
+    text: String,
+) -> Result<NoteContent, String> {
+    with_ctx(&state, |c| {
+        let note = c.vault.append_callout(&rel_path, &label, &text)?;
+        refresh_note(c, &rel_path)?;
+        Ok(note)
+    })
+}
+
+/// 항목 종류 변경. `source`는 "entry"(기록 콜아웃) 또는 "todo".
+/// `new_kind`가 "할 일"이면 체크박스로 바뀌며 섹션도 함께 옮겨진다.
+#[tauri::command]
+#[specta::specta]
+pub fn change_kind(
+    state: State<'_, AppState>,
+    rel_path: String,
+    source: String,
+    index: u32,
+    expected_text: String,
+    new_kind: String,
+) -> Result<NoteContent, String> {
+    with_ctx(&state, |c| {
+        let note = c
+            .vault
+            .change_kind(&rel_path, &source, index, &expected_text, &new_kind)?;
+        refresh_note(c, &rel_path)?;
+        Ok(note)
+    })
+}
+
+/// vault에 저장된 사용자 정의 콜아웃 목록
+#[tauri::command]
+#[specta::specta]
+pub fn list_callouts(state: State<'_, AppState>) -> Result<Vec<yamcha_core::CalloutDef>, String> {
+    with_ctx(&state, |c| Ok(c.vault.list_callouts()))
+}
+
+/// 사용자 정의 콜아웃 추가 → 갱신된 목록
+#[tauri::command]
+#[specta::specta]
+pub fn add_callout(
+    state: State<'_, AppState>,
+    def: yamcha_core::CalloutDef,
+) -> Result<Vec<yamcha_core::CalloutDef>, String> {
+    with_ctx_write(&state, |c| c.vault.add_callout(def))
+}
+
+/// 사용자 정의 콜아웃 제거 → 갱신된 목록 (이미 쓴 노트 내용은 건드리지 않는다)
+#[tauri::command]
+#[specta::specta]
+pub fn remove_callout(
+    state: State<'_, AppState>,
+    label: String,
+) -> Result<Vec<yamcha_core::CalloutDef>, String> {
+    with_ctx_write(&state, |c| c.vault.remove_callout(&label))
+}
+
+/// 보기 화면에 그릴 블록 하나.
+/// `kind`가 "callout"이면 `entry_index`로 수정·삭제할 수 있고,
+/// "raw"면 외부 편집기에서 콜아웃 없이 써 넣은 원문이라 보여주기만 한다.
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone)]
+pub struct NoteBlock {
+    pub kind: String,
+    pub entry_index: Option<u32>,
+    pub kind_label: String,
+    pub date: String,
+    pub text: String,
+    /// raw 블록이 어느 섹션에서 왔는지 (기록 섹션 안이면 빈 문자열)
+    pub section: String,
+}
+
+/// 보기 화면용 블록 목록.
+/// `## 기록`은 콜아웃/원문을 순서대로, 그 밖의 섹션은 원문 블록으로 덧붙인다 —
+/// 화면이 파일 내용을 조용히 숨기지 않도록.
+#[tauri::command]
+#[specta::specta]
+pub fn note_blocks(state: State<'_, AppState>, rel_path: String) -> Result<Vec<NoteBlock>, String> {
+    use yamcha_core::template::{parse_record_blocks, sections, RecordBlock};
+    with_ctx(&state, |c| {
+        let note = c.vault.read_note(&rel_path)?;
+        let mut out: Vec<NoteBlock> = Vec::new();
+
+        let records =
+            yamcha_core::template::section_text(&note.body, "## 기록").unwrap_or_default();
+        for b in parse_record_blocks(&records) {
+            out.push(match b {
+                RecordBlock::Callout { index, entry } => NoteBlock {
+                    kind: "callout".into(),
+                    entry_index: Some(index as u32),
+                    kind_label: entry.kind_label,
+                    date: entry.date,
+                    text: entry.text,
+                    section: String::new(),
+                },
+                RecordBlock::Raw(text) => NoteBlock {
+                    kind: "raw".into(),
+                    entry_index: None,
+                    kind_label: String::new(),
+                    date: String::new(),
+                    text,
+                    section: String::new(),
+                },
+            });
+        }
+
+        // 보기 화면이 따로 그려 주는 섹션은 건너뛴다 (기록=위 목록, 할 일=하단 영역, 소개=정보 화면)
+        let handled = ["## 기록", "## 할 일", "## 소개"];
+        for (name, body) in sections(&note.body) {
+            if handled.contains(&name.as_str()) || body.trim().is_empty() {
+                continue;
+            }
+            out.push(NoteBlock {
+                kind: "raw".into(),
+                entry_index: None,
+                kind_label: String::new(),
+                date: String::new(),
+                text: body,
+                section: if name.is_empty() {
+                    "(머리말)".into()
+                } else {
+                    name
+                },
+            });
+        }
+        Ok(out)
+    })
+}
+
+/// 기록 콜아웃 한 건의 본문 수정 (종류·날짜 유지) → 갱신된 노트.
+/// `expected_text`는 화면에서 보던 내용 — 그 사이 파일이 바뀌었으면 거부한다.
+#[tauri::command]
+#[specta::specta]
+pub fn update_entry(
+    state: State<'_, AppState>,
+    rel_path: String,
+    index: u32,
+    expected_text: String,
+    new_text: String,
+) -> Result<NoteContent, String> {
+    with_ctx(&state, |c| {
+        let note = c
+            .vault
+            .update_entry(&rel_path, index, &expected_text, &new_text)?;
+        refresh_note(c, &rel_path)?;
+        Ok(note)
+    })
+}
+
+/// 기록 콜아웃 한 건 삭제 → 갱신된 노트. `expected_text`가 다르면 거부한다.
+#[tauri::command]
+#[specta::specta]
+pub fn delete_entry(
+    state: State<'_, AppState>,
+    rel_path: String,
+    index: u32,
+    expected_text: String,
+) -> Result<NoteContent, String> {
+    with_ctx(&state, |c| {
+        let note = c.vault.delete_entry(&rel_path, index, &expected_text)?;
+        refresh_note(c, &rel_path)?;
+        Ok(note)
+    })
+}
+
 /// 전문검색 (제목·본문·태그, 한국어 부분 문자열 지원). filter가 비면 전체 검색.
 #[tauri::command]
 #[specta::specta]
@@ -732,6 +999,10 @@ pub struct ReadingEntry {
     pub book_rel: String,
     pub book_title: String,
     pub book_author: String,
+    /// 책의 분야 (장르별 보기·필터용)
+    pub genre: String,
+    /// 책에 달린 태그
+    pub tags: Vec<String>,
     /// 표지 rel 경로 (없으면 빈 문자열)
     pub cover: String,
     pub kind_label: String,
@@ -765,6 +1036,8 @@ pub fn list_entries(state: State<'_, AppState>) -> Result<Vec<ReadingEntry>, Str
                     book_rel: n.rel_path.clone(),
                     book_title: n.title.clone(),
                     book_author: fm("author"),
+                    genre: fm("genre"),
+                    tags: n.tags.clone(),
                     cover: fm("cover"),
                     kind_label: e.kind_label,
                     date: e.date,
@@ -772,6 +1045,47 @@ pub fn list_entries(state: State<'_, AppState>) -> Result<Vec<ReadingEntry>, Str
                 });
             }
         }
+        Ok(out)
+    })
+}
+
+// ---------- 미완 할 일 모아보기 ----------
+
+/// 어느 노트에 있는 미완 할 일 한 줄
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone)]
+pub struct TodoItem {
+    pub rel_path: String,
+    pub note_type: String,
+    pub note_title: String,
+    pub date: String,
+    pub text: String,
+}
+
+/// vault 전체의 미완 할 일 (내용이 있는 `- [ ]`만). 최근 노트가 앞에 온다.
+#[tauri::command]
+#[specta::specta]
+pub fn list_open_todos(state: State<'_, AppState>, limit: u32) -> Result<Vec<TodoItem>, String> {
+    with_ctx(&state, |c| {
+        let limit = limit.clamp(1, 500) as usize;
+        let mut out: Vec<TodoItem> = Vec::new();
+        // list_notes는 날짜 내림차순이라 순회 순서가 곧 최신순이다
+        for n in c.vault.list_notes()? {
+            let Ok(note) = c.vault.read_note(&n.rel_path) else {
+                continue;
+            };
+            for text in yamcha_core::parse::open_todo_texts(&note.body) {
+                out.push(TodoItem {
+                    rel_path: n.rel_path.clone(),
+                    note_type: n.note_type.clone(),
+                    note_title: n.title.clone(),
+                    date: n.date.clone(),
+                    text,
+                });
+            }
+        }
+        // 데일리노트를 먼저 (하루 운영에 바로 쓰이는 목록이라)
+        out.sort_by_key(|t| u8::from(t.note_type != "daily"));
+        out.truncate(limit);
         Ok(out)
     })
 }
@@ -2113,6 +2427,40 @@ pub fn set_note_template(
     content: String,
 ) -> Result<(), String> {
     with_ctx_write(&state, |c| c.vault.write_body_template_file(&kind, &content))
+}
+
+/// 타입별 제목 머릿글 템플릿 조회 (쓸 수 없는 타입이면 빈 문자열)
+#[tauri::command]
+#[specta::specta]
+pub fn get_title_template(state: State<'_, AppState>, type_id: String) -> Result<String, String> {
+    with_ctx(&state, |c| c.vault.read_title_template(&type_id))
+}
+
+/// 타입별 제목 머릿글 템플릿 저장
+#[tauri::command]
+#[specta::specta]
+pub fn set_title_template(
+    state: State<'_, AppState>,
+    type_id: String,
+    content: String,
+) -> Result<(), String> {
+    with_ctx_write(&state, |c| c.vault.write_title_template(&type_id, &content))
+}
+
+/// 제목 없이 닫은 노트에 `{날짜} {본문 첫머리}`로 이름을 붙인다.
+/// 이미 이름이 있거나 본문이 비었으면 아무것도 하지 않고 원래 rel을 돌려준다.
+#[tauri::command]
+#[specta::specta]
+pub fn auto_title_note(state: State<'_, AppState>, rel_path: String) -> Result<String, String> {
+    with_ctx_write(&state, |c| {
+        let new_rel = c.vault.auto_title_if_untitled(&rel_path)?;
+        if new_rel != rel_path {
+            c.indexer.remove(&rel_path)?;
+            c.search.remove(&rel_path)?;
+        }
+        refresh_note(c, &new_rel)?;
+        Ok(new_rel)
+    })
 }
 
 #[cfg(test)]
