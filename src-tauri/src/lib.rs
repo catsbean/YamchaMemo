@@ -21,6 +21,7 @@ pub fn run() {
         commands::delete_note,
         commands::open_today_daily,
         commands::open_daily,
+        commands::write_export,
         commands::reading_for_book,
         commands::append_reading_entry,
         commands::append_daily_entry,

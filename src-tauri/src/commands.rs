@@ -632,6 +632,14 @@ pub fn open_today_daily(state: State<'_, AppState>) -> Result<String, String> {
     })
 }
 
+/// 내보내기 파일 쓰기 — 사용자가 저장 대화상자에서 고른 경로에 그대로 쓴다.
+/// (vault 밖이어도 된다. 사용자가 직접 고른 자리이므로)
+#[tauri::command]
+#[specta::specta]
+pub fn write_export(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(|e| format!("파일을 쓰지 못했습니다: {e}"))
+}
+
 /// 특정 날짜의 데일리노트 열기 (없으면 생성)
 #[tauri::command]
 #[specta::specta]

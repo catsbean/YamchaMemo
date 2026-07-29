@@ -19,6 +19,7 @@ import BookInfoModal from "./BookInfoModal";
 import { HistoryButton } from "./HistoryModal";
 import ReadingEntryBar from "./ReadingEntryBar";
 import DeleteButton from "./DeleteButton";
+import ExportNoteButton from "./ExportNoteButton";
 import EntryList from "./EntryList";
 import { BOOK_KINDS } from "../lib/callouts";
 import { notifyOtherWindows } from "../lib/windowSync";
@@ -130,6 +131,7 @@ export default function BookView({ note }: { note: NoteContent }) {
           >
             {rawEdit ? "보기" : "원문 편집"}
           </button>
+          <ExportNoteButton note={note} />
           <HistoryButton relPath={note.rel_path} />
           <button
             className="rounded bg-neutral-800 px-3 py-1 text-xs text-white hover:bg-neutral-600 disabled:opacity-40"

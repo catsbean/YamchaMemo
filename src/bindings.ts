@@ -102,6 +102,18 @@ async openDaily(date: string) : Promise<Result<string, string>> {
 }
 },
 /**
+ * 내보내기 파일 쓰기 — 사용자가 저장 대화상자에서 고른 경로에 그대로 쓴다.
+ * (vault 밖이어도 된다. 사용자가 직접 고른 자리이므로)
+ */
+async writeExport(path: string, contents: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("write_export", { path, contents }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 책 노트 → 연결된 독서기록 찾기/생성
  */
 async readingForBook(bookRelPath: string) : Promise<Result<string, string>> {

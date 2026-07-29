@@ -12,6 +12,7 @@ import {
 import BookCreateDialog from "./BookCreateDialog";
 import BookSearchDialog from "./BookSearchDialog";
 import EnrichDialog from "./EnrichDialog";
+import ExportBooksDialog from "./ExportBooksDialog";
 
 type GroupBy = "genre" | "status" | "author" | "none";
 type ViewMode = "grid" | "list";
@@ -86,6 +87,7 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
 
   useCreateRequest(() => setCreating(true));
   const [enriching, setEnriching] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const books = useMemo(
     () => notes.filter((n) => n.note_type === "book"),
@@ -124,6 +126,13 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
           </button>
           <button
             className="ml-2 rounded border border-neutral-300 px-3 py-1 text-neutral-600 hover:border-neutral-500"
+            onClick={() => setExporting(true)}
+            title="지금 보이는 목록을 CSV·마크다운 표로 내보냅니다"
+          >
+            ⬇ 내보내기
+          </button>
+          <button
+            className="rounded border border-neutral-300 px-3 py-1 text-neutral-600 hover:border-neutral-500"
             onClick={() => setEnriching(true)}
             title="분야·소개·표지가 비어 있는 책을 자동으로 채웁니다"
           >
@@ -156,6 +165,9 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
       {creating && <BookCreateDialog onClose={() => setCreating(false)} />}
       {searching && <BookSearchDialog onClose={() => setSearching(false)} />}
       {enriching && <EnrichDialog onClose={() => setEnriching(false)} />}
+      {exporting && (
+        <ExportBooksDialog books={books} onClose={() => setExporting(false)} />
+      )}
     </div>
   );
 }

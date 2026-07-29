@@ -18,6 +18,7 @@ import TodoList from "./TodoList";
 import { DAILY_KINDS } from "../lib/callouts";
 import DailyDateNav from "./DailyDateNav";
 import DeleteButton from "./DeleteButton";
+import ExportNoteButton from "./ExportNoteButton";
 import { notifyOtherWindows } from "../lib/windowSync";
 import DailyDigestBar from "./DailyDigestBar";
 import FrontmatterForm from "./FrontmatterForm";
@@ -253,6 +254,7 @@ export default function EditorPane() {
           >
             ⧉
           </button>
+          <ExportNoteButton note={current} />
           <HistoryButton relPath={current.rel_path} />
           <button
             className="rounded bg-neutral-800 px-3 py-1 text-xs text-white hover:bg-neutral-600 disabled:opacity-40"
