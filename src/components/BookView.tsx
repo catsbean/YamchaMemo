@@ -259,7 +259,15 @@ export default function BookView({ note }: { note: NoteContent }) {
               .map((n: NoteSummary) => n.rel_path.split("/").pop()?.replace(/\.md$/, "") ?? n.title)
               .filter(Boolean)
           }
-          onContextMenu={(e, view) => ctx.open(e, editorMenuItems(view, BOOK_KINDS))}
+          onContextMenu={(e, view) =>
+            ctx.open(
+              e,
+              editorMenuItems(view, BOOK_KINDS, {
+                event: e,
+                onNavigate: openByTitle,
+              }),
+            )
+          }
         />
       </div>
       )}

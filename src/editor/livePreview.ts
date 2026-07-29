@@ -211,6 +211,12 @@ function buildDecorations(view: EditorView): DecorationSet {
             }
           }
         }
+        // 위키링크: 색 + 마우스 올렸을 때 음영 (기록 카드의 링크와 같은 계열)
+        if (node.name === "WikiLink") {
+          ranges.push(
+            Decoration.mark({ class: "cm-wikilink" }).range(node.from, node.to),
+          );
+        }
         // 체크박스: 클릭 유도 스타일
         if (node.name === "TaskMarker") {
           ranges.push(
@@ -332,6 +338,20 @@ const livePreviewTheme = EditorView.baseTheme({
     backgroundColor: "rgba(124, 58, 237, 0.08)",
     borderRadius: "4px",
     padding: "0 2px",
+  },
+  // 위키링크 — 기록 카드의 링크(NoteText)와 같은 보라 계열로 맞춘다.
+  // 편집기에서는 그냥 클릭하면 커서가 놓이는 자리라 손가락 커서는 쓰지 않는다
+  // (이동은 Ctrl+클릭 또는 우클릭 메뉴).
+  ".cm-wikilink": {
+    color: "#7c3aed",
+    textDecoration: "underline",
+    textDecorationColor: "#c4b5fd",
+    textUnderlineOffset: "2px",
+    borderRadius: "3px",
+  },
+  ".cm-wikilink:hover": {
+    backgroundColor: "rgba(124, 58, 237, 0.10)",
+    textDecorationColor: "#8b5cf6",
   },
   // 콜아웃 공통
   ".cm-callout": {

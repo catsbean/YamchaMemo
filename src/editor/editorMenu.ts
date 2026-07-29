@@ -5,6 +5,7 @@ import { redo, undo } from "@codemirror/commands";
 import type { EditorView } from "@codemirror/view";
 import type { MenuItem } from "../lib/contextMenu";
 import type { CalloutKind } from "../lib/callouts";
+import { wikiLinkTargetAt } from "./wikilink";
 import {
   clearFormatting,
   insertLink,
@@ -13,6 +14,11 @@ import {
   toggleLinePrefix,
   toggleWrap,
 } from "./format";
+
+/** 메뉴 한 줄에 들어가도록 긴 제목을 줄인다 */
+function ellipsis(s: string, max = 18): string {
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
 
 /** 선택한 줄들을 `> [!종류] 시각` 콜아웃으로 감싼다 (이미 인용이면 접두어를 겹치지 않는다).
  *  첫 줄이 제목(`### 기록 14:32`)이면 제목을 헤더 자리로 올려 되돌리기(일반 텍스트 → 콜아웃)가 깔끔하다. */
@@ -97,10 +103,16 @@ function unwrapCallout(view: EditorView) {
 }
 
 /** 에디터 우클릭 메뉴 구성. `view`는 CodeMirror 인스턴스.
- *  `calloutKinds`를 주면 선택 영역을 그 종류의 콜아웃으로 감싸는 항목이 붙는다. */
+ *  `calloutKinds`를 주면 선택 영역을 그 종류의 콜아웃으로 감싸는 항목이 붙는다.
+ *  `link`를 주면 오른쪽 클릭한 자리가 위키링크일 때 [링크로 이동]이 맨 위에 붙는다
+ *  (Ctrl+클릭을 모르거나 키보드를 쓰기 어려운 경우를 위해). */
 export function editorMenuItems(
   view: EditorView,
   calloutKinds: CalloutKind[] = [],
+  link?: {
+    event: { clientX: number; clientY: number };
+    onNavigate: (target: string) => void;
+  },
 ): MenuItem[] {
   const sel = view.state.selection.main;
   const hasSelection = !sel.empty;
@@ -111,7 +123,27 @@ export function editorMenuItems(
     view.focus();
   };
 
+  // 누른 자리가 위키링크인가 (선택 위치가 아니라 마우스 좌표로 판단한다)
+  let linkTarget: string | null = null;
+  if (link) {
+    const pos = view.posAtCoords({
+      x: link.event.clientX,
+      y: link.event.clientY,
+    });
+    if (pos != null) linkTarget = wikiLinkTargetAt(view, pos);
+  }
+
   return [
+    ...(linkTarget
+      ? ([
+          {
+            label: `🔗 ${ellipsis(linkTarget)}(으)로 이동`,
+            hint: "Ctrl+클릭",
+            onClick: () => link!.onNavigate(linkTarget!),
+          },
+          { separator: true },
+        ] as MenuItem[])
+      : []),
     {
       label: "잘라내기",
       hint: "Ctrl+X",

@@ -46,7 +46,7 @@ export const wikiLinkMarkdown: MarkdownConfig = {
 };
 
 /** 문서 위치가 WikiLink 안이면 타깃 제목을 반환 */
-function wikiLinkTargetAt(view: EditorView, pos: number): string | null {
+export function wikiLinkTargetAt(view: EditorView, pos: number): string | null {
   const tree = syntaxTree(view.state);
   let node = tree.resolveInner(pos, 0);
   while (node.parent && node.name !== "WikiLink") node = node.parent;

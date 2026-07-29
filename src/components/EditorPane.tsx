@@ -355,7 +355,13 @@ export default function EditorPane() {
               goToLine.current = fn;
             }}
             onContextMenu={(e, view) =>
-              ctx.open(e, editorMenuItems(view, isDaily ? DAILY_KINDS : []))
+              ctx.open(
+                e,
+                editorMenuItems(view, isDaily ? DAILY_KINDS : [], {
+                  event: e,
+                  onNavigate: openByTitle,
+                }),
+              )
             }
             getTitles={() =>
               notes
