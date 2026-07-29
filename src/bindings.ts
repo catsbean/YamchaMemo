@@ -91,6 +91,17 @@ async openTodayDaily() : Promise<Result<string, string>> {
 }
 },
 /**
+ * 특정 날짜의 데일리노트 열기 (없으면 생성)
+ */
+async openDaily(date: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("open_daily", { date }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 책 노트 → 연결된 독서기록 찾기/생성
  */
 async readingForBook(bookRelPath: string) : Promise<Result<string, string>> {

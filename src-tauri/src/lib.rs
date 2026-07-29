@@ -20,6 +20,7 @@ pub fn run() {
         commands::create_note,
         commands::delete_note,
         commands::open_today_daily,
+        commands::open_daily,
         commands::reading_for_book,
         commands::append_reading_entry,
         commands::append_daily_entry,

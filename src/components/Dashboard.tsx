@@ -89,7 +89,8 @@ function ListDashboard({ noteType }: { noteType: string }) {
     <div className="flex h-full flex-col overflow-hidden">
       <header className="flex items-center justify-between border-b border-neutral-200 px-6 py-3">
         <h1 className="text-lg font-bold">
-          {schema?.label ?? noteType}{" "}
+          {/* 일지는 오늘 노트가 본 화면이고 이 목록은 지난 것을 찾아보는 자리다 */}
+          {noteType === "daily" ? "지난 일지" : (schema?.label ?? noteType)}{" "}
           <span className="text-sm font-normal text-neutral-400">
             {list.length}개
           </span>

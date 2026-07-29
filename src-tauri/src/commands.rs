@@ -632,6 +632,17 @@ pub fn open_today_daily(state: State<'_, AppState>) -> Result<String, String> {
     })
 }
 
+/// 특정 날짜의 데일리노트 열기 (없으면 생성)
+#[tauri::command]
+#[specta::specta]
+pub fn open_daily(state: State<'_, AppState>, date: String) -> Result<String, String> {
+    with_ctx(&state, |c| {
+        let rel = c.vault.open_daily(&date)?;
+        refresh_note(c, &rel)?;
+        Ok(rel)
+    })
+}
+
 /// 책 노트 → 연결된 독서기록 찾기/생성
 #[tauri::command]
 #[specta::specta]

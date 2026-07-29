@@ -16,6 +16,7 @@ import DailyEntryBar from "./DailyEntryBar";
 import EntryList from "./EntryList";
 import TodoList from "./TodoList";
 import { DAILY_KINDS } from "../lib/callouts";
+import DailyDateNav from "./DailyDateNav";
 import DeleteButton from "./DeleteButton";
 import { notifyOtherWindows } from "../lib/windowSync";
 import DailyDigestBar from "./DailyDigestBar";
@@ -181,7 +182,9 @@ export default function EditorPane() {
               ←
             </button>
           )}
-          {editingTitle !== null ? (
+          {isDaily ? (
+            <DailyDateNav date={fileName ?? ""} />
+          ) : editingTitle !== null ? (
             <input
               autoFocus
               className="min-w-0 flex-1 rounded border border-neutral-300 px-2 py-0.5 text-base font-bold focus:border-neutral-500 focus:outline-none"

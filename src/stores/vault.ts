@@ -114,6 +114,8 @@ interface VaultStore {
   pendingTitleRel: string | null;
   clearPendingTitle(): void;
   openToday(): Promise<void>;
+  /** 특정 날짜의 일지 열기 (없으면 만든다 — 달력에서 고를 때 쓴다) */
+  openDailyDate(date: string): Promise<void>;
   deleteCurrent(): Promise<void>;
   appendEntry(kind: EntryKind, text: string): Promise<void>;
   /** 데일리노트 빠른 입력 (할 일/기록/느낌) */
@@ -201,6 +203,9 @@ export const useVault = create<VaultStore>((set, get) => {
       const store = await settings();
       await store.set("lastNav", t);
       await store.delete("lastNoteRel");
+      // 일지는 "오늘 것을 쓰는 곳"이 기본이다 — 목록 대신 오늘 노트를 연다.
+      // 지난 날짜는 노트 헤더의 날짜 이동기나 옆의 [지난 일지] 목록으로 간다.
+      if (t === "daily") await get().openToday();
     },
     vaultPath: null,
     schemas: [],
@@ -509,6 +514,14 @@ export const useVault = create<VaultStore>((set, get) => {
       });
     },
 
+    async openDailyDate(date) {
+      await guard(async () => {
+        if (get().dirty) await get().saveCurrent();
+        const rel = unwrap(await commands.openDaily(date));
+        await get().refresh();
+        await get().openNote(rel);
+      });
+    },
     async openToday() {
       await guard(async () => {
         const rel = unwrap(await commands.openTodayDaily());
