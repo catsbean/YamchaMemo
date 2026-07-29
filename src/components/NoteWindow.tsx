@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { commands, type DailyKind, type NoteContent } from "../bindings";
+import type { EditorView } from "@codemirror/view";
 import Editor from "../editor/Editor";
+import EditorToolbar from "./EditorToolbar";
 import { editorMenuItems } from "../editor/editorMenu";
 import { useContextMenu, useSuppressNativeContextMenu } from "../lib/contextMenu";
 import { splitBookBody, composeBookBody } from "../lib/book";
@@ -18,6 +20,8 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
   const [body, setBody] = useState("");
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
+  // 서식 툴바가 명령을 실행하려면 CodeMirror 뷰가 필요하다
+  const [editorView, setEditorView] = useState<EditorView | null>(null);
   const ctx = useContextMenu();
   const savingRef = useRef(false);
   // 이벤트 리스너가 매번 재구독되지 않도록 dirty를 ref로도 들고 있는다
@@ -202,8 +206,10 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
         <DailyEntryBar onSubmit={appendDailyEntry} />
       )}
 
+      <EditorToolbar view={editorView} />
       <div className="min-h-0 flex-1">
         <Editor
+          onView={setEditorView}
           value={body}
           onChange={(v) => {
             setBody(v);

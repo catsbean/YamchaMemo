@@ -10,6 +10,7 @@ import { styleOf } from "../lib/callouts";
 import { isImeEnter, useImeInput } from "../lib/ime";
 import { IS_MAC, SHORTCUTS, shortcutText } from "../lib/shortcuts";
 import { dailyKindOptions } from "./DailyEntryBar";
+import HelpSection from "./HelpSection";
 import Modal from "./Modal";
 
 const LAYOUTS: { value: LayoutMode; label: string; desc: string }[] = [
@@ -35,6 +36,7 @@ const TABS = [
   { id: "record", label: "기록" },
   { id: "storage", label: "저장" },
   { id: "etc", label: "연동" },
+  { id: "help", label: "도움말" },
 ] as const;
 
 export default function SettingsModal({ onClose }: { onClose: () => void }) {
@@ -390,6 +392,8 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
         </section>
           </>
         )}
+
+        {tab === "help" && <HelpSection />}
 
         </div>
 

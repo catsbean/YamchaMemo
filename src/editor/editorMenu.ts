@@ -22,7 +22,7 @@ function ellipsis(s: string, max = 18): string {
 
 /** 선택한 줄들을 `> [!종류] 시각` 콜아웃으로 감싼다 (이미 인용이면 접두어를 겹치지 않는다).
  *  첫 줄이 제목(`### 기록 14:32`)이면 제목을 헤더 자리로 올려 되돌리기(일반 텍스트 → 콜아웃)가 깔끔하다. */
-function wrapAsCallout(view: EditorView, label: string) {
+export function wrapAsCallout(view: EditorView, label: string) {
   const sel = view.state.selection.main;
   const doc = view.state.doc;
   const from = doc.lineAt(sel.from).from;
@@ -54,7 +54,7 @@ function wrapAsCallout(view: EditorView, label: string) {
 }
 
 /** 커서가 닿은 콜아웃의 범위와 헤더 정보. 콜아웃 안이 아니면 null. */
-function calloutAtCursor(view: EditorView) {
+export function calloutAtCursor(view: EditorView) {
   const doc = view.state.doc;
   const start = doc.lineAt(view.state.selection.main.from).number;
 
@@ -82,7 +82,7 @@ function calloutAtCursor(view: EditorView) {
 }
 
 /** 콜아웃을 `### 종류 시각` 제목 + 일반 텍스트로 푼다 */
-function unwrapCallout(view: EditorView) {
+export function unwrapCallout(view: EditorView) {
   const found = calloutAtCursor(view);
   if (!found) return;
   const doc = view.state.doc;

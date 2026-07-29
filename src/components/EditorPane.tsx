@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { commands } from "../bindings";
+import type { EditorView } from "@codemirror/view";
 import Editor from "../editor/Editor";
+import EditorToolbar from "./EditorToolbar";
 import { editorMenuItems } from "../editor/editorMenu";
 import { useContextMenu } from "../lib/contextMenu";
 import { isImeEnter } from "../lib/ime";
@@ -58,6 +60,8 @@ export default function EditorPane() {
   const isDaily = current?.note_type === "daily";
   // 일지는 기본이 보기 모드(기록·할 일). [원문 편집]을 눌러야 생 마크다운이 나온다
   const [rawEdit, setRawEdit] = useState(false);
+  // 서식 툴바가 명령을 실행하려면 CodeMirror 뷰가 필요하다
+  const [editorView, setEditorView] = useState<EditorView | null>(null);
 
   /** 입력 바 제출 — 기본 종류는 enum 경로, 사용자 정의는 임의 라벨 콜아웃으로 */
   async function submitDaily(kind: string, text: string) {
@@ -345,8 +349,11 @@ export default function EditorPane() {
 
       {/* 원문 편집 (일지가 아니면 항상 이 화면) */}
       {(!isDaily || rawEdit) && (
+        <>
+        <EditorToolbar view={editorView} calloutKinds={isDaily ? DAILY_KINDS : []} />
         <div className="min-h-0 flex-1">
           <Editor
+            onView={setEditorView}
             key={current.rel_path}
             value={current.body}
             onChange={setBody}
@@ -373,6 +380,7 @@ export default function EditorPane() {
             }
           />
         </div>
+        </>
       )}
 
       {current.note_type === "daily" && (

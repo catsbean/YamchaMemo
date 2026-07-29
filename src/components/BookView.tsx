@@ -7,7 +7,9 @@ import {
   coverSrc,
   fmStr,
 } from "../lib/note";
+import type { EditorView } from "@codemirror/view";
 import Editor from "../editor/Editor";
+import EditorToolbar from "./EditorToolbar";
 import { editorMenuItems } from "../editor/editorMenu";
 import { useContextMenu } from "../lib/contextMenu";
 import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
@@ -41,6 +43,8 @@ export default function BookView({ note }: { note: NoteContent }) {
   const [editing, setEditing] = useState(false);
   // 기본은 기록 카드 보기 — [원문 편집]을 눌러야 생 마크다운이 나온다
   const [rawEdit, setRawEdit] = useState(false);
+  // 서식 툴바가 명령을 실행하려면 CodeMirror 뷰가 필요하다
+  const [editorView, setEditorView] = useState<EditorView | null>(null);
 
   useShortcut("rawEdit", () => toggleRawEdit());
 
@@ -248,8 +252,11 @@ export default function BookView({ note }: { note: NoteContent }) {
 
       {/* 기록 원문 편집 */}
       {rawEdit && (
+      <>
+      <EditorToolbar view={editorView} calloutKinds={BOOK_KINDS} />
       <div className="min-h-0 flex-1">
         <Editor
+          onView={setEditorView}
           key={note.rel_path}
           value={records}
           onChange={onRecordsChange}
@@ -270,6 +277,7 @@ export default function BookView({ note }: { note: NoteContent }) {
           }
         />
       </div>
+      </>
       )}
 
       <BacklinksPanel relPath={note.rel_path} />

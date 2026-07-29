@@ -56,6 +56,8 @@ interface Props {
   onReady?: (goToLine: (line: number) => void) => void;
   /** 우클릭 — 서식 메뉴를 띄우기 위해 뷰와 위치를 넘긴다 */
   onContextMenu?: (e: MouseEvent, view: EditorView) => void;
+  /** 만들어진 뷰를 밖으로 넘긴다 (서식 툴바가 명령을 실행할 때 쓴다) */
+  onView?: (view: EditorView) => void;
   /** 읽기 전용 — 타이핑은 막고 체크박스 토글 같은 프로그램적 변경은 그대로 둔다 */
   readOnly?: boolean;
 }
@@ -102,6 +104,7 @@ export default function Editor({
   getTitles,
   onReady,
   onContextMenu,
+  onView,
   readOnly = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -118,6 +121,8 @@ export default function Editor({
   getTitlesRef.current = getTitles;
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
+  const onViewRef = useRef(onView);
+  onViewRef.current = onView;
   const onContextMenuRef = useRef(onContextMenu);
   onContextMenuRef.current = onContextMenu;
 
@@ -175,6 +180,7 @@ export default function Editor({
     });
     const view = new EditorView({ state, parent: containerRef.current });
     viewRef.current = view;
+    onViewRef.current?.(view);
     onReadyRef.current?.((line: number) => {
       const l = view.state.doc.line(Math.min(Math.max(line, 1), view.state.doc.lines));
       view.dispatch({
