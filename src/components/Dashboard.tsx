@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { NoteSummary } from "../bindings";
 import { useVault } from "../stores/vault";
-import { fmStr } from "../lib/note";
+import { fileSuffix, fmStr } from "../lib/note";
 import AuditDashboard from "./AuditDashboard";
 import Bookshelf from "./Bookshelf";
 import ContextMenu from "./ContextMenu";
@@ -169,6 +169,21 @@ function ListDashboard({ noteType }: { noteType: string }) {
   );
 }
 
+/** 목록용 제목 — 같은 제목이 여럿일 때 파일명에 붙은 꼬리표를 흐리게 보여 준다 */
+function Title({ note, className }: { note: NoteSummary; className: string }) {
+  const suffix = fileSuffix(note);
+  return (
+    <span className={className}>
+      {note.title}
+      {suffix && (
+        <span className="ml-0.5 text-xs font-normal text-neutral-400">
+          {suffix.trim()}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function Row({ note, noteType }: { note: NoteSummary; noteType: string }) {
   const date = (
     <span className="w-24 shrink-0 text-xs text-neutral-400">{note.date}</span>
@@ -206,7 +221,7 @@ function Row({ note, noteType }: { note: NoteSummary; noteType: string }) {
       return (
         <>
           {date}
-          <span className="truncate text-sm">{note.title}</span>
+          <Title note={note} className="truncate text-sm" />
           {host && (
             <span className="shrink-0 rounded bg-sky-50 px-1.5 py-0.5 text-[11px] text-sky-600">
               {host}
@@ -219,7 +234,7 @@ function Row({ note, noteType }: { note: NoteSummary; noteType: string }) {
     case "daily":
       return (
         <>
-          <span className="text-sm font-medium">{note.title}</span>
+          <Title note={note} className="text-sm font-medium" />
           {tags}
         </>
       );
@@ -227,7 +242,7 @@ function Row({ note, noteType }: { note: NoteSummary; noteType: string }) {
       return (
         <>
           {date}
-          <span className="truncate text-sm">{note.title}</span>
+          <Title note={note} className="truncate text-sm" />
           {tags}
         </>
       );

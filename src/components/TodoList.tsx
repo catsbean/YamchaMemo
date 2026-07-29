@@ -3,6 +3,7 @@ import { commands, type NoteContent, type NoteTodo } from "../bindings";
 import { openTodoWindow } from "../lib/trashWindow";
 import type { CalloutKind } from "../lib/callouts";
 import { useImeInput } from "../lib/ime";
+import NoteText from "./NoteText";
 
 /** 일지 할 일 보기 — 체크·수정·삭제.
  *  화면에는 미완료를 위로 올리지만, 조작은 백엔드가 준 index(문서 순서)로 한다. */
@@ -206,13 +207,12 @@ export default function TodoList({
                   />
                   </>
                 ) : (
-                  <span
+                  <NoteText
+                    text={t.text}
                     className={`min-w-0 flex-1 text-sm ${
                       t.done ? "text-neutral-400 line-through" : "text-neutral-800"
                     }`}
-                  >
-                    {t.text}
-                  </span>
+                  />
                 )}
 
                 <span className="flex shrink-0 items-center gap-1">

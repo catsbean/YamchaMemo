@@ -8,6 +8,7 @@ import {
 } from "../lib/callouts";
 import { useVault } from "../stores/vault";
 import { useImeInput } from "../lib/ime";
+import NoteText from "./NoteText";
 
 /** 콜아웃 종류별 색 — 입력 바·본문 렌더와 같은 계열 */
 const KIND_STYLE: Record<string, string> = {
@@ -175,9 +176,10 @@ export default function EntryList({
                   원문 편집
                 </button>
               </div>
-              <p className="whitespace-pre-wrap text-sm text-neutral-700">
-                {b.text}
-              </p>
+              <NoteText
+                text={b.text}
+                className="whitespace-pre-wrap text-sm text-neutral-700"
+              />
             </div>
           );
         }
@@ -295,9 +297,10 @@ export default function EntryList({
                 />
               </>
             ) : (
-              <p className="whitespace-pre-wrap text-sm text-neutral-800">
-                {b.text}
-              </p>
+              <NoteText
+                text={b.text}
+                className="whitespace-pre-wrap text-sm text-neutral-800"
+              />
             )}
           </div>
         );

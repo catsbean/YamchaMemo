@@ -92,7 +92,7 @@ export default function BacklinksPanel({ relPath }: { relPath: string }) {
                       key={i}
                       className="mt-1 border-l-2 border-neutral-200 pl-2 text-[11px] leading-relaxed text-neutral-500"
                     >
-                      {c}
+                      {plainLinks(c)}
                     </p>
                   ))}
                 </li>
@@ -102,6 +102,15 @@ export default function BacklinksPanel({ relPath }: { relPath: string }) {
         </>
       )}
     </div>
+  );
+}
+
+/** 문맥 줄에서 링크 문법을 걷어낸다 — `[[책#장|그 책]]` → `그 책`.
+ *  여기서는 읽히는 게 목적이라 대괄호가 글자로 남으면 눈에 걸린다. */
+function plainLinks(text: string): string {
+  return text.replace(
+    /\[\[([^[\]|#]+)(?:#[^[\]|]*)?(?:\|([^[\]]*))?\]\]/g,
+    (_, target: string, alias?: string) => (alias ?? target).trim(),
   );
 }
 

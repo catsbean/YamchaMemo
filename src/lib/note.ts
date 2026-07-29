@@ -27,6 +27,18 @@ export function fmStr(source: unknown, key: string): string {
   return "";
 }
 
+/** 제목이 같은 노트를 구별하려고 파일명에만 붙는 꼬리표를 돌려준다.
+ *
+ *  제목이 "제목"인 노트가 둘이면 파일은 `제목.md` · `제목 (2).md`가 되는데,
+ *  목록은 frontmatter의 제목만 보여 줘서 둘 다 "제목"으로 보인다.
+ *  그 차이(" (2)")를 뽑아 목록에서 흐리게 덧붙이려고 쓴다.
+ *  제목과 파일명이 아예 다르면(직접 지은 제목 등) 굳이 붙이지 않는다. */
+export function fileSuffix(note: { rel_path: string; title: string }): string {
+  const stem = note.rel_path.split("/").pop()?.replace(/\.md$/, "") ?? "";
+  if (!stem || stem === note.title) return "";
+  return stem.startsWith(note.title) ? stem.slice(note.title.length) : "";
+}
+
 /** 표지 cover 값(vault 상대경로 또는 http URL)을 <img src>로 변환 */
 export function coverSrc(vaultPath: string | null, cover: string): string {
   if (!cover) return "";
