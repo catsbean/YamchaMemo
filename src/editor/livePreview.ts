@@ -211,6 +211,17 @@ function buildDecorations(view: EditorView): DecorationSet {
             }
           }
         }
+        // 목록: 기호(-, 1.)를 흐리게 하고 줄에 내어쓰기를 준다.
+        // 원문을 바꾸지 않으므로 다른 마크다운 앱에서 열어도 그대로 목록이다.
+        if (node.name === "ListMark") {
+          ranges.push(
+            Decoration.mark({ class: "cm-lp-listmark" }).range(node.from, node.to),
+          );
+          const line = view.state.doc.lineAt(node.from);
+          ranges.push(
+            Decoration.line({ class: "cm-lp-listline" }).range(line.from),
+          );
+        }
         // 위키링크: 색 + 마우스 올렸을 때 음영 (기록 카드의 링크와 같은 계열)
         if (node.name === "WikiLink") {
           ranges.push(
@@ -339,6 +350,9 @@ const livePreviewTheme = EditorView.baseTheme({
     borderRadius: "4px",
     padding: "0 2px",
   },
+  // 목록 — 기호는 흐리게, 줄바꿈된 글은 글자 아래로 맞춰 목록처럼 읽히게
+  ".cm-lp-listmark": { color: "#a3a3a3" },
+  ".cm-lp-listline": { textIndent: "-1.3em", paddingLeft: "1.3em" },
   // 위키링크 — 기록 카드의 링크(NoteText)와 같은 보라 계열로 맞춘다.
   // 편집기에서는 그냥 클릭하면 커서가 놓이는 자리라 손가락 커서는 쓰지 않는다
   // (이동은 Ctrl+클릭 또는 우클릭 메뉴).
