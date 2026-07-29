@@ -37,6 +37,7 @@ pub fn run() {
         commands::delete_entry,
         commands::search,
         commands::get_backlinks,
+        commands::get_backlinks_detailed,
         commands::get_tags,
         commands::notes_by_tag,
         commands::reindex,

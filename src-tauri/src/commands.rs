@@ -6,7 +6,8 @@ use base64::Engine as _;
 use tauri::{Emitter, Manager, State};
 use yamcha_core::schema::{builtin_defs, EntryKind};
 use yamcha_core::{
-    FieldDef, Indexer, NoteContent, NoteRef, NoteSummary, SearchEngine, SearchHit, TagCount,
+    Backlink, FieldDef, Indexer, NoteContent, NoteRef, NoteSummary, SearchEngine, SearchHit,
+    TagCount,
     TypeDef, Vault,
 };
 
@@ -949,6 +950,19 @@ pub fn get_backlinks(
     with_ctx(&state, |c| {
         let vault = &c.vault;
         c.indexer.backlinks(vault, &rel_path)
+    })
+}
+
+/// 백링크 + 문맥 (링크로 이어진 것과 제목만 언급한 것)
+#[tauri::command]
+#[specta::specta]
+pub fn get_backlinks_detailed(
+    state: State<'_, AppState>,
+    rel_path: String,
+) -> Result<Vec<Backlink>, String> {
+    with_ctx(&state, |c| {
+        let vault = &c.vault;
+        c.indexer.backlinks_detailed(vault, &rel_path)
     })
 }
 

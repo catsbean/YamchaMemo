@@ -8,6 +8,7 @@ import ContextMenu from "./ContextMenu";
 import { noteItemHandlers, useContextMenu } from "../lib/contextMenu";
 import { openNoteWindow } from "../lib/trashWindow";
 import NewNoteDialog from "./NewNoteDialog";
+import { useCreateRequest } from "../lib/shortcuts";
 import HomeDashboard from "./HomeDashboard";
 import ReadingDashboard from "./ReadingDashboard";
 import TagBrowser from "./TagBrowser";
@@ -54,6 +55,8 @@ function ListDashboard({ noteType }: { noteType: string }) {
     useVault();
   const [creating, setCreating] = useState(false);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+
+  useCreateRequest(() => setCreating(true));
   const ctx = useContextMenu();
   const schema = schemas.find((s) => s.id === noteType);
 

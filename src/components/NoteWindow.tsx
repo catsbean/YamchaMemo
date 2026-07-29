@@ -6,6 +6,7 @@ import Editor from "../editor/Editor";
 import { editorMenuItems } from "../editor/editorMenu";
 import { useContextMenu, useSuppressNativeContextMenu } from "../lib/contextMenu";
 import { splitBookBody, composeBookBody } from "../lib/book";
+import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
 import { notifyOtherWindows } from "../lib/windowSync";
 import ContextMenu from "./ContextMenu";
 import DailyEntryBar from "./DailyEntryBar";
@@ -124,17 +125,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
     return () => clearTimeout(t);
   }, [dirty, body, save]);
 
-  // Ctrl+S 저장
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault();
-        save();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [save]);
+  useShortcut("save", save);
 
   // 창을 닫을 때 저장하지 않은 내용을 흘리지 않는다
   useEffect(() => {
@@ -194,7 +185,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
             className="rounded bg-neutral-800 px-3 py-1 text-xs text-white hover:bg-neutral-600 disabled:opacity-40"
             disabled={!dirty}
             onClick={save}
-            title="저장 (Ctrl+S)"
+            title={`저장 (${shortcutTextOf("save")})`}
           >
             저장
           </button>

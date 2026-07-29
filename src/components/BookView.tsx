@@ -10,6 +10,7 @@ import {
 import Editor from "../editor/Editor";
 import { editorMenuItems } from "../editor/editorMenu";
 import { useContextMenu } from "../lib/contextMenu";
+import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
 import ContextMenu from "./ContextMenu";
 import BacklinksPanel from "./BacklinksPanel";
 import BookInfoModal from "./BookInfoModal";
@@ -40,6 +41,8 @@ export default function BookView({ note }: { note: NoteContent }) {
   const [editing, setEditing] = useState(false);
   // 기본은 기록 카드 보기 — [원문 편집]을 눌러야 생 마크다운이 나온다
   const [rawEdit, setRawEdit] = useState(false);
+
+  useShortcut("rawEdit", () => toggleRawEdit());
 
   async function toggleRawEdit() {
     if (rawEdit && dirty) await saveCurrent();
@@ -128,7 +131,7 @@ export default function BookView({ note }: { note: NoteContent }) {
             className="rounded bg-neutral-800 px-3 py-1 text-xs text-white hover:bg-neutral-600 disabled:opacity-40"
             disabled={!dirty}
             onClick={saveCurrent}
-            title="저장 (Ctrl+S)"
+            title={`저장 (${shortcutTextOf("save")})`}
           >
             저장
           </button>

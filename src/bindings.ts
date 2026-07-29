@@ -282,6 +282,17 @@ async getBacklinks(relPath: string) : Promise<Result<NoteRef[], string>> {
 }
 },
 /**
+ * 백링크 + 문맥 (링크로 이어진 것과 제목만 언급한 것)
+ */
+async getBacklinksDetailed(relPath: string) : Promise<Result<Backlink[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("get_backlinks_detailed", { relPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 전체 태그와 사용 횟수
  */
 async getTags() : Promise<Result<TagCount[], string>> {
@@ -753,6 +764,18 @@ async mirrorResolve(target: string, relPath: string, pull: boolean) : Promise<Re
 
 /** user-defined types **/
 
+/**
+ * 백링크 한 건 — 어떤 노트가, 어느 대목에서 가리키는지.
+ */
+export type Backlink = ({ rel_path: string; note_type: string; title: string; date: string }) & { 
+/**
+ * 링크가 실제로 쓰인 줄들 (콜아웃 `>` 표시는 떼고 다듬은 것)
+ */
+contexts: string[]; 
+/**
+ * `[[링크]]` 없이 제목만 언급한 경우 (아직 잇지 않은 언급)
+ */
+unlinked: boolean }
 /**
  * 수동 입력 화면에서 제안할 책 메타 (카카오 검색 + 교보 소개)
  */

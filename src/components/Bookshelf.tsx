@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import type { NoteSummary } from "../bindings";
 import { isImeEnter } from "../lib/ime";
+import { useCreateRequest } from "../lib/shortcuts";
 import { useVault } from "../stores/vault";
 import {
   BOOK_STATUS_LABELS as STATUS_LABELS,
@@ -82,6 +83,8 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
   const [view, setView] = useState<ViewMode>("grid");
   const [creating, setCreating] = useState(false);
   const [searching, setSearching] = useState(false);
+
+  useCreateRequest(() => setCreating(true));
   const [enriching, setEnriching] = useState(false);
 
   const books = useMemo(

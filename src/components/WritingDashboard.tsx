@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useCreateRequest } from "../lib/shortcuts";
 import type { NoteSummary } from "../bindings";
 import { useVault } from "../stores/vault";
 import { fmStr } from "../lib/note";
@@ -23,6 +24,8 @@ const STATUS_COLORS: Record<string, string> = {
 export default function WritingDashboard() {
   const { notes, openNote } = useVault();
   const [creating, setCreating] = useState(false);
+
+  useCreateRequest(() => setCreating(true));
   const [groupMode, setGroupMode] = useState<"status" | "category">("status");
 
   const pieces = useMemo(

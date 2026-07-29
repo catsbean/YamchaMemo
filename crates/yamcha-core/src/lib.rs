@@ -20,7 +20,7 @@ pub use audit::{IssueKind, NoteIssue};
 pub use enrich::suggest_genre;
 pub use error::CoreError;
 pub use history::{HistoryItem, HistoryPolicy};
-pub use indexer::{Indexer, NoteRef, TagCount};
+pub use indexer::{Backlink, Indexer, NoteRef, TagCount};
 pub use schema::{Builtin, EntryKind, FieldDef, FieldKind, TypeDef};
 pub use search::{SearchEngine, SearchFilter, SearchHit};
 pub use vault::{CalloutDef, NoteContent, NoteSummary, ParsedNote, TrashItem, Vault};

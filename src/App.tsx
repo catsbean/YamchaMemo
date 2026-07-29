@@ -3,9 +3,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import Dashboard from "./components/Dashboard";
 import EditorPane from "./components/EditorPane";
 import SearchModal from "./components/SearchModal";
+import SettingsModal from "./components/SettingsModal";
 import Sidebar from "./components/Sidebar";
 import { commands, type StorageDir } from "./bindings";
 import { useSuppressNativeContextMenu } from "./lib/contextMenu";
+import { useShortcut } from "./lib/shortcuts";
 import { useVault } from "./stores/vault";
 
 export default function App() {
@@ -23,7 +25,13 @@ export default function App() {
   } = useVault();
 
   const [searchOpen, setSearchOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [storageDirs, setStorageDirs] = useState<StorageDir[]>([]);
+
+  useShortcut("search", () => setSearchOpen((v) => !v));
+  useShortcut("settings", () => setSettingsOpen(true));
+  // 만들기 창은 대시보드가 들고 있다 — 편집기를 닫고 신호만 보낸다
+  useShortcut("newNote", () => useVault.getState().requestCreate());
 
   // 웹뷰 기본 우클릭 메뉴(새로고침·검사 등)를 막는다 — 앱에 맞는 메뉴만 띄운다
   useSuppressNativeContextMenu();
@@ -66,18 +74,6 @@ export default function App() {
       disposed = true;
       unlisten?.();
     };
-  }, []);
-
-  // Ctrl+K 검색
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
-        e.preventDefault();
-        setSearchOpen((v) => !v);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   if (!initialized) {
@@ -125,7 +121,10 @@ export default function App() {
 
   return (
     <div className="flex h-full bg-white text-neutral-900">
-      <Sidebar onSearch={() => setSearchOpen(true)} />
+      <Sidebar
+        onSearch={() => setSearchOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
 
       {layout === "replace" &&
         (editorOpen ? (
@@ -169,6 +168,7 @@ export default function App() {
       )}
 
       {searchOpen && <SearchModal onClose={() => setSearchOpen(false)} />}
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {error && (
         <div className="fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-lg bg-rose-600 px-4 py-2 text-sm text-white shadow-lg">
           <span>{error}</span>

@@ -5,6 +5,7 @@ import Editor from "../editor/Editor";
 import { editorMenuItems } from "../editor/editorMenu";
 import { useContextMenu } from "../lib/contextMenu";
 import { isImeEnter } from "../lib/ime";
+import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
 import { openNoteWindow } from "../lib/trashWindow";
 import ContextMenu from "./ContextMenu";
 import BacklinksPanel from "./BacklinksPanel";
@@ -51,6 +52,8 @@ export default function EditorPane() {
   } = useVault();
   const [editingTitle, setEditingTitle] = useState<string | null>(null);
   const goToLine = useRef<((line: number) => void) | null>(null);
+  // 제목 변경 단축키는 훅이라 조기 반환보다 위에 있어야 한다 — 값은 ref로 받는다
+  const displayTitleRef = useRef<string | null>(null);
   const ctx = useContextMenu();
   const isDaily = current?.note_type === "daily";
   // 일지는 기본이 보기 모드(기록·할 일). [원문 편집]을 눌러야 생 마크다운이 나온다
@@ -89,17 +92,15 @@ export default function EditorPane() {
     }
   }, [pendingTitleRel, current?.rel_path]);
 
-  // Ctrl+S 저장
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault();
-        saveCurrent();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [saveCurrent]);
+  // 편집기 단축키 — 노트가 열려 있을 때만 (책은 BookView가 따로 그린다)
+  useShortcut("save", saveCurrent, !!current);
+  useShortcut("closeNote", backToList, !!current);
+  useShortcut("rawEdit", toggleRawEdit, !!current && isDaily);
+  useShortcut(
+    "rename",
+    () => setEditingTitle(displayTitleRef.current ?? ""),
+    !!current && current?.note_type !== "daily",
+  );
 
   // 자동 저장: 마지막 수정 후 3초 유휴 시 (외부 변경 감지 시엔 덮어쓰기 방지)
   useEffect(() => {
@@ -128,6 +129,7 @@ export default function EditorPane() {
   const canRename = current.note_type !== "daily";
   const displayTitle =
     typeof fm.title === "string" && fm.title.trim() ? fm.title : fileName;
+  displayTitleRef.current = displayTitle ?? null;
 
   async function commitRename() {
     const t = editingTitle?.trim();
@@ -249,7 +251,7 @@ export default function EditorPane() {
             className="rounded bg-neutral-800 px-3 py-1 text-xs text-white hover:bg-neutral-600 disabled:opacity-40"
             disabled={!dirty}
             onClick={saveCurrent}
-            title="저장 (Ctrl+S)"
+            title={`저장 (${shortcutTextOf("save")})`}
           >
             저장
           </button>

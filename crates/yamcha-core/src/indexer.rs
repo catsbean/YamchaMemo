@@ -24,6 +24,65 @@ pub struct TagCount {
     pub count: u32,
 }
 
+/// 백링크 한 건 — 어떤 노트가, 어느 대목에서 가리키는지.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct Backlink {
+    #[serde(flatten)]
+    pub note: NoteRef,
+    /// 링크가 실제로 쓰인 줄들 (콜아웃 `>` 표시는 떼고 다듬은 것)
+    pub contexts: Vec<String>,
+    /// `[[링크]]` 없이 제목만 언급한 경우 (아직 잇지 않은 언급)
+    pub unlinked: bool,
+}
+
+/// 본문에서 `needle`이 들어간 줄을 찾아 사람이 읽기 좋게 다듬는다.
+/// 링크 문법·콜아웃 표시·머리글 기호를 걷어내고, 너무 길면 앞뒤를 자른다.
+fn context_lines(body: &str, needles: &[&str], max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in body.lines() {
+        if !needles.iter().any(|n| !n.is_empty() && raw.contains(*n)) {
+            continue;
+        }
+        let mut line = raw.trim();
+        // 콜아웃·인용·목록·체크박스 머리 기호 제거
+        loop {
+            let before = line;
+            line = line
+                .trim_start_matches('>')
+                .trim_start_matches('#')
+                .trim_start_matches('-')
+                .trim_start_matches('*')
+                .trim_start();
+            for p in ["[ ]", "[x]", "[X]"] {
+                line = line.trim_start_matches(p).trim_start();
+            }
+            if line == before {
+                break;
+            }
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // 콜아웃 머리줄(`[!기록] 09:30`)만 있는 줄은 문맥이 못 된다
+        if line.starts_with("[!") && line.ends_with(']') {
+            continue;
+        }
+        let text: String = if line.chars().count() > 160 {
+            line.chars().take(160).collect::<String>() + "…"
+        } else {
+            line.to_string()
+        };
+        if !out.contains(&text) {
+            out.push(text);
+        }
+        if out.len() >= max {
+            break;
+        }
+    }
+    out
+}
+
 pub struct Indexer {
     conn: Connection,
 }
@@ -129,6 +188,71 @@ impl Indexer {
         collect_refs(rows)
     }
 
+    /// 백링크 + 문맥. 링크로 이어진 노트가 먼저, 제목만 언급한 노트가 그 뒤.
+    ///
+    /// 언급(unlinked) 후보는 인덱스에 있는 노트를 훑어 제목 문자열을 찾는다.
+    /// 제목이 너무 짧으면(1글자) 아무 데나 걸리므로 건너뛴다.
+    pub fn backlinks_detailed(
+        &self,
+        vault: &Vault,
+        rel_path: &str,
+    ) -> Result<Vec<Backlink>, CoreError> {
+        let parsed = vault.parse_full(rel_path)?;
+        let title = parsed.title.clone();
+        let stem = parsed.stem.clone();
+        let linked = self.backlinks(vault, rel_path)?;
+        let linked_paths: Vec<String> = linked.iter().map(|n| n.rel_path.clone()).collect();
+
+        // 링크 문법 그대로 찾는다 — `[[제목]]`, `[[제목|별칭]]`, `[[제목#섹션]]`
+        let link_needles = [format!("[[{title}"), format!("[[{stem}")];
+        let needles: Vec<&str> = link_needles.iter().map(|s| s.as_str()).collect();
+
+        let mut out: Vec<Backlink> = Vec::new();
+        for note in linked {
+            let contexts = vault
+                .parse_full(&note.rel_path)
+                .map(|p| context_lines(&p.body, &needles, 3))
+                .unwrap_or_default();
+            out.push(Backlink {
+                note,
+                contexts,
+                unlinked: false,
+            });
+        }
+
+        // 아직 잇지 않은 언급
+        if title.chars().count() >= 2 {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT path, type, title, date FROM notes ORDER BY date DESC")?;
+            let rows = stmt.query_map([], Self::note_ref_row)?;
+            let title_needle = [title.as_str()];
+            for r in rows {
+                let n = r?;
+                if n.rel_path == rel_path || linked_paths.contains(&n.rel_path) {
+                    continue;
+                }
+                let Ok(p) = vault.parse_full(&n.rel_path) else {
+                    continue;
+                };
+                // 링크로 이미 이어져 있으면 언급이 아니다
+                if needles.iter().any(|nd| p.body.contains(nd)) {
+                    continue;
+                }
+                let contexts = context_lines(&p.body, &title_needle, 2);
+                if contexts.is_empty() {
+                    continue;
+                }
+                out.push(Backlink {
+                    note: n,
+                    contexts,
+                    unlinked: true,
+                });
+            }
+        }
+        Ok(out)
+    }
+
     pub fn all_tags(&self) -> Result<Vec<TagCount>, CoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT tag, COUNT(*) FROM tags GROUP BY tag ORDER BY COUNT(*) DESC, tag",
@@ -209,6 +333,46 @@ mod tests {
         let paths: Vec<_> = bl.iter().map(|r| r.rel_path.as_str()).collect();
         assert!(paths.contains(&free.as_str()));
         assert!(paths.contains(&daily.as_str()));
+    }
+
+    #[test]
+    fn backlinks_detailed_gives_context_and_unlinked_mentions() {
+        let (_d, v, mut idx) = setup();
+        let book = v.create_note("book", "클린 코드", json!({})).unwrap();
+        // ① 링크로 이어진 노트 — 링크가 쓰인 줄이 문맥으로 나와야 한다
+        let linked = v.create_note("free", "감상", json!({})).unwrap();
+        v.save_note(
+            &linked,
+            json!({}),
+            "## 기록\n> [!기록] 09:30\n> 오늘 [[클린 코드]]를 읽었다\n\n딴 줄",
+        )
+        .unwrap();
+        // ② 제목만 언급한 노트 — 링크가 없다
+        let mention = v.create_note("free", "잡담", json!({})).unwrap();
+        v.save_note(&mention, json!({}), "클린 코드 이야기를 들었다")
+            .unwrap();
+        // ③ 아무 상관 없는 노트
+        let other = v.create_note("free", "딴것", json!({})).unwrap();
+        v.save_note(&other, json!({}), "관계 없는 내용").unwrap();
+
+        for rel in [&book, &linked, &mention, &other] {
+            idx.upsert(&v.parse_full(rel).unwrap()).unwrap();
+        }
+
+        let bl = idx.backlinks_detailed(&v, &book).unwrap();
+
+        let l = bl.iter().find(|b| b.note.rel_path == linked).unwrap();
+        assert!(!l.unlinked);
+        // 콜아웃 표시(`>`)는 떼고 링크가 쓰인 줄만 남는다
+        assert_eq!(l.contexts, vec!["오늘 [[클린 코드]]를 읽었다"]);
+
+        let m = bl.iter().find(|b| b.note.rel_path == mention).unwrap();
+        assert!(m.unlinked);
+        assert_eq!(m.contexts, vec!["클린 코드 이야기를 들었다"]);
+
+        assert!(!bl.iter().any(|b| b.note.rel_path == other));
+        // 자기 자신은 들어가지 않는다
+        assert!(!bl.iter().any(|b| b.note.rel_path == book));
     }
 
     #[test]

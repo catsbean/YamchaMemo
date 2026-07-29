@@ -68,6 +68,14 @@ interface VaultStore {
    *  여기 없는 종류(나중에 만든 것)는 뒤에 붙는다. */
   dailyKindOrder: string[];
   setDailyKindOrder(order: string[]): Promise<void>;
+  /** 꺼 둔 단축키 id 목록 (기본은 전부 켬) */
+  shortcutsOff: string[];
+  toggleShortcut(id: string): Promise<void>;
+  /** "새 노트" 요청 신호 — 올라갈 때마다 지금 보이는 대시보드가 만들기 창을 연다.
+   *  단축키는 편집기가 열려 있어도 눌리는데 만들기 창은 대시보드가 들고 있어서,
+   *  편집기를 닫고 신호만 올린 뒤 대시보드가 받도록 한다. */
+  createTick: number;
+  requestCreate(): void;
   /** vault에 저장된 사용자 정의 콜아웃 */
   callouts: CalloutDef[];
   refreshCallouts(): Promise<void>;
@@ -238,6 +246,20 @@ export const useVault = create<VaultStore>((set, get) => {
       const store = await settings();
       await store.set("dailyKindOrder", order);
     },
+    createTick: 0,
+    requestCreate() {
+      set({ current: null, createTick: get().createTick + 1 });
+    },
+    shortcutsOff: [],
+    async toggleShortcut(id) {
+      const off = get().shortcutsOff;
+      const next = off.includes(id)
+        ? off.filter((x) => x !== id)
+        : [...off, id];
+      set({ shortcutsOff: next });
+      const store = await settings();
+      await store.set("shortcutsOff", next);
+    },
     trashRetentionDays: 7,
     async setTrashRetention(days) {
       set({ trashRetentionDays: days });
@@ -297,7 +319,9 @@ export const useVault = create<VaultStore>((set, get) => {
         const dailyKindOrder =
           (await store.get<string[]>("dailyKindOrder")) ??
           DEFAULT_DAILY_KIND_ORDER;
+        const shortcutsOff = (await store.get<string[]>("shortcutsOff")) ?? [];
         set({
+          shortcutsOff,
           deleteConfirm,
           bookPickerView,
           trashRetentionDays,

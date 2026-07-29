@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useVault } from "../stores/vault";
 import { openTrashWindow } from "../lib/trashWindow";
+import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
 import CustomTypeDialog from "./CustomTypeDialog";
-import SettingsModal from "./SettingsModal";
 
 const BUILTIN_ICONS: Record<string, string> = {
   book: "📚",
@@ -14,11 +14,16 @@ const BUILTIN_ICONS: Record<string, string> = {
 };
 
 /** 내비게이션 메뉴 — 내장 분류 / 구분선 / 사용자 추가 분류 / 설정 */
-export default function Sidebar({ onSearch }: { onSearch: () => void }) {
+export default function Sidebar({
+  onSearch,
+  onOpenSettings,
+}: {
+  onSearch: () => void;
+  onOpenSettings: () => void;
+}) {
   const { vaultPath, schemas, notes, nav, current, issues, setNav, openToday } =
     useVault();
   const [addingType, setAddingType] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const counts = new Map<string, number>();
   for (const n of notes) {
@@ -33,6 +38,25 @@ export default function Sidebar({ onSearch }: { onSearch: () => void }) {
 
   const builtins = schemas.filter((s) => s.builtin);
   const customs = schemas.filter((s) => !s.builtin);
+
+  // 메뉴 이동 단축키(1~9)가 가리킬 순서 — 화면에 그려지는 차례와 같아야 한다
+  const navIds = useMemo(() => {
+    const ids = ["home"];
+    for (const s of schemas.filter((x) => x.builtin)) {
+      ids.push(s.id);
+      if (s.id === "book") ids.push("reading");
+    }
+    ids.push("tags");
+    for (const s of schemas.filter((x) => !x.builtin)) ids.push(s.id);
+    return ids;
+  }, [schemas]);
+
+  useShortcut("today", openToday);
+  useShortcut("nav", (key) => {
+    const id = navIds[Number(key) - 1];
+    if (!id) return false; // 그 자리에 메뉴가 없으면 아무 일도 안 한다
+    setNav(id);
+  });
 
   function MenuItem({ id, label, icon }: { id: string; label: string; icon: string }) {
     const active = nav === id && !current;
@@ -69,7 +93,7 @@ export default function Sidebar({ onSearch }: { onSearch: () => void }) {
         <button
           className="rounded bg-neutral-800 px-2 py-1 text-xs text-white hover:bg-neutral-600"
           onClick={openToday}
-          title="오늘의 데일리노트 열기"
+          title={`오늘의 데일리노트 열기 (${shortcutTextOf("today")})`}
         >
           오늘
         </button>
@@ -81,7 +105,7 @@ export default function Sidebar({ onSearch }: { onSearch: () => void }) {
           onClick={onSearch}
         >
           <span>🔍 검색</span>
-          <kbd className="text-[10px]">Ctrl K</kbd>
+          <kbd className="text-[10px]">{shortcutTextOf("search")}</kbd>
         </button>
       </div>
 
@@ -136,7 +160,8 @@ export default function Sidebar({ onSearch }: { onSearch: () => void }) {
         <div className="mt-1 flex items-center gap-3">
           <button
             className="text-[11px] text-neutral-500 underline hover:text-neutral-700"
-            onClick={() => setSettingsOpen(true)}
+            onClick={onOpenSettings}
+            title={`설정 (${shortcutTextOf("settings")})`}
           >
             ⚙️ 설정
           </button>
@@ -151,7 +176,6 @@ export default function Sidebar({ onSearch }: { onSearch: () => void }) {
       </div>
 
       {addingType && <CustomTypeDialog onClose={() => setAddingType(false)} />}
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </aside>
   );
 }
