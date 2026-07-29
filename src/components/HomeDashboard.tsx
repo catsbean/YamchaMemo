@@ -212,14 +212,14 @@ export default function HomeDashboard() {
                   >
                     <span className="shrink-0 text-neutral-300">☐</span>
                     <span className="truncate text-neutral-700">{t.text}</span>
-                    <span className="ml-auto shrink-0 text-[10px] text-neutral-400">
+                    <span className="ml-auto shrink-0 text-3xs text-neutral-400">
                       {t.note_type === "daily" ? t.date : t.note_title}
                     </span>
                   </button>
                 </li>
               ))}
               {todos.length > 8 && (
-                <li className="px-2 pt-1 text-[10px] text-neutral-400">
+                <li className="px-2 pt-1 text-3xs text-neutral-400">
                   외 {todos.length - 8}건
                 </li>
               )}
@@ -256,7 +256,7 @@ export default function HomeDashboard() {
               />
             ))}
           </div>
-          <p className="mt-2 text-[10px] text-neutral-400">최근 16주</p>
+          <p className="mt-2 text-3xs text-neutral-400">최근 16주</p>
         </section>
 
         {/* 최근 활동 */}
@@ -269,11 +269,11 @@ export default function HomeDashboard() {
                   className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-50"
                   {...itemProps(n.rel_path)}
                 >
-                  <span className="w-16 shrink-0 rounded bg-neutral-100 px-1 py-0.5 text-center text-[10px] text-neutral-500">
+                  <span className="w-16 shrink-0 rounded bg-neutral-100 px-1 py-0.5 text-center text-3xs text-neutral-500">
                     {typeLabel(schemas, n.note_type)}
                   </span>
                   <span className="truncate text-neutral-700">{n.title}</span>
-                  <span className="ml-auto shrink-0 text-[10px] text-neutral-400">
+                  <span className="ml-auto shrink-0 text-3xs text-neutral-400">
                     {n.date}
                   </span>
                 </button>
@@ -305,7 +305,7 @@ function Stat({
   return (
     <div className="rounded-lg bg-neutral-50 py-2">
       <p className={`font-bold ${small ? "text-sm" : "text-xl"}`}>{value}</p>
-      <p className="text-[10px] text-neutral-400">{label}</p>
+      <p className="text-3xs text-neutral-400">{label}</p>
     </div>
   );
 }

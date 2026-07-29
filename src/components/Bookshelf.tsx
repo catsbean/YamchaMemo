@@ -353,16 +353,16 @@ function BookCard({
             <span className="line-clamp-4 text-sm font-bold leading-snug">
               {book.title}
             </span>
-            {author && <span className="text-[11px] opacity-70">{author}</span>}
+            {author && <span className="text-2xs opacity-70">{author}</span>}
           </div>
         )}
         {status === "reading" && (
-          <span className="absolute left-1 top-1 rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] text-white">
+          <span className="absolute left-1 top-1 rounded bg-emerald-600 px-1.5 py-0.5 text-3xs text-white">
             읽는 중
           </span>
         )}
         {rating && (
-          <span className="absolute right-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-amber-300">
+          <span className="absolute right-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-3xs text-amber-300">
             ★ {rating}
           </span>
         )}
@@ -370,7 +370,7 @@ function BookCard({
       <div className="mt-1 flex items-start justify-between gap-1">
         <span className="line-clamp-2 text-xs text-neutral-600">{book.title}</span>
         <button
-          className="shrink-0 rounded px-1 text-[11px] text-neutral-400 opacity-0 transition-opacity hover:bg-neutral-100 hover:text-neutral-700 group-hover:opacity-100"
+          className="shrink-0 rounded px-1 text-2xs text-neutral-400 opacity-0 transition-opacity hover:bg-neutral-100 hover:text-neutral-700 group-hover:opacity-100"
           onClick={onOpenInfo}
           title="책 정보 노트 열기"
         >
@@ -440,7 +440,7 @@ function ListView({ books }: { books: NoteSummary[] }) {
         </button>
         {bulkOpen && (
           <div className="mt-2 flex flex-col gap-2 pb-2">
-            <p className="text-[11px] text-neutral-400">
+            <p className="text-2xs text-neutral-400">
               한 줄에 한 권 — <b>제목, 저자, 분야, 상태</b> 순서. 구분자는
               탭(Excel 복사), <code>|</code>, 쉼표 모두 인식. 제목만 있어도
               됩니다.
@@ -589,7 +589,7 @@ function NewBookInlineRow({ onCreated }: { onCreated: () => Promise<void> }) {
       </td>
       <td className="px-1 py-1 text-right">
         <button
-          className="rounded bg-neutral-800 px-2 py-0.5 text-[11px] text-white hover:bg-neutral-600 disabled:opacity-40"
+          className="rounded bg-neutral-800 px-2 py-0.5 text-2xs text-white hover:bg-neutral-600 disabled:opacity-40"
           disabled={busy || !row.title.trim()}
           onClick={commit}
         >
@@ -693,7 +693,7 @@ function BookRow({
       </td>
       <td className="px-1 py-1 text-right">
         <button
-          className="rounded bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700 hover:bg-amber-100"
+          className="rounded bg-amber-50 px-2 py-0.5 text-2xs text-amber-700 hover:bg-amber-100"
           onClick={onOpenReading}
         >
           독서기록

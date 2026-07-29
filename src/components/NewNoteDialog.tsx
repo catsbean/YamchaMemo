@@ -166,7 +166,7 @@ export default function NewNoteDialog({ noteType, onClose }: Props) {
           <label className="mb-3 flex cursor-pointer items-center justify-between rounded-md border border-neutral-200 px-3 py-2">
             <span className="text-sm">
               시리즈 만들기
-              <span className="block text-[11px] text-neutral-400">
+              <span className="block text-2xs text-neutral-400">
                 {seriesMode
                   ? "'시리즈명 0001편'부터 시작 — 이어쓰기는 [+ 다음 편 쓰기]로"
                   : "켜면 연재 시리즈를 시작합니다"}

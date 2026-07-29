@@ -169,7 +169,7 @@ export default function EntryList({
                   )}
                 </span>
                 <button
-                  className="shrink-0 rounded border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-600 hover:border-neutral-500"
+                  className="shrink-0 rounded border border-neutral-300 px-2 py-0.5 text-2xs text-neutral-600 hover:border-neutral-500"
                   onClick={onOpenRaw}
                   title="이 내용은 기록 형식이 아니라 원문에서 고칩니다"
                 >
@@ -203,14 +203,14 @@ export default function EntryList({
                 {editing === index ? (
                   <>
                     <button
-                      className="rounded bg-neutral-800 px-2 py-0.5 text-[11px] text-white hover:bg-neutral-600 disabled:opacity-50"
+                      className="rounded bg-neutral-800 px-2 py-0.5 text-2xs text-white hover:bg-neutral-600 disabled:opacity-50"
                       disabled={busy || !draft.trim()}
                       onClick={() => saveEdit(index, b.text, b.kind_label)}
                     >
                       저장
                     </button>
                     <button
-                      className="rounded px-1.5 py-0.5 text-[11px] opacity-70 hover:bg-white/60"
+                      className="rounded px-1.5 py-0.5 text-2xs opacity-70 hover:bg-white/60"
                       onClick={() => setEditing(null)}
                     >
                       취소
@@ -219,14 +219,14 @@ export default function EntryList({
                 ) : confirming === index ? (
                   <>
                     <button
-                      className="rounded bg-rose-600 px-2 py-0.5 text-[11px] font-bold text-white hover:bg-rose-500 disabled:opacity-50"
+                      className="rounded bg-rose-600 px-2 py-0.5 text-2xs font-bold text-white hover:bg-rose-500 disabled:opacity-50"
                       disabled={busy}
                       onClick={() => remove(index, b.text)}
                     >
                       삭제 확인
                     </button>
                     <button
-                      className="rounded px-1.5 py-0.5 text-[11px] opacity-70 hover:bg-white/60"
+                      className="rounded px-1.5 py-0.5 text-2xs opacity-70 hover:bg-white/60"
                       onClick={() => setConfirming(null)}
                     >
                       취소
@@ -235,7 +235,7 @@ export default function EntryList({
                 ) : (
                   <>
                     <button
-                      className="rounded px-1.5 py-0.5 text-[11px] opacity-70 hover:bg-white/60"
+                      className="rounded px-1.5 py-0.5 text-2xs opacity-70 hover:bg-white/60"
                       onClick={() => {
                         setEditing(index);
                         setDraft(b.text);
@@ -251,7 +251,7 @@ export default function EntryList({
                       수정
                     </button>
                     <button
-                      className="rounded px-1.5 py-0.5 text-[11px] text-rose-500 hover:bg-white/60"
+                      className="rounded px-1.5 py-0.5 text-2xs text-rose-500 hover:bg-white/60"
                       onClick={() => {
                         setConfirming(index);
                         setEditing(null);
@@ -266,9 +266,9 @@ export default function EntryList({
             {editing === index ? (
               <>
                 <div className="mb-1 flex items-center gap-2">
-                  <span className="text-[11px] text-neutral-500">종류</span>
+                  <span className="text-2xs text-neutral-500">종류</span>
                   <select
-                    className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 text-[11px] text-neutral-700 focus:outline-none"
+                    className="rounded border border-neutral-300 bg-white px-1.5 py-0.5 text-2xs text-neutral-700 focus:outline-none"
                     value={draftKind}
                     onChange={(ev) => setDraftKind(ev.target.value)}
                   >
@@ -283,7 +283,7 @@ export default function EntryList({
                     <option value="할 일">☑ 할 일로 옮기기</option>
                   </select>
                   {draftKind === "할 일" && (
-                    <span className="text-[11px] text-amber-600">
+                    <span className="text-2xs text-amber-600">
                       할 일 목록으로 이동합니다
                     </span>
                   )}

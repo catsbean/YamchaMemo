@@ -83,7 +83,7 @@ function Row({ item, onClose }: { item: MenuItem; onClose: () => void }) {
     >
       <span className="flex-1 truncate">{item.label}</span>
       {item.hint && (
-        <span className="shrink-0 text-[11px] text-neutral-400">{item.hint}</span>
+        <span className="shrink-0 text-2xs text-neutral-400">{item.hint}</span>
       )}
     </button>
   );

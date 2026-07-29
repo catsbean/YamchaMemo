@@ -220,7 +220,7 @@ export default function BookInfoModal({
               {coverUrl ? (
                 <img src={coverUrl} alt="" className="h-full w-full object-cover" />
               ) : (
-                <span className="px-2 text-center text-[10px] text-neutral-400">
+                <span className="px-2 text-center text-3xs text-neutral-400">
                   표지 없음
                 </span>
               )}
@@ -231,7 +231,7 @@ export default function BookInfoModal({
             >
               파일 선택
             </button>
-            <p className="text-center text-[10px] text-neutral-400">
+            <p className="text-center text-3xs text-neutral-400">
               또는 위 칸에 Ctrl+V로 붙여넣기
             </p>
           </div>

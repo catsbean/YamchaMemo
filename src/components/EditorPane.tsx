@@ -428,7 +428,7 @@ function StatusBar({
   const pct = goal > 0 ? Math.min(100, Math.round((noSpace / goal) * 100)) : 0;
 
   return (
-    <div className="flex items-center justify-between border-t border-neutral-100 bg-white px-4 py-1 text-[11px] text-neutral-400">
+    <div className="flex items-center justify-between border-t border-neutral-100 bg-white px-4 py-1 text-2xs text-neutral-400">
       <span>{dirty ? "수정됨 · 잠시 후 자동 저장" : "저장됨"}</span>
       <span title="단어 수 · 공백 포함 글자수 · 공백 제외 글자수">
         {words.toLocaleString()}단어 · 공백 포함 {withSpace.toLocaleString()}자 ·

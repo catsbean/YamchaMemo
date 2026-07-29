@@ -168,7 +168,7 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
                   }
                 }}
               >
-                <span className="w-16 shrink-0 self-start rounded bg-neutral-100 px-1.5 py-0.5 text-center text-[11px] text-neutral-500">
+                <span className="w-16 shrink-0 self-start rounded bg-neutral-100 px-1.5 py-0.5 text-center text-2xs text-neutral-500">
                   {typeLabel(schemas, h.note_type)}
                 </span>
                 <span className="min-w-0 flex-1">

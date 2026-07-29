@@ -321,7 +321,7 @@ function StarRating({
       })}
       {value > 0 && (
         <button
-          className="ml-0.5 text-[10px] text-neutral-400 hover:text-neutral-600"
+          className="ml-0.5 text-3xs text-neutral-400 hover:text-neutral-600"
           onClick={() => onChange(null)}
           title="별점 지우기"
         >
@@ -358,7 +358,7 @@ function TagEditor({
     <div className="mt-1 flex items-center gap-1">
       <span className="text-neutral-400">#</span>
       <input
-        className="min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] text-violet-600 placeholder-neutral-300 hover:border-neutral-200 focus:border-neutral-400 focus:bg-white focus:outline-none"
+        className="min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-2xs text-violet-600 placeholder-neutral-300 hover:border-neutral-200 focus:border-neutral-400 focus:bg-white focus:outline-none"
         placeholder="태그 (쉼표로 구분)"
         value={v}
         onChange={(e) => setV(e.target.value)}

@@ -82,12 +82,12 @@ export default function BookPickerDialog({ onClose }: { onClose: () => void }) {
                       {url ? (
                         <img src={url} alt="" className="h-full w-full object-cover" />
                       ) : (
-                        <div className="flex h-full w-full items-center justify-center bg-neutral-100 p-1 text-center text-[10px] text-neutral-500">
+                        <div className="flex h-full w-full items-center justify-center bg-neutral-100 p-1 text-center text-3xs text-neutral-500">
                           {b.title}
                         </div>
                       )}
                     </div>
-                    <span className="line-clamp-2 text-[11px] text-neutral-600">
+                    <span className="line-clamp-2 text-2xs text-neutral-600">
                       {b.title}
                     </span>
                   </button>
@@ -109,7 +109,7 @@ export default function BookPickerDialog({ onClose }: { onClose: () => void }) {
                       </span>
                     )}
                     {b.entry_count > 0 && (
-                      <span className="ml-auto shrink-0 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-600">
+                      <span className="ml-auto shrink-0 rounded bg-amber-50 px-1.5 py-0.5 text-2xs text-amber-600">
                         기록 {b.entry_count}
                       </span>
                     )}

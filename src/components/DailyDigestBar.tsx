@@ -24,7 +24,7 @@ export default function DailyDigestBar({ date }: { date: string }) {
         : `읽는 중 «${d.reading_titles[0]}» 외 ${d.reading_count - 1}권`;
 
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-neutral-100 bg-neutral-50 px-4 py-1.5 text-[11px] text-neutral-500">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-neutral-100 bg-neutral-50 px-4 py-1.5 text-2xs text-neutral-500">
       <span title="내용이 있는 미완 할 일만 셉니다">
         ☑{" "}
         <b className={d.open_todos_today > 0 ? "text-amber-600" : ""}>

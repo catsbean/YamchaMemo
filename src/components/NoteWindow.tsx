@@ -219,7 +219,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
         />
       </div>
 
-      <div className="border-t border-neutral-100 px-4 py-1 text-right text-[11px] text-neutral-400">
+      <div className="border-t border-neutral-100 px-4 py-1 text-right text-2xs text-neutral-400">
         {dirty ? "수정됨 · 잠시 후 자동 저장" : "저장됨"}
       </div>
 

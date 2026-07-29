@@ -75,7 +75,7 @@ export default function DailyDateNav({ date }: { date: string }) {
 
       {!isToday && (
         <button
-          className="rounded border border-neutral-300 px-1.5 py-0.5 text-[11px] text-neutral-500 hover:border-neutral-500"
+          className="rounded border border-neutral-300 px-1.5 py-0.5 text-2xs text-neutral-500 hover:border-neutral-500"
           onClick={openToday}
           title="오늘 일지로"
         >
@@ -183,7 +183,7 @@ function Calendar({
         </div>
         <div className="grid grid-cols-7 gap-0.5 text-center">
           {WEEK.map((w) => (
-            <span key={w} className="py-0.5 text-[10px] text-neutral-400">
+            <span key={w} className="py-0.5 text-3xs text-neutral-400">
               {w}
             </span>
           ))}
@@ -211,7 +211,7 @@ function Calendar({
             ),
           )}
         </div>
-        <p className="mt-1 text-center text-[10px] text-neutral-400">
+        <p className="mt-1 text-center text-3xs text-neutral-400">
           점은 일지를 쓴 날 · 없는 날을 고르면 새로 만듭니다
         </p>
       </div>

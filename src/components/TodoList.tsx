@@ -113,10 +113,10 @@ export default function TodoList({
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-2">
-          {error && <span className="text-[11px] text-rose-500">{error}</span>}
+          {error && <span className="text-2xs text-rose-500">{error}</span>}
           {onToggleBig && (
             <button
-              className="rounded px-1.5 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+              className="rounded px-1.5 py-0.5 text-2xs text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
               onClick={onToggleBig}
               title={big ? "원래 크기로" : "크게 보기"}
             >
@@ -125,7 +125,7 @@ export default function TodoList({
           )}
           {onTogglePanel && (
             <button
-              className="rounded px-1.5 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+              className="rounded px-1.5 py-0.5 text-2xs text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
               onClick={onTogglePanel}
               title={
                 panel === "right" ? "아래로 옮기기" : "오른쪽 패널로 옮기기"
@@ -136,7 +136,7 @@ export default function TodoList({
           )}
           {showOpenWindow && (
             <button
-              className="rounded px-1.5 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+              className="rounded px-1.5 py-0.5 text-2xs text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
               onClick={() => openTodoWindow(relPath)}
               title="할 일만 새 창으로 보기"
             >
@@ -176,7 +176,7 @@ export default function TodoList({
                 {editing === t.index ? (
                   <>
                   <select
-                    className="shrink-0 rounded border border-neutral-300 bg-white px-1 py-0.5 text-[11px] text-neutral-700 focus:outline-none"
+                    className="shrink-0 rounded border border-neutral-300 bg-white px-1 py-0.5 text-2xs text-neutral-700 focus:outline-none"
                     value="할 일"
                     title="기록으로 옮기면 완료 표시는 사라집니다"
                     onChange={(e) =>
@@ -219,7 +219,7 @@ export default function TodoList({
                   {confirming === t.index ? (
                     <>
                       <button
-                        className="rounded bg-rose-600 px-1.5 py-0.5 text-[11px] font-bold text-white hover:bg-rose-500 disabled:opacity-50"
+                        className="rounded bg-rose-600 px-1.5 py-0.5 text-2xs font-bold text-white hover:bg-rose-500 disabled:opacity-50"
                         disabled={busy}
                         onClick={() =>
                           apply(() => commands.deleteTodo(relPath, t.index, t.text))
@@ -228,7 +228,7 @@ export default function TodoList({
                         삭제 확인
                       </button>
                       <button
-                        className="rounded px-1 py-0.5 text-[11px] text-neutral-500 hover:bg-neutral-100"
+                        className="rounded px-1 py-0.5 text-2xs text-neutral-500 hover:bg-neutral-100"
                         onClick={() => setConfirming(null)}
                       >
                         취소
@@ -236,7 +236,7 @@ export default function TodoList({
                     </>
                   ) : editing === t.index ? (
                     <button
-                      className="rounded px-1 py-0.5 text-[11px] text-neutral-500 hover:bg-neutral-100"
+                      className="rounded px-1 py-0.5 text-2xs text-neutral-500 hover:bg-neutral-100"
                       onClick={() => setEditing(null)}
                     >
                       취소
@@ -244,7 +244,7 @@ export default function TodoList({
                   ) : (
                     <>
                       <button
-                        className="rounded px-1 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+                        className="rounded px-1 py-0.5 text-2xs text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
                         onClick={() => {
                           setEditing(t.index);
                           setConfirming(null);
@@ -253,7 +253,7 @@ export default function TodoList({
                         수정
                       </button>
                       <button
-                        className="rounded px-1 py-0.5 text-[11px] text-rose-400 hover:bg-neutral-100 hover:text-rose-600"
+                        className="rounded px-1 py-0.5 text-2xs text-rose-400 hover:bg-neutral-100 hover:text-rose-600"
                         onClick={() => {
                           setConfirming(t.index);
                           setEditing(null);
@@ -279,7 +279,7 @@ export default function TodoList({
           {...addIme.handlers}
         />
         <button
-          className="shrink-0 rounded bg-emerald-500 px-2 py-0.5 text-[11px] text-white hover:bg-emerald-400 disabled:opacity-50"
+          className="shrink-0 rounded bg-emerald-500 px-2 py-0.5 text-2xs text-white hover:bg-emerald-400 disabled:opacity-50"
           disabled={busy}
           onClick={() => add()}
         >

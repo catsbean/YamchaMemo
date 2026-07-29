@@ -50,7 +50,7 @@ export default function TodoWindow({ relPath }: { relPath: string }) {
           {title}
         </h1>
         <button
-          className="shrink-0 rounded px-2 py-0.5 text-[11px] text-neutral-500 hover:bg-neutral-100"
+          className="shrink-0 rounded px-2 py-0.5 text-2xs text-neutral-500 hover:bg-neutral-100"
           onClick={() => getCurrentWindow().close()}
         >
           닫기

@@ -205,7 +205,7 @@ function SeriesCard({
     <div className="flex flex-col gap-2 rounded-lg border border-neutral-200 bg-white p-3 shadow-sm">
       <div className="flex items-start justify-between gap-2">
         <span className="text-sm font-bold">📜 {series}</span>
-        <span className="shrink-0 text-[11px] text-neutral-400">
+        <span className="shrink-0 text-2xs text-neutral-400">
           {episodes.length}편 · {totalChars.toLocaleString()}자
         </span>
       </div>
@@ -217,14 +217,14 @@ function SeriesCard({
               onClick={() => openNote(e.rel_path)}
             >
               <span className="truncate">{e.title}</span>
-              <span className="shrink-0 text-[10px] text-neutral-400">
+              <span className="shrink-0 text-3xs text-neutral-400">
                 {e.char_count.toLocaleString()}자
               </span>
             </button>
           </li>
         ))}
         {episodes.length > 3 && (
-          <li className="px-2 text-[10px] text-neutral-300">
+          <li className="px-2 text-3xs text-neutral-300">
             외 {episodes.length - 3}편…
           </li>
         )}
@@ -254,12 +254,12 @@ function PieceCard({ piece, onOpen }: { piece: NoteSummary; onOpen: () => void }
       <div className="flex items-start justify-between gap-2">
         <span className="line-clamp-2 text-sm font-semibold">{piece.title}</span>
         <span
-          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${STATUS_COLORS[status] ?? STATUS_COLORS.idea}`}
+          className={`shrink-0 rounded px-1.5 py-0.5 text-3xs ${STATUS_COLORS[status] ?? STATUS_COLORS.idea}`}
         >
           {STATUS_LABELS[status] ?? status}
         </span>
       </div>
-      <div className="flex items-center gap-2 text-[11px] text-neutral-400">
+      <div className="flex items-center gap-2 text-2xs text-neutral-400">
         {category && <span>{category}</span>}
         <span className="ml-auto">
           {piece.char_count.toLocaleString()}자
@@ -274,7 +274,7 @@ function PieceCard({ piece, onOpen }: { piece: NoteSummary; onOpen: () => void }
           />
         </div>
       )}
-      <span className="text-[10px] text-neutral-300">{piece.date}</span>
+      <span className="text-3xs text-neutral-300">{piece.date}</span>
     </button>
   );
 }

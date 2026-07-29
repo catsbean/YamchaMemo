@@ -174,7 +174,7 @@ export default function BookCreateDialog({
               {preview ? (
                 <img src={preview} alt="" className="h-full w-full object-cover" />
               ) : (
-                <span className="px-1 text-center text-[10px] text-neutral-400">
+                <span className="px-1 text-center text-3xs text-neutral-400">
                   표지
                 </span>
               )}

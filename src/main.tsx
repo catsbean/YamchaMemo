@@ -1,11 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { load } from "@tauri-apps/plugin-store";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import NoteWindow from "./components/NoteWindow";
 import TodoWindow from "./components/TodoWindow";
 import TrashWindow from "./components/TrashWindow";
-import { useVault } from "./stores/vault";
+import { applyTheme, useVault, type ThemeMode } from "./stores/vault";
 import "./styles.css";
 
 // 별도 창은 ?view= 로 구분한다 (메인 앱 로직은 실행하지 않음)
@@ -21,6 +22,22 @@ function Root() {
   if (view === "todos" && rel) return <TodoWindow relPath={rel} />;
   return <App />;
 }
+
+// 화면 밝기를 그리기 전에 입힌다. 메인 창은 init()이 다시 한 번 맞추지만,
+// 노트·휴지통 같은 별도 창은 스토어를 초기화하지 않으므로 여기서만 정해진다.
+// (설정을 읽는 동안 밝은 화면이 번쩍이지 않게 최대한 일찍 부른다)
+load("settings.json", { autoSave: true, defaults: {} }).then(async (s) => {
+  applyTheme((await s.get<ThemeMode>("theme")) ?? "light");
+});
+
+// "시스템 설정"을 골랐으면 OS 밝기가 바뀔 때 따라간다
+window
+  .matchMedia("(prefers-color-scheme: dark)")
+  .addEventListener("change", async () => {
+    const s = await load("settings.json", { autoSave: true, defaults: {} });
+    const mode = (await s.get<ThemeMode>("theme")) ?? "light";
+    if (mode === "system") applyTheme(mode);
+  });
 
 /** 화면이 무너졌을 때의 마지막 저장 — 메인 창은 스토어가 현재 노트를 들고 있다.
  *  (노트 창은 3초 자동 저장이 따로 돌아 여기서 손댈 것이 없다) */

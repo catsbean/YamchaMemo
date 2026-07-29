@@ -58,6 +58,8 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
     setDeleteConfirm,
     bookPickerView,
     setBookPickerView,
+    theme,
+    setTheme,
   } = useVault();
   const [syncing, setSyncing] = useState(false);
   const removeCustom = useVault((s) => s.refreshSchemas);
@@ -120,6 +122,31 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
         <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
         {tab === "general" && (
           <>
+        <section className="mb-5">
+          <h3 className="mb-2 text-sm font-semibold text-neutral-600">화면 밝기</h3>
+          <div className="flex gap-1.5 text-sm">
+            {(
+              [
+                ["light", "라이트", "밝은 화면"],
+                ["dark", "다크", "어두운 화면"],
+                ["system", "시스템 설정", "운영체제를 따릅니다"],
+              ] as const
+            ).map(([v, label, desc]) => (
+              <button
+                key={v}
+                className={`flex-1 rounded-md border px-3 py-2 text-left ${
+                  theme === v
+                    ? "border-neutral-800 bg-neutral-50 font-medium"
+                    : "border-neutral-200 text-neutral-500 hover:border-neutral-400"
+                }`}
+                onClick={() => setTheme(v)}
+              >
+                <span className="block">{label}</span>
+                <span className="block text-2xs text-neutral-400">{desc}</span>
+              </button>
+            ))}
+          </div>
+        </section>
         <section className="mb-5">
           <h3 className="mb-2 text-sm font-semibold text-neutral-600">
             편집 시 목록 표시
@@ -305,7 +332,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
                             <span className="truncate text-amber-800">{rel}</span>
                             <span className="flex shrink-0 gap-1">
                               <button
-                                className="rounded bg-white px-1.5 py-0.5 text-[10px] text-neutral-600 hover:bg-neutral-100"
+                                className="rounded bg-white px-1.5 py-0.5 text-3xs text-neutral-600 hover:bg-neutral-100"
                                 onClick={() =>
                                   resolveMirrorConflict(m, rel, false)
                                 }
@@ -314,7 +341,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
                                 vault 우선
                               </button>
                               <button
-                                className="rounded bg-white px-1.5 py-0.5 text-[10px] text-neutral-600 hover:bg-neutral-100"
+                                className="rounded bg-white px-1.5 py-0.5 text-3xs text-neutral-600 hover:bg-neutral-100"
                                 onClick={() =>
                                   resolveMirrorConflict(m, rel, true)
                                 }
@@ -478,7 +505,7 @@ function ShortcutSection() {
                 </kbd>
                 <span className="min-w-0 text-sm">
                   <span className={on ? "" : "text-neutral-400"}>{s.label}</span>
-                  <span className="block text-[11px] text-neutral-400">
+                  <span className="block text-2xs text-neutral-400">
                     {s.hint}
                   </span>
                 </span>
@@ -644,18 +671,18 @@ function CalloutSection() {
               </span>
               {confirming === c.label ? (
                 <span className="flex shrink-0 items-center gap-1">
-                  <span className="text-[10px] opacity-70">
+                  <span className="text-3xs opacity-70">
                     이미 쓴 기록은 남습니다
                   </span>
                   <button
-                    className="rounded bg-rose-600 px-1.5 py-0.5 text-[11px] font-bold text-white hover:bg-rose-500 disabled:opacity-50"
+                    className="rounded bg-rose-600 px-1.5 py-0.5 text-2xs font-bold text-white hover:bg-rose-500 disabled:opacity-50"
                     disabled={busy}
                     onClick={() => remove(c.label)}
                   >
                     제거 확인
                   </button>
                   <button
-                    className="rounded px-1 py-0.5 text-[11px] opacity-70 hover:bg-white/60"
+                    className="rounded px-1 py-0.5 text-2xs opacity-70 hover:bg-white/60"
                     onClick={() => setConfirming(null)}
                   >
                     취소
@@ -697,7 +724,7 @@ function CalloutSection() {
             }}
             title="아이콘 고르기"
           >
-            {icon || <span className="text-[10px] text-neutral-400">없음</span>}
+            {icon || <span className="text-3xs text-neutral-400">없음</span>}
           </button>
           {iconOpen && (
             <div className="absolute left-0 z-10 mt-1 flex max-h-56 w-[17rem] flex-wrap gap-1 overflow-y-auto rounded-md border border-neutral-200 bg-white p-2 shadow-lg">
@@ -715,7 +742,7 @@ function CalloutSection() {
                   }}
                   title={ic || "없음"}
                 >
-                  {ic || <span className="text-[10px] text-neutral-400">없음</span>}
+                  {ic || <span className="text-3xs text-neutral-400">없음</span>}
                 </button>
               ))}
             </div>
@@ -1119,7 +1146,7 @@ function CustomTypeRow({
           </button>
           {confirming ? (
             <span className="flex items-center gap-1">
-              <span className="text-[11px] text-neutral-400">
+              <span className="text-2xs text-neutral-400">
                 노트는 자유노트로 이동
               </span>
               <button
@@ -1152,7 +1179,7 @@ function CustomTypeRow({
       </div>
       {editing && (
         <div className="mt-2 flex flex-col gap-1.5">
-          <p className="text-[11px] text-neutral-400">
+          <p className="text-2xs text-neutral-400">
             이 분류로 새로 만드는 노트의 본문 템플릿입니다. frontmatter는 건드리지
             않습니다. <code>{"{{date}}"}</code>, <code>{"{{title}}"}</code> 사용
             가능. 이미 만든 노트에는 영향을 주지 않습니다.

@@ -1,5 +1,21 @@
 @import "tailwindcss";
 
+/* 글자 크기 토큰.
+   임의 픽셀값(text-[11px] 62곳 · text-[10px] 26곳)을 이름으로 바꿔 눈금을 만든다.
+   본문은 sm(14px), 보조는 xs(12px), 잔글씨는 2xs(11px)/3xs(10px). */
+@theme {
+  --text-2xs: 0.6875rem; /* 11px */
+  --text-2xs--line-height: 1rem;
+  --text-3xs: 0.625rem; /* 10px */
+  --text-3xs--line-height: 0.875rem;
+
+  /* 흐린 글씨를 조금 진하게. 원래 값(70.8%)은 흰 배경에서 대비가 2.6:1로
+     WCAG 최소선(3.0)에 못 미쳤다 — 날짜·개수처럼 200곳 넘게 쓰이는 색이라
+     여기서 한 번 고치면 전부 따라온다. */
+  --color-neutral-400: oklch(64.5% 0 none);
+}
+
+
 html,
 body,
 #root {
@@ -26,4 +42,166 @@ textarea,
    placeholder를 깜빡이게 하는 걸 막는다. */
 .ime-composing::placeholder {
   color: transparent;
+}
+
+/* 키보드로 옮겨 다닐 때 지금 어디에 있는지 보이게. 여러 곳에서 기본 포커스 링을
+   지우면서 대체 표시를 안 둔 곳이 있었다. 마우스 클릭에는 안 나오고(focus-visible)
+   키보드에만 나온다. */
+:focus-visible {
+  outline: 2px solid var(--color-violet-500);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+/* 읽는 글은 너무 길게 늘어지지 않게. 넓은 창에서 한 줄이 화면을 가로지르면
+   눈이 줄을 잃는다. (편집기 본문에만 적용 — 목록·표는 넓게 써야 한다) */
+.cm-content {
+  max-width: 46rem;
+}
+
+/* 어두운 화면에서는 이미지가 너무 밝게 튄다 — 살짝 눌러 준다 */
+.dark .cm-inline-img,
+.dark img {
+  filter: brightness(0.92);
+}
+
+/* 어두운 화면용 팔레트.
+ *
+ * Tailwind v4는 `bg-neutral-50`을 `var(--color-neutral-50)`으로 컴파일한다.
+ * 그래서 변수만 갈아 끼우면 컴포넌트를 한 줄도 고치지 않고 화면 전체가 뒤집힌다.
+ * 색조(C·H)는 그대로 두고 명도만 어두운 화면에 맞게 다시 잡았다.
+ * 기계적인 반전이 아니라 손으로 맞춘 값이다 - 그냥 반전하면 흐린 글씨
+ * (neutral-400)가 너무 어두워져 읽히지 않는다. */
+.dark {
+  /* 완전한 검정은 피한다 (눈이 덜 피로하고 그림자가 보인다) */
+  --color-white: oklch(14.5% 0 none);
+  --color-black: oklch(98.5% 0 none);
+  /* amber */
+  --color-amber-50: oklch(24% .022 95.277);
+  --color-amber-100: oklch(30% .059 95.617);
+  --color-amber-200: oklch(35% .12 95.746);
+  --color-amber-300: oklch(45% .169 91.605);
+  --color-amber-400: oklch(60% .189 84.429);
+  --color-amber-500: oklch(72% .188 70.08);
+  --color-amber-600: oklch(78% .179 58.318);
+  --color-amber-700: oklch(84% .163 48.998);
+  --color-amber-800: oklch(88% .137 46.201);
+  --color-amber-900: oklch(92% .112 45.904);
+  /* blue */
+  --color-blue-50: oklch(24% .014 254.604);
+  --color-blue-100: oklch(30% .032 255.585);
+  --color-blue-200: oklch(35% .059 254.128);
+  --color-blue-500: oklch(72% .214 259.815);
+  --color-blue-700: oklch(84% .243 264.376);
+  --color-blue-800: oklch(88% .199 265.638);
+  /* emerald */
+  --color-emerald-50: oklch(24% .021 166.113);
+  --color-emerald-100: oklch(30% .052 163.051);
+  --color-emerald-200: oklch(35% .093 164.15);
+  --color-emerald-400: oklch(60% .177 163.223);
+  --color-emerald-500: oklch(72% .17 162.48);
+  --color-emerald-600: oklch(78% .145 163.225);
+  --color-emerald-700: oklch(84% .118 165.612);
+  --color-emerald-800: oklch(88% .095 166.913);
+  --color-emerald-900: oklch(92% .077 168.94);
+  /* fuchsia */
+  --color-fuchsia-50: oklch(24% .017 320.058);
+  --color-fuchsia-100: oklch(30% .037 318.852);
+  --color-fuchsia-200: oklch(35% .076 319.62);
+  --color-fuchsia-500: oklch(72% .295 322.15);
+  --color-fuchsia-700: oklch(84% .253 323.949);
+  --color-fuchsia-800: oklch(88% .211 324.591);
+  /* indigo */
+  --color-indigo-50: oklch(24% .018 272.314);
+  --color-indigo-100: oklch(30% .034 272.788);
+  --color-indigo-200: oklch(35% .065 274.039);
+  --color-indigo-500: oklch(72% .233 277.117);
+  --color-indigo-700: oklch(84% .24 277.023);
+  --color-indigo-800: oklch(88% .195 277.366);
+  /* lime */
+  --color-lime-50: oklch(24% .031 120.757);
+  --color-lime-100: oklch(30% .067 122.328);
+  --color-lime-200: oklch(35% .127 124.321);
+  --color-lime-500: oklch(72% .233 130.85);
+  --color-lime-700: oklch(84% .157 131.589);
+  --color-lime-800: oklch(88% .124 130.933);
+  /* neutral */
+  --color-neutral-50: oklch(20.5% 0 none);
+  --color-neutral-100: oklch(26.9% 0 none);
+  --color-neutral-200: oklch(32% 0 none);
+  --color-neutral-300: oklch(43.9% 0 none);
+  --color-neutral-400: oklch(60% 0 none);
+  --color-neutral-500: oklch(70.8% 0 none);
+  --color-neutral-600: oklch(80% 0 none);
+  --color-neutral-700: oklch(87% 0 none);
+  --color-neutral-800: oklch(92.2% 0 none);
+  --color-neutral-900: oklch(98.5% 0 none);
+  /* orange */
+  --color-orange-50: oklch(24% .016 73.684);
+  --color-orange-100: oklch(30% .038 75.164);
+  --color-orange-200: oklch(35% .076 70.697);
+  --color-orange-500: oklch(72% .213 47.604);
+  --color-orange-700: oklch(84% .195 38.402);
+  --color-orange-800: oklch(88% .157 37.304);
+  /* red */
+  --color-red-50: oklch(24% .013 17.38);
+  --color-red-100: oklch(30% .032 17.717);
+  --color-red-200: oklch(35% .062 18.334);
+  --color-red-500: oklch(72% .237 25.331);
+  --color-red-700: oklch(84% .213 27.518);
+  --color-red-800: oklch(88% .177 26.899);
+  /* rose */
+  --color-rose-50: oklch(24% .015 12.422);
+  --color-rose-100: oklch(30% .03 12.58);
+  --color-rose-200: oklch(35% .058 10.001);
+  --color-rose-300: oklch(45% .117 11.638);
+  --color-rose-400: oklch(60% .194 13.428);
+  --color-rose-500: oklch(72% .246 16.439);
+  --color-rose-600: oklch(78% .253 17.585);
+  --color-rose-700: oklch(84% .222 16.935);
+  --color-rose-800: oklch(88% .188 13.697);
+  --color-rose-900: oklch(92% .159 10.272);
+  /* sky */
+  --color-sky-50: oklch(24% .013 236.62);
+  --color-sky-100: oklch(30% .026 236.824);
+  --color-sky-200: oklch(35% .058 230.902);
+  --color-sky-500: oklch(72% .169 237.323);
+  --color-sky-600: oklch(78% .158 241.966);
+  --color-sky-700: oklch(84% .134 242.749);
+  --color-sky-800: oklch(88% .11 240.79);
+  --color-sky-900: oklch(92% .09 240.876);
+  /* stone */
+  --color-stone-50: oklch(20.5% .001 106.423);
+  --color-stone-100: oklch(26.9% .001 106.424);
+  --color-stone-200: oklch(32% .003 48.717);
+  --color-stone-300: oklch(43.9% .005 56.366);
+  --color-stone-500: oklch(70.8% .013 58.071);
+  --color-stone-600: oklch(80% .011 73.639);
+  --color-stone-700: oklch(87% .01 67.558);
+  --color-stone-800: oklch(92.2% .007 34.298);
+  /* teal */
+  --color-teal-50: oklch(24% .014 180.72);
+  --color-teal-100: oklch(30% .051 180.801);
+  --color-teal-200: oklch(35% .096 180.426);
+  --color-teal-500: oklch(72% .14 182.503);
+  --color-teal-700: oklch(84% .096 186.391);
+  --color-teal-800: oklch(88% .078 188.216);
+  /* violet */
+  --color-violet-50: oklch(24% .016 293.756);
+  --color-violet-100: oklch(30% .029 294.588);
+  --color-violet-200: oklch(35% .057 293.283);
+  --color-violet-300: oklch(45% .111 293.571);
+  --color-violet-400: oklch(60% .183 293.541);
+  --color-violet-500: oklch(72% .25 292.717);
+  --color-violet-600: oklch(78% .281 293.009);
+  --color-violet-700: oklch(84% .27 292.581);
+  --color-violet-800: oklch(88% .232 292.759);
+  --color-violet-900: oklch(92% .189 293.745);
+  /* yellow */
+  --color-yellow-50: oklch(24% .026 102.212);
+  --color-yellow-100: oklch(30% .071 103.193);
+  --color-yellow-200: oklch(35% .129 101.54);
+  --color-yellow-500: oklch(72% .184 86.047);
+  --color-yellow-700: oklch(84% .135 66.442);
+  --color-yellow-800: oklch(88% .114 61.907);
 }

@@ -105,7 +105,7 @@ export default function Sidebar({
           onClick={onSearch}
         >
           <span>🔍 검색</span>
-          <kbd className="text-[10px]">{shortcutTextOf("search")}</kbd>
+          <kbd className="text-3xs">{shortcutTextOf("search")}</kbd>
         </button>
       </div>
 
@@ -127,7 +127,7 @@ export default function Sidebar({
         <MenuItem id="tags" label="태그" icon="🏷️" />
 
         <div className="my-2 border-t border-neutral-200" />
-        <p className="mb-1 px-3 text-[11px] text-neutral-400">사용자 추가 분류</p>
+        <p className="mb-1 px-3 text-2xs text-neutral-400">사용자 추가 분류</p>
         {customs.map((s) => (
           <MenuItem key={s.id} id={s.id} label={s.label} icon="📁" />
         ))}
@@ -154,19 +154,19 @@ export default function Sidebar({
             <span className="font-bold">{issues.length}</span>
           </button>
         )}
-        <p className="truncate text-[11px] text-neutral-400" title={vaultPath ?? ""}>
+        <p className="truncate text-2xs text-neutral-400" title={vaultPath ?? ""}>
           {vaultPath}
         </p>
         <div className="mt-1 flex items-center gap-3">
           <button
-            className="text-[11px] text-neutral-500 underline hover:text-neutral-700"
+            className="text-2xs text-neutral-500 underline hover:text-neutral-700"
             onClick={onOpenSettings}
             title={`설정 (${shortcutTextOf("settings")})`}
           >
             ⚙️ 설정
           </button>
           <button
-            className="text-[11px] text-neutral-500 underline hover:text-neutral-700"
+            className="text-2xs text-neutral-500 underline hover:text-neutral-700"
             onClick={openTrashWindow}
             title="삭제한 노트를 되돌립니다"
           >

@@ -97,7 +97,7 @@ export default function EditorToolbar({
         <span className="line-through">S</span>
       </Btn>
       <Btn hint="코드 (Ctrl+Shift+C)" onClick={run(toggleWrap("`"))}>
-        <span className="font-mono text-[11px]">{"</>"}</span>
+        <span className="font-mono text-2xs">{"</>"}</span>
       </Btn>
 
       <Divider />
@@ -105,7 +105,7 @@ export default function EditorToolbar({
         •
       </Btn>
       <Btn hint="번호 목록" onClick={run(orderedList)}>
-        <span className="text-[11px]">1.</span>
+        <span className="text-2xs">1.</span>
       </Btn>
       <Btn hint="할 일 (체크박스)" onClick={run(toggleLinePrefix("- [ ] "))}>
         ☑
@@ -181,7 +181,7 @@ function Menu({
   return (
     <button className={BTN} title={`${label} — ${hint}`} onClick={onOpen}>
       {children}
-      <span className="ml-0.5 text-[9px] text-neutral-400">▾</span>
+      <span className="ml-0.5 text-3xs text-neutral-400">▾</span>
     </button>
   );
 }

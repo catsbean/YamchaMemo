@@ -357,14 +357,14 @@ export default function ReadingDashboard() {
                         )}
                       </button>
                       <span
-                        className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] ring-1 ${
+                        className={`shrink-0 rounded px-1.5 py-0.5 text-2xs ring-1 ${
                           KIND_STYLE[e.kind_label] ??
                           "bg-neutral-50 text-neutral-600 ring-neutral-200"
                         }`}
                       >
                         {e.kind_label}
                       </span>
-                      <span className="ml-auto shrink-0 text-[11px] text-neutral-400">
+                      <span className="ml-auto shrink-0 text-2xs text-neutral-400">
                         {e.date}
                       </span>
                     </div>
@@ -381,7 +381,7 @@ export default function ReadingDashboard() {
                   </div>
 
                   <button
-                    className="shrink-0 rounded border border-neutral-200 px-2 py-1 text-[11px] text-neutral-500 hover:border-neutral-400"
+                    className="shrink-0 rounded border border-neutral-200 px-2 py-1 text-2xs text-neutral-500 hover:border-neutral-400"
                     onClick={() => navigator.clipboard.writeText(e.text)}
                     title="기록 내용만 복사합니다"
                   >

@@ -194,7 +194,7 @@ function Row({ note, noteType }: { note: NoteSummary; noteType: string }) {
       {note.tags.slice(0, 3).map((t) => (
         <span
           key={t}
-          className="rounded bg-violet-50 px-1.5 py-0.5 text-[11px] text-violet-600"
+          className="rounded bg-violet-50 px-1.5 py-0.5 text-2xs text-violet-600"
         >
           #{t}
         </span>
@@ -224,7 +224,7 @@ function Row({ note, noteType }: { note: NoteSummary; noteType: string }) {
           {date}
           <Title note={note} className="truncate text-sm" />
           {host && (
-            <span className="shrink-0 rounded bg-sky-50 px-1.5 py-0.5 text-[11px] text-sky-600">
+            <span className="shrink-0 rounded bg-sky-50 px-1.5 py-0.5 text-2xs text-sky-600">
               {host}
             </span>
           )}

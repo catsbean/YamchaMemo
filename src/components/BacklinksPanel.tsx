@@ -41,7 +41,7 @@ export default function BacklinksPanel({ relPath }: { relPath: string }) {
           {open ? "▾" : "▸"} 백링크 {linked.length}
         </button>
         {unlinked.length > 0 && open && (
-          <span className="flex gap-1 text-[11px]">
+          <span className="flex gap-1 text-2xs">
             <TabButton
               on={!showUnlinked}
               onClick={() => setShowUnlinked(false)}
@@ -59,7 +59,7 @@ export default function BacklinksPanel({ relPath }: { relPath: string }) {
       {open && (
         <>
           {showUnlinked && (
-            <p className="mb-1.5 text-[11px] text-neutral-400">
+            <p className="mb-1.5 text-2xs text-neutral-400">
               제목이 나오지만 아직 <code>[[링크]]</code>로 잇지 않은 노트입니다.
             </p>
           )}
@@ -77,20 +77,20 @@ export default function BacklinksPanel({ relPath }: { relPath: string }) {
                     onClick={() => openNote(l.rel_path)}
                     title={l.rel_path}
                   >
-                    <span className="shrink-0 text-[10px] text-neutral-400">
+                    <span className="shrink-0 text-3xs text-neutral-400">
                       {typeLabel(schemas, l.note_type)}
                     </span>
                     <span className="truncate text-xs font-medium text-neutral-800 hover:underline">
                       {l.title}
                     </span>
-                    <span className="ml-auto shrink-0 text-[10px] text-neutral-300">
+                    <span className="ml-auto shrink-0 text-3xs text-neutral-300">
                       {l.date}
                     </span>
                   </button>
                   {l.contexts.map((c, i) => (
                     <p
                       key={i}
-                      className="mt-1 border-l-2 border-neutral-200 pl-2 text-[11px] leading-relaxed text-neutral-500"
+                      className="mt-1 border-l-2 border-neutral-200 pl-2 text-2xs leading-relaxed text-neutral-500"
                     >
                       {plainLinks(c)}
                     </p>

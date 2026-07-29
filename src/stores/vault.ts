@@ -34,6 +34,18 @@ type FmObject = { [key: string]: JsonValue | undefined };
 /** 편집 시 목록(대시보드) 표시 방식 */
 export type LayoutMode = "replace" | "three" | "vertical";
 
+/** 화면 밝기 — 기본은 라이트. system은 OS 설정을 따른다. */
+export type ThemeMode = "light" | "dark" | "system";
+
+/** 고른 모드를 실제 화면에 입힌다 (다크일 때만 <html>에 .dark를 붙인다) */
+export function applyTheme(mode: ThemeMode) {
+  const dark =
+    mode === "dark" ||
+    (mode === "system" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.classList.toggle("dark", dark);
+}
+
 /** 일지 빠른 입력 바의 기본 순서 — 기록 · 느낌 · 할 일, 사용자 정의는 그 뒤 */
 export const DEFAULT_DAILY_KIND_ORDER = ["log", "feeling", "todo"];
 
@@ -68,6 +80,9 @@ interface VaultStore {
    *  여기 없는 종류(나중에 만든 것)는 뒤에 붙는다. */
   dailyKindOrder: string[];
   setDailyKindOrder(order: string[]): Promise<void>;
+  /** 화면 밝기 (기본 라이트) */
+  theme: ThemeMode;
+  setTheme(mode: ThemeMode): Promise<void>;
   /** 꺼 둔 단축키 id 목록 (기본은 전부 켬) */
   shortcutsOff: string[];
   toggleShortcut(id: string): Promise<void>;
@@ -255,6 +270,13 @@ export const useVault = create<VaultStore>((set, get) => {
     requestCreate() {
       set({ current: null, createTick: get().createTick + 1 });
     },
+    theme: "light",
+    async setTheme(mode) {
+      set({ theme: mode });
+      applyTheme(mode);
+      const store = await settings();
+      await store.set("theme", mode);
+    },
     shortcutsOff: [],
     async toggleShortcut(id) {
       const off = get().shortcutsOff;
@@ -325,7 +347,10 @@ export const useVault = create<VaultStore>((set, get) => {
           (await store.get<string[]>("dailyKindOrder")) ??
           DEFAULT_DAILY_KIND_ORDER;
         const shortcutsOff = (await store.get<string[]>("shortcutsOff")) ?? [];
+        const theme = (await store.get<ThemeMode>("theme")) ?? "light";
+        applyTheme(theme);
         set({
+          theme,
           shortcutsOff,
           deleteConfirm,
           bookPickerView,

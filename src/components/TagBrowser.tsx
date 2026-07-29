@@ -96,7 +96,7 @@ export default function TagBrowser() {
                     className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-neutral-50"
                     onClick={() => openNote(n.rel_path)}
                   >
-                    <span className="w-20 shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 text-center text-[11px] text-neutral-500">
+                    <span className="w-20 shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 text-center text-2xs text-neutral-500">
                       {typeLabel(schemas, n.note_type)}
                     </span>
                     <span className="truncate text-sm">{n.title}</span>

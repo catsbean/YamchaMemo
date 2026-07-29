@@ -86,7 +86,7 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
           <p className="mb-1 text-xs font-semibold text-neutral-600">
             필수 frontmatter — 모든 노트에 자동으로 포함됩니다
           </p>
-          <ul className="text-[11px] leading-5 text-neutral-500">
+          <ul className="text-2xs leading-5 text-neutral-500">
             <li>
               <code className="text-neutral-700">date</code> — 작성일 (생성 시
               오늘 날짜로 자동 입력)

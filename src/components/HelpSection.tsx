@@ -113,7 +113,7 @@ export default function HelpSection() {
             ].map(([syntax, result]) => (
               <tr key={syntax} className="border-b border-neutral-100 align-top">
                 <td className="py-1 pr-3">
-                  <code className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-[11px] text-neutral-700">
+                  <code className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-2xs text-neutral-700">
                     {syntax}
                   </code>
                 </td>
@@ -132,7 +132,7 @@ export default function HelpSection() {
         <ul className="flex flex-col gap-1">
           {SHORTCUTS.map((s) => (
             <li key={s.id} className="flex items-baseline gap-2">
-              <kbd className="shrink-0 rounded border border-neutral-300 bg-neutral-50 px-1.5 py-0.5 font-mono text-[11px] text-neutral-700">
+              <kbd className="shrink-0 rounded border border-neutral-300 bg-neutral-50 px-1.5 py-0.5 font-mono text-2xs text-neutral-700">
                 {shortcutText(s)}
               </kbd>
               <span className="text-xs">{s.label}</span>
@@ -211,13 +211,13 @@ const B = ({ children }: { children: React.ReactNode }) => (
 );
 
 const Code = ({ children }: { children: React.ReactNode }) => (
-  <code className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-[11px] text-neutral-700">
+  <code className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-2xs text-neutral-700">
     {children}
   </code>
 );
 
 const Kbd = ({ children }: { children: React.ReactNode }) => (
-  <kbd className="rounded border border-neutral-300 bg-neutral-50 px-1 py-0.5 font-mono text-[10px] text-neutral-600">
+  <kbd className="rounded border border-neutral-300 bg-neutral-50 px-1 py-0.5 font-mono text-3xs text-neutral-600">
     {children}
   </kbd>
 );
