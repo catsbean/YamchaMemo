@@ -465,6 +465,67 @@ impl Vault {
 
     // ---------- 목록 ----------
 
+    /// 태그 이름 바꾸기 / 병합 → 바뀐 노트 수.
+    ///
+    /// 태그는 두 곳에 있다: frontmatter의 `tags` 배열과 본문의 인라인 `#태그`.
+    /// 둘 다 고쳐야 이름이 진짜 바뀐다.
+    /// `to`가 이미 있는 태그면 그게 곧 **병합**이다 (중복은 합쳐진다).
+    pub fn rename_tag(&self, from: &str, to: &str) -> Result<Vec<String>, CoreError> {
+        let from = from.trim();
+        let to = to.trim();
+        if from.is_empty() || to.is_empty() || from == to {
+            return Ok(Vec::new());
+        }
+        // 태그에 쓸 수 없는 글자를 막는다 (공백·# 등이 들어가면 다시 못 찾는다)
+        if to.chars().any(|c| !(c.is_alphanumeric() || "/-_".contains(c))) {
+            return Err(CoreError::Invalid(
+                "태그에는 글자·숫자와 - _ / 만 쓸 수 있습니다".into(),
+            ));
+        }
+
+        let mut changed = Vec::new();
+        for summary in self.list_notes()? {
+            let rel = summary.rel_path.clone();
+            let parsed = self.parse_full(&rel)?;
+            let mut fm = match serde_json::from_str::<Value>(&parsed.frontmatter_json) {
+                Ok(Value::Object(m)) => m,
+                _ => Map::new(),
+            };
+
+            // ① frontmatter의 tags 배열
+            let mut fm_hit = false;
+            if let Some(Value::Array(list)) = fm.get("tags").cloned() {
+                let mut out: Vec<Value> = Vec::new();
+                for v in list {
+                    let t = v.as_str().unwrap_or_default().to_string();
+                    let next = if t == from {
+                        fm_hit = true;
+                        to.to_string()
+                    } else {
+                        t
+                    };
+                    // 병합이면 같은 이름이 둘이 될 수 있다
+                    if !next.is_empty() && !out.iter().any(|x| x.as_str() == Some(next.as_str())) {
+                        out.push(Value::String(next));
+                    }
+                }
+                if fm_hit {
+                    fm.insert("tags".into(), Value::Array(out));
+                }
+            }
+
+            // ② 본문의 인라인 #태그
+            let body = replace_inline_tag(&parsed.body, from, to);
+            let body_hit = body != parsed.body;
+
+            if fm_hit || body_hit {
+                self.save_note(&rel, Value::Object(fm), &body)?;
+                changed.push(rel);
+            }
+        }
+        Ok(changed)
+    }
+
     pub fn list_notes(&self) -> Result<Vec<NoteSummary>, CoreError> {
         let mut out = Vec::new();
         for t in &self.types {
@@ -2397,5 +2458,74 @@ mod tests {
         let p = v.save_pasted_image(b"img-bytes", "png").unwrap();
         assert!(p.contains("/paste-"));
         assert!(v.root().join(&p).exists());
+    }
+
+    #[test]
+    fn rename_tag_fixes_frontmatter_and_inline() {
+        let (_d, v) = vault();
+        let a = v.create_note("free", "가", json!({"tags": ["클린", "독서"]})).unwrap();
+        v.save_note(&a, json!({"tags": ["클린", "독서"]}), "본문에 #클린 그리고 #클린코드")
+            .unwrap();
+        let b = v.create_note("free", "나", json!({})).unwrap();
+        v.save_note(&b, json!({}), "여기는 #클린 하나만").unwrap();
+        let c = v.create_note("free", "다", json!({})).unwrap();
+        v.save_note(&c, json!({}), "상관 없는 글").unwrap();
+
+        let changed = v.rename_tag("클린", "청소").unwrap();
+        assert_eq!(changed.len(), 2, "상관 없는 노트는 건드리지 않는다");
+
+        let pa = v.parse_full(&a).unwrap();
+        assert!(pa.body.contains("#청소"), "인라인 태그가 바뀐다");
+        assert!(
+            pa.body.contains("#클린코드"),
+            "더 긴 태그(#클린코드)는 함께 바뀌지 않는다"
+        );
+        assert!(pa.tags.contains(&"청소".to_string()));
+        assert!(!pa.tags.contains(&"클린".to_string()));
+
+        let pb = v.parse_full(&b).unwrap();
+        assert!(pb.body.contains("#청소"));
+    }
+
+    #[test]
+    fn rename_tag_into_existing_merges() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "가", json!({})).unwrap();
+        v.save_note(&rel, json!({"tags": ["독서", "책"]}), "본문").unwrap();
+
+        v.rename_tag("책", "독서").unwrap();
+
+        let p = v.parse_full(&rel).unwrap();
+        let count = p.tags.iter().filter(|t| *t == "독서").count();
+        assert_eq!(count, 1, "병합하면 중복이 남지 않는다");
+        assert!(!p.tags.contains(&"책".to_string()));
+    }
+
+    #[test]
+    fn rename_tag_rejects_bad_name() {
+        let (_d, v) = vault();
+        assert!(v.rename_tag("가", "빈 칸 있음").is_err());
+        assert!(v.rename_tag("가", "샵#포함").is_err());
+        // 같은 이름이거나 비었으면 조용히 아무 일도 안 한다
+        assert_eq!(v.rename_tag("가", "가").unwrap().len(), 0);
+        assert_eq!(v.rename_tag("", "나").unwrap().len(), 0);
+    }
+
+}
+
+/// 본문의 인라인 `#from`을 `#to`로 바꾼다.
+/// `#클린` 을 바꿀 때 `#클린코드` 가 함께 바뀌지 않도록 뒤 글자까지 확인한다.
+fn replace_inline_tag(body: &str, from: &str, to: &str) -> String {
+    // `(?m)`이 있어야 `$`가 줄 끝을 가리킨다 — 태그는 보통 줄 끝에 있다.
+    // regex 크레이트에는 look-around가 없어서 뒤 글자를 잡아 두고 그대로 되돌려 붙인다.
+    let pattern = format!(
+        r"(?m)(^|\s)#{}([^\p{{L}}\p{{N}}/_-]|$)",
+        regex::escape(from)
+    );
+    match regex::Regex::new(&pattern) {
+        Ok(re) => re
+            .replace_all(body, format!("${{1}}#{to}${{2}}").as_str())
+            .into_owned(),
+        Err(_) => body.to_string(),
     }
 }

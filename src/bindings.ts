@@ -327,6 +327,18 @@ async getTags() : Promise<Result<TagCount[], string>> {
 }
 },
 /**
+ * 태그 이름 바꾸기 / 병합 → 바뀐 노트 수.
+ * `to`가 이미 쓰이는 태그면 그게 곧 병합이다.
+ */
+async renameTag(from: string, to: string) : Promise<Result<number, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("rename_tag", { from, to }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 특정 태그가 달린 노트들
  */
 async notesByTag(tag: string) : Promise<Result<NoteRef[], string>> {

@@ -985,6 +985,25 @@ pub fn get_backlinks_detailed(
     })
 }
 
+/// 태그 이름 바꾸기 / 병합 → 바뀐 노트 수.
+/// `to`가 이미 쓰이는 태그면 그게 곧 병합이다.
+#[tauri::command]
+#[specta::specta]
+pub fn rename_tag(state: State<'_, AppState>, from: String, to: String) -> Result<u32, String> {
+    with_ctx(&state, |c| {
+        let changed = c.vault.rename_tag(&from, &to)?;
+        // 바뀐 노트만 다시 색인한다 (전체 재색인은 비싸다)
+        for rel in &changed {
+            let rel = rel.clone();
+            let parsed = c.vault.parse_full(&rel)?;
+            c.indexer.upsert(&parsed)?;
+            c.search.upsert(&parsed)?;
+        }
+        c.search.commit()?;
+        Ok(changed.len() as u32)
+    })
+}
+
 /// 전체 태그와 사용 횟수
 #[tauri::command]
 #[specta::specta]
