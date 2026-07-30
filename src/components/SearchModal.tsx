@@ -38,6 +38,51 @@ function Highlight({ text, query }: { text: string; query: string }) {
  *  (EnrichDialog의 Progress와 같은 관례). */
 type FileIndexProgress = { done: number; total: number; current: string };
 
+/** 켜고 끄는 것임이 한눈에 보이는 스위치.
+ *  칩(필터)과 구분되어야 해서 손잡이가 움직이는 트랙을 단다. */
+function Switch({
+  on,
+  label,
+  title,
+  color,
+  onClick,
+}: {
+  on: boolean;
+  label: string;
+  title: string;
+  color: "sky" | "emerald";
+  onClick: () => void;
+}) {
+  const onBg = color === "sky" ? "bg-sky-600" : "bg-emerald-600";
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      title={title}
+      onClick={onClick}
+      className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs transition-colors ${
+        on
+          ? `border-transparent ${onBg} text-white`
+          : "border-neutral-300 text-neutral-600 hover:bg-neutral-100"
+      }`}
+    >
+      <span
+        className={`relative inline-block h-3 w-6 shrink-0 rounded-full transition-colors ${
+          on ? "bg-white/40" : "bg-neutral-300"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-2 w-2 rounded-full bg-white transition-all ${
+            on ? "left-3.5" : "left-0.5"
+          }`}
+        />
+      </span>
+      {label}
+    </button>
+  );
+}
+
 /** 파일 이름에서 확장자 배지 문자열 */
 function extOf(name: string): string {
   const i = name.lastIndexOf(".");
@@ -133,7 +178,11 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
       }
 
       // 2단계: 첨부 문서. 노트 결과를 이미 그린 뒤에 뒤에 붙인다.
-      if (!searchInFiles) return;
+      if (!searchInFiles) {
+        // 토글을 끄면 지난 결과를 비운다 — 남겨 두면 "결과가 없습니다"가 가려진다
+        setFileHits([]);
+        return;
+      }
       setFilesLoading(true);
       const f = await commands.search(query, {
         types,
@@ -236,42 +285,9 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
               {s.label}
             </button>
           ))}
-          <button
-            className={`ml-auto rounded-full px-2.5 py-0.5 text-xs ${
-              searchFuzzy
-                ? "bg-sky-600 text-white"
-                : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
-            }`}
-            title="오타와 초성을 견디는 검색 (ㅋㄹㅋㄷ → 클린 코드). 정확히 맞는 결과가 늘 위에 옵니다."
-            onClick={() => toggleSearchFuzzy()}
-          >
-            ≈ 오타 허용
-          </button>
-          <button
-            className={`rounded-full px-2.5 py-0.5 text-xs ${
-              searchInFiles
-                ? "bg-emerald-600 text-white"
-                : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
-            }`}
-            title="첨부한 pdf·hwp·오피스 문서의 본문까지 찾습니다. 처음 켤 때 문서를 한 번 읽습니다."
-            onClick={() => toggleSearchInFiles()}
-          >
-            📄 파일 속
-          </button>
-          <select
-            className="rounded border border-neutral-300 px-2 py-0.5 text-xs focus:border-neutral-500 focus:outline-none"
-            value={days}
-            onChange={(e) => setDays(Number(e.target.value))}
-          >
-            {PERIODS.map(([v, label]) => (
-              <option key={v} value={v}>
-                {label}
-              </option>
-            ))}
-          </select>
           {filterCount > 0 && (
             <button
-              className="text-xs text-neutral-500 underline hover:text-neutral-800"
+              className="ml-auto text-xs text-neutral-500 underline hover:text-neutral-800"
               onClick={() => {
                 setTypes([]);
                 setDays(0);
@@ -281,6 +297,35 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
               초기화
             </button>
           )}
+        </div>
+
+        {/* 검색 방식 — 분류 칩(필터)과 줄을 나눠 성격이 다름을 드러낸다 */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-neutral-100 px-4 py-2">
+          <Switch
+            on={searchFuzzy}
+            label="오타 허용"
+            color="sky"
+            title="오타와 초성을 견디는 검색 (ㄱㅇㅁ → 구운몽). 정확히 맞는 결과가 늘 위에 옵니다."
+            onClick={() => toggleSearchFuzzy()}
+          />
+          <Switch
+            on={searchInFiles}
+            label="첨부내용검색"
+            color="emerald"
+            title="첨부한 pdf·hwp·오피스 문서의 본문까지 찾습니다. 처음 켤 때 문서를 한 번 읽습니다."
+            onClick={() => toggleSearchInFiles()}
+          />
+          <select
+            className="ml-auto rounded border border-neutral-300 px-2 py-0.5 text-xs focus:border-neutral-500 focus:outline-none"
+            value={days}
+            onChange={(e) => setDays(Number(e.target.value))}
+          >
+            {PERIODS.map(([v, label]) => (
+              <option key={v} value={v}>
+                {label}
+              </option>
+            ))}
+          </select>
         </div>
 
         {tagList.length > 0 && (
