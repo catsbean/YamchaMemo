@@ -75,7 +75,8 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
       return;
     }
     const t = setTimeout(async () => {
-      const r = await commands.search(query, { types, days, tags });
+      // 1단계 — 노트 결과. 첨부 검색(2단계)은 5-3에서 붙는다.
+      const r = await commands.search(query, { types, days, tags, scope: "Notes" });
       if (r.status === "ok") {
         setHits(r.data);
         setSelected(0);

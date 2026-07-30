@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
-use tantivy::query::QueryParser;
+use tantivy::query::{BooleanQuery, Occur, Query, QueryParser, TermQuery};
 use tantivy::schema::{
     IndexRecordOption, Schema, TextFieldIndexing, TextOptions, Value, STORED, STRING,
 };
@@ -15,6 +15,10 @@ use tantivy::{doc, Index, IndexReader, IndexWriter, TantivyDocument, Term};
 
 use crate::error::CoreError;
 use crate::vault::ParsedNote;
+
+/// 첨부 문서를 노트와 구별하는 타입 id. 스키마를 늘리지 않으려고
+/// 기존 `type` 필드를 재활용한다 (필터·일괄 삭제가 이 한 값으로 다 된다).
+pub const FILE_TYPE: &str = "_file";
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct SearchHit {
@@ -26,6 +30,20 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
+/// 검색 대상. 노트와 첨부 문서를 **따로** 묻는다.
+///
+/// 같이 묻지 않는 이유: 첨부 검색은 노트 검색보다 훨씬 비싸다(거대한 본문의 발췌 생성).
+/// 화면은 노트 결과를 먼저 그리고 첨부 결과를 뒤에 붙인다 — 첫 응답이 첨부 때문에
+/// 늦어지지 않는다.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, specta::Type)]
+pub enum SearchScope {
+    /// 노트만 (첨부가 색인돼 있어도 제외) — 기존 동작
+    #[default]
+    Notes,
+    /// 첨부 문서만
+    Files,
+}
+
 /// 검색 결과를 좁히는 조건. 모두 비어 있으면 필터 없음(기존 동작).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, specta::Type)]
 pub struct SearchFilter {
@@ -35,11 +53,21 @@ pub struct SearchFilter {
     pub days: u32,
     /// 이 태그 중 하나라도 가진 노트만 (비면 전체)
     pub tags: Vec<String>,
+    /// 노트를 볼지 첨부를 볼지
+    pub scope: SearchScope,
 }
 
 impl SearchFilter {
+    /// 후필터가 실제로 걸리는지. 걸리면 색인에서 넉넉히 받아 와야 한다.
+    /// (scope는 후필터가 아니라 색인 쿼리로 표현하므로 여기 없다)
     fn is_active(&self) -> bool {
-        !self.types.is_empty() || self.days > 0 || !self.tags.is_empty()
+        match self.scope {
+            SearchScope::Notes => {
+                !self.types.is_empty() || self.days > 0 || !self.tags.is_empty()
+            }
+            // 첨부에는 타입·태그가 없다 — 기간만 후필터로 남는다
+            SearchScope::Files => self.days > 0,
+        }
     }
 
     /// `days`를 기준 날짜 문자열로 (없으면 None)
@@ -192,9 +220,28 @@ impl SearchEngine {
         parser.set_field_boost(self.f_tags, 2.0);
         let (q, _errors) = parser.parse_query_lenient(query);
 
+        // scope는 색인 쿼리로 표현한다. 후필터로 하면 걸러질 문서의 본문까지
+        // 압축 해제하게 되고, 본문이 수만~20만 자인 첨부에서는 그 비용이 검색 시간을
+        // 지배한다 (실측: 후필터 62ms → 쿼리 절)
+        let file_term: Box<dyn Query> = Box::new(TermQuery::new(
+            Term::from_field_text(self.f_type, FILE_TYPE),
+            IndexRecordOption::Basic,
+        ));
+        let q: Box<dyn Query> = match filter.scope {
+            SearchScope::Notes => Box::new(BooleanQuery::new(vec![
+                (Occur::Must, q),
+                (Occur::MustNot, file_term),
+            ])),
+            SearchScope::Files => Box::new(BooleanQuery::new(vec![
+                (Occur::Must, q),
+                (Occur::Must, file_term),
+            ])),
+        };
+
         let active = filter.is_active();
         let fetch = if active { (limit * 4).max(200) } else { limit };
         let since = filter.since_date();
+        let note_filters = filter.scope == SearchScope::Notes;
 
         let searcher = self.reader.searcher();
         let top = searcher.search(&q, &TopDocs::with_limit(fetch))?;
@@ -208,7 +255,7 @@ impl SearchEngine {
                     .to_string()
             };
             let note_type = get(self.f_type);
-            if !filter.types.is_empty() && !filter.types.contains(&note_type) {
+            if note_filters && !filter.types.is_empty() && !filter.types.contains(&note_type) {
                 continue;
             }
             let date = get(self.f_date);
@@ -218,7 +265,7 @@ impl SearchEngine {
                     continue;
                 }
             }
-            if !filter.tags.is_empty() {
+            if note_filters && !filter.tags.is_empty() {
                 let tags = get(self.f_tags);
                 let has = filter
                     .tags
@@ -244,52 +291,84 @@ impl SearchEngine {
     }
 }
 
-/// 쿼리 토큰이 처음 등장하는 위치 주변의 본문 발췌 (문자 단위, 한글 안전)
+/// 쿼리 토큰이 처음 등장하는 위치 주변의 본문 발췌.
+///
+/// 첨부 문서 본문은 20만 자까지 갈 수 있어서 **본문을 복사하지 않는다**.
+/// 바이트 단위로 훑어 위치만 찾고, 그 주변만 잘라 낸다 (실측: 62ms → 6ms).
 fn excerpt(body: &str, query: &str) -> String {
     const RADIUS: usize = 50;
     const NO_MATCH_LEN: usize = 100;
 
     let body = body.trim();
-    let hay: Vec<char> = body.chars().collect();
-    if hay.is_empty() {
+    if body.is_empty() {
         return String::new();
     }
-    // 1:1 소문자 매핑 (한글은 그대로, ASCII는 소문자)
-    let hay_lower: Vec<char> = hay
-        .iter()
-        .map(|c| c.to_lowercase().next().unwrap_or(*c))
-        .collect();
 
-    let mut found: Option<(usize, usize)> = None;
-    for token in query.split_whitespace() {
-        let needle: Vec<char> = token
-            .chars()
-            .map(|c| c.to_lowercase().next().unwrap_or(c))
-            .collect();
-        if needle.is_empty() || needle.len() > hay_lower.len() {
-            continue;
-        }
-        if let Some(p) = hay_lower
-            .windows(needle.len())
-            .position(|w| w == needle.as_slice())
-        {
-            found = Some((p, needle.len()));
-            break;
-        }
-    }
+    let found = query
+        .split_whitespace()
+        .filter(|t| !t.is_empty())
+        .find_map(|t| find_ci(body, t).map(|p| (p, t.len())));
 
     let (start, end) = match found {
-        Some((p, len)) => (p.saturating_sub(RADIUS), (p + len + RADIUS).min(hay.len())),
-        None => (0, NO_MATCH_LEN.min(hay.len())),
+        Some((pos, len)) => (
+            back_chars(body, pos, RADIUS),
+            fwd_chars(body, pos + len, RADIUS),
+        ),
+        None => (0, fwd_chars(body, 0, NO_MATCH_LEN)),
     };
-    let mut s: String = hay[start..end].iter().collect::<String>().replace('\n', " ");
+    let mut s = body[start..end].replace('\n', " ");
     if start > 0 {
-        s = format!("…{s}");
+        s.insert(0, '…');
     }
-    if end < hay.len() {
+    if end < body.len() {
         s.push('…');
     }
     s
+}
+
+/// ASCII 대소문자만 무시하는 부분 문자열 검색 (바이트 오프셋).
+/// 한글은 대소문자가 없으므로 이 정도로 충분하다.
+/// UTF-8은 자기동기적이라 이어지는 바이트가 선두 바이트와 같을 수 없어
+/// 경계가 아닌 곳에서 매치가 시작될 수 없다 — 그래도 한 번 더 확인한다.
+fn find_ci(hay: &str, needle: &str) -> Option<usize> {
+    let h = hay.as_bytes();
+    let n = needle.as_bytes();
+    if n.is_empty() || n.len() > h.len() {
+        return None;
+    }
+    let first = n[0].to_ascii_lowercase();
+    for i in 0..=(h.len() - n.len()) {
+        if h[i].to_ascii_lowercase() != first {
+            continue;
+        }
+        if h[i..i + n.len()]
+            .iter()
+            .zip(n)
+            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+            && hay.is_char_boundary(i)
+        {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// `from`에서 문자 `n`개 뒤로 간 바이트 위치
+fn back_chars(s: &str, from: usize, n: usize) -> usize {
+    let mut bytes = 0;
+    for c in s[..from].chars().rev().take(n) {
+        bytes += c.len_utf8();
+    }
+    from - bytes
+}
+
+/// `from`에서 문자 `n`개 앞으로 간 바이트 위치
+fn fwd_chars(s: &str, from: usize, n: usize) -> usize {
+    let mut bytes = 0;
+    for c in s[from..].chars().take(n) {
+        bytes += c.len_utf8();
+    }
+    from + bytes
 }
 
 #[cfg(test)]
@@ -307,6 +386,160 @@ mod tests {
             links: vec![],
             body: body.into(),
             frontmatter_json: "{}".into(),
+        }
+    }
+
+    // ---- 규모 벤치 (기본 제외, 수동 실행) ----
+    // cargo test -p yamcha-core search_scale_bench -- --ignored --nocapture
+    //
+    // 첨부 문서를 색인에 넣으면 검색이 느려지는지 재는 것이 목적이다.
+    // 노트만 있는 인덱스와 노트+첨부 인덱스를 같은 쿼리로 비교한다.
+
+    /// 결정적 난수 (매 실행 같은 코퍼스)
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self, n: usize) -> usize {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (self.0 >> 33) as usize % n
+        }
+    }
+
+    const WORDS: &[&str] = &[
+        "독서", "기록", "오늘", "생각", "코드", "설계", "검색", "문서", "회의", "계획",
+        "정리", "메모", "일정", "공고", "면적", "청약", "신청", "자료", "보고", "요약",
+        "학습", "연습", "구현", "확인", "측정", "개선", "문제", "해결", "방법", "결과",
+        "프로젝트", "인덱스", "토크나이저", "마크다운", "템플릿", "백링크", "첨부파일", "소나기",
+    ];
+
+    fn gen_text(rng: &mut Lcg, chars: usize) -> String {
+        let mut s = String::with_capacity(chars * 3);
+        while s.chars().count() < chars {
+            for _ in 0..10 {
+                s.push_str(WORDS[rng.next(WORDS.len())]);
+                s.push(' ');
+            }
+            s.push('\n');
+        }
+        s
+    }
+
+    fn file_doc(rel: &str, title: &str, body: String, date: &str) -> ParsedNote {
+        ParsedNote {
+            rel_path: rel.into(),
+            note_type: "_file".into(),
+            title: title.into(),
+            stem: title.into(),
+            date: date.into(),
+            tags: vec![],
+            links: vec![],
+            body,
+            frontmatter_json: "{}".into(),
+        }
+    }
+
+    const NOTES: usize = 2_000;
+    const NOTE_CHARS: usize = 1_200;
+    const FILES: usize = 150;
+    const FILE_CHARS: usize = 30_000; // 실측 평균 31,326자
+    const BIG_FILES: usize = 5;
+    const BIG_CHARS: usize = 200_000; // 상한까지 찬 문서
+
+    fn build(with_files: bool) -> (tempfile::TempDir, SearchEngine, u128) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = SearchEngine::open(dir.path()).unwrap();
+        let mut rng = Lcg(42);
+        let t = std::time::Instant::now();
+        for i in 0..NOTES {
+            let body = gen_text(&mut rng, NOTE_CHARS);
+            let mut n = note(
+                &format!("Free/노트{i}.md"),
+                &format!("노트 {i} {}", WORDS[i % WORDS.len()]),
+                &body,
+                &["일상"],
+            );
+            n.date = format!("2026-{:02}-{:02}", (i % 12) + 1, (i % 28) + 1);
+            s.upsert(&n).unwrap();
+        }
+        if with_files {
+            for i in 0..FILES {
+                let body = gen_text(&mut rng, FILE_CHARS);
+                s.upsert(&file_doc(
+                    &format!("_attachments/2026-07/문서{i}.pdf"),
+                    &format!("문서{i}.pdf"),
+                    body,
+                    "2026-07-01",
+                ))
+                .unwrap();
+            }
+            for i in 0..BIG_FILES {
+                let body = gen_text(&mut rng, BIG_CHARS);
+                s.upsert(&file_doc(
+                    &format!("_attachments/2026-07/큰문서{i}.hwp"),
+                    &format!("큰문서{i}.hwp"),
+                    body,
+                    "2026-07-02",
+                ))
+                .unwrap();
+            }
+        }
+        s.commit().unwrap();
+        (dir, s, t.elapsed().as_millis())
+    }
+
+    fn dir_size(p: &std::path::Path) -> u64 {
+        std::fs::read_dir(p)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter_map(|e| e.metadata().ok())
+                    .map(|m| m.len())
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+
+    fn time_query(s: &SearchEngine, q: &str, f: &SearchFilter, runs: usize) -> (u128, usize) {
+        // 첫 회는 캐시 워밍
+        let hits = s.search_filtered(q, f, 50).unwrap().len();
+        let t = std::time::Instant::now();
+        for _ in 0..runs {
+            let _ = s.search_filtered(q, f, 50).unwrap();
+        }
+        (t.elapsed().as_micros() / runs as u128, hits)
+    }
+
+    #[test]
+    #[ignore]
+    fn search_scale_bench() {
+        let queries = ["독서", "클린 코드", "소나기 이야기", "토크나이저"];
+
+        for with_files in [false, true] {
+            let (dir, s, index_ms) = build(with_files);
+            let docs = if with_files {
+                NOTES + FILES + BIG_FILES
+            } else {
+                NOTES
+            };
+            println!(
+                "\n=== {} — 문서 {docs}개, 색인 {index_ms}ms, 인덱스 {:.1}MB ===",
+                if with_files { "노트+첨부" } else { "노트만" },
+                dir_size(dir.path()) as f64 / 1_048_576.0
+            );
+            for q in queries {
+                let (us, hits) = time_query(&s, q, &SearchFilter::default(), 20);
+                println!("  전체   {q:<12} {us:>7}µs  {hits}건");
+            }
+            if with_files {
+                let only_files = SearchFilter {
+                    scope: SearchScope::Files,
+                    ..Default::default()
+                };
+                for q in queries {
+                    let (us, hits) = time_query(&s, q, &only_files, 20);
+                    println!("  첨부만 {q:<12} {us:>7}µs  {hits}건");
+                }
+                // 노트 검색이 첨부 때문에 느려지지 않는지가 이 벤치의 핵심 질문이다
+                // (첫 페인트는 노트 결과만 기다린다)
+            }
         }
     }
 
@@ -380,6 +613,79 @@ mod tests {
         // 태그 검색
         let hits = s.search("독서", 10).unwrap();
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn scope_separates_notes_and_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = SearchEngine::open(dir.path()).unwrap();
+        s.upsert(&note("Free/메모.md", "독서 메모", "책 이야기", &["독서"]))
+            .unwrap();
+        s.upsert(&file_doc(
+            "_attachments/2026-07/독서목록.pdf",
+            "독서목록.pdf",
+            "책 이야기가 담긴 문서".into(),
+            "2026-07-01",
+        ))
+        .unwrap();
+        s.commit().unwrap();
+
+        // 기본(Notes) — 첨부는 안 나온다. 첨부를 색인해도 기존 동작이 그대로다.
+        let hits = s.search("독서", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].rel_path, "Free/메모.md");
+
+        // Files — 첨부만 나온다
+        let files = SearchFilter {
+            scope: SearchScope::Files,
+            ..Default::default()
+        };
+        let hits = s.search_filtered("독서", &files, 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].rel_path, "_attachments/2026-07/독서목록.pdf");
+        assert_eq!(hits[0].note_type, FILE_TYPE);
+
+        // 첨부 검색에는 노트용 타입·태그 필터가 끼어들지 않는다
+        // (화면의 타입 칩이 걸려 있어도 첨부 결과가 사라지면 안 된다)
+        let files_with_note_filters = SearchFilter {
+            types: vec!["daily".into()],
+            tags: vec!["없는태그".into()],
+            scope: SearchScope::Files,
+            ..Default::default()
+        };
+        let hits = s
+            .search_filtered("독서", &files_with_note_filters, 10)
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+
+        // 기간 필터는 첨부에도 걸린다
+        let old_only = SearchFilter {
+            days: 1,
+            scope: SearchScope::Files,
+            ..Default::default()
+        };
+        assert!(s.search_filtered("독서", &old_only, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn excerpt_finds_match_in_long_body() {
+        // 첨부 문서만큼 긴 본문에서도 매치 주변을 뽑아낸다
+        let mut body = "가나다라마 ".repeat(20_000); // 12만 자
+        body.push_str("찾을말 이 뒤에 있다");
+        let s = excerpt(&body, "찾을말");
+        assert!(s.contains("찾을말"));
+        assert!(s.starts_with('…'));
+        assert!(s.chars().count() < 130, "발췌가 너무 길다: {}", s.chars().count());
+
+        // 매치가 없으면 앞부분
+        let s = excerpt(&body, "없는말");
+        assert!(s.starts_with("가나다라마"));
+        assert!(s.ends_with('…'));
+
+        // ASCII 대소문자 무시
+        assert!(excerpt("Hello World", "world").contains("World"));
+        // 여러 토큰 중 하나만 있어도 그 자리를 잡는다
+        assert!(excerpt("앞부분 그리고 목표어 뒷부분", "없는말 목표어").contains("목표어"));
     }
 
     #[test]
