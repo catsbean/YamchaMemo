@@ -76,6 +76,9 @@ interface VaultStore {
   /** 할 일 구역을 크게 볼지 (기록 영역과 비율을 뒤집는다) */
   todoBig: boolean;
   toggleTodoBig(): Promise<void>;
+  /** 검색에서 오타·초성을 견딜지 (검색창 토글) */
+  searchFuzzy: boolean;
+  toggleSearchFuzzy(): Promise<void>;
   /** 일지 빠른 입력 바의 종류 순서 — 기본 종류는 DailyKind 값, 사용자 정의는 그 이름.
    *  여기 없는 종류(나중에 만든 것)는 뒤에 붙는다. */
   dailyKindOrder: string[];
@@ -254,6 +257,13 @@ export const useVault = create<VaultStore>((set, get) => {
       const store = await settings();
       await store.set("todoBig", v);
     },
+    searchFuzzy: false,
+    async toggleSearchFuzzy() {
+      const v = !get().searchFuzzy;
+      set({ searchFuzzy: v });
+      const store = await settings();
+      await store.set("searchFuzzy", v);
+    },
     todoPanel: "bottom",
     async setTodoPanel(v) {
       set({ todoPanel: v });
@@ -343,6 +353,7 @@ export const useVault = create<VaultStore>((set, get) => {
         const todoPanel =
           (await store.get<"bottom" | "right">("todoPanel")) ?? "bottom";
         const todoBig = (await store.get<boolean>("todoBig")) ?? false;
+        const searchFuzzy = (await store.get<boolean>("searchFuzzy")) ?? false;
         const dailyKindOrder =
           (await store.get<string[]>("dailyKindOrder")) ??
           DEFAULT_DAILY_KIND_ORDER;
@@ -359,6 +370,7 @@ export const useVault = create<VaultStore>((set, get) => {
           historyIntervalSecs,
           todoPanel,
           todoBig,
+          searchFuzzy,
           dailyKindOrder,
         });
         const saved = (await store.get<string>("vaultPath")) ?? null;

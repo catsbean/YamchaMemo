@@ -42,6 +42,8 @@ const PERIODS: [number, string][] = [
 export default function SearchModal({ onClose }: { onClose: () => void }) {
   const openNote = useVault((s) => s.openNote);
   const schemas = useVault((s) => s.schemas);
+  const searchFuzzy = useVault((s) => s.searchFuzzy);
+  const toggleSearchFuzzy = useVault((s) => s.toggleSearchFuzzy);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [selected, setSelected] = useState(0);
@@ -76,14 +78,20 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
     }
     const t = setTimeout(async () => {
       // 1단계 — 노트 결과. 첨부 검색(2단계)은 5-3에서 붙는다.
-      const r = await commands.search(query, { types, days, tags, scope: "Notes" });
+      const r = await commands.search(query, {
+        types,
+        days,
+        tags,
+        scope: "Notes",
+        fuzzy: searchFuzzy,
+      });
       if (r.status === "ok") {
         setHits(r.data);
         setSelected(0);
       }
     }, 150);
     return () => clearTimeout(t);
-  }, [query, types, days, tags]);
+  }, [query, types, days, tags, searchFuzzy]);
 
   function toggleType(id: string) {
     setTypes((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
@@ -137,8 +145,19 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
               {s.label}
             </button>
           ))}
+          <button
+            className={`ml-auto rounded-full px-2.5 py-0.5 text-xs ${
+              searchFuzzy
+                ? "bg-sky-600 text-white"
+                : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+            }`}
+            title="오타와 초성을 견디는 검색 (ㅋㄹㅋㄷ → 클린 코드). 정확히 맞는 결과가 늘 위에 옵니다."
+            onClick={() => toggleSearchFuzzy()}
+          >
+            ≈ 오타 허용
+          </button>
           <select
-            className="ml-auto rounded border border-neutral-300 px-2 py-0.5 text-xs focus:border-neutral-500 focus:outline-none"
+            className="rounded border border-neutral-300 px-2 py-0.5 text-xs focus:border-neutral-500 focus:outline-none"
             value={days}
             onChange={(e) => setDays(Number(e.target.value))}
           >

@@ -9,6 +9,7 @@ pub mod error;
 pub mod history;
 pub mod index_file;
 pub mod indexer;
+pub mod korean;
 pub mod mirror;
 pub mod parse;
 pub mod schema;

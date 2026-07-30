@@ -1087,24 +1087,36 @@ days: number;
 /**
  * 이 태그 중 하나라도 가진 노트만 (비면 전체)
  */
-tags: string[];
+tags: string[]; 
 /**
  * 노트를 볼지 첨부를 볼지
  */
-scope: SearchScope }
-export type SearchHit = { rel_path: string; note_type: string; title: string; date: string;
+scope: SearchScope; 
+/**
+ * 오타·초성을 견디는 검색. 끄면 지금까지의 정확 검색만 한다.
+ */
+fuzzy: boolean }
+export type SearchHit = { rel_path: string; note_type: string; title: string; date: string; 
 /**
  * 매치 주변 본문 발췌
  */
 snippet: string }
 /**
  * 검색 대상. 노트와 첨부 문서를 **따로** 묻는다.
- *
+ * 
  * 같이 묻지 않는 이유: 첨부 검색은 노트 검색보다 훨씬 비싸다(거대한 본문의 발췌 생성).
  * 화면은 노트 결과를 먼저 그리고 첨부 결과를 뒤에 붙인다 — 첫 응답이 첨부 때문에
  * 늦어지지 않는다.
  */
-export type SearchScope = "Notes" | "Files"
+export type SearchScope = 
+/**
+ * 노트만 (첨부가 색인돼 있어도 제외) — 기존 동작
+ */
+"Notes" | 
+/**
+ * 첨부 문서만
+ */
+"Files"
 /**
  * 첫 실행 화면에 제안할 저장 위치 (클라우드 동기화 폴더 등)
  */

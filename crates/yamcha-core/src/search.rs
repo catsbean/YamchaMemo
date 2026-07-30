@@ -14,11 +14,16 @@ use tantivy::tokenizer::{LowerCaser, NgramTokenizer, TextAnalyzer};
 use tantivy::{doc, Index, IndexReader, IndexWriter, TantivyDocument, Term};
 
 use crate::error::CoreError;
+use crate::korean;
 use crate::vault::ParsedNote;
 
 /// 첨부 문서를 노트와 구별하는 타입 id. 스키마를 늘리지 않으려고
 /// 기존 `type` 필드를 재활용한다 (필터·일괄 삭제가 이 한 값으로 다 된다).
 pub const FILE_TYPE: &str = "_file";
+
+
+/// 퍼지 검증에서 볼 본문 앞부분 길이 (문자)
+const FUZZY_BODY_SCAN: usize = 5_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct SearchHit {
@@ -55,6 +60,8 @@ pub struct SearchFilter {
     pub tags: Vec<String>,
     /// 노트를 볼지 첨부를 볼지
     pub scope: SearchScope,
+    /// 오타·초성을 견디는 검색. 끄면 지금까지의 정확 검색만 한다.
+    pub fuzzy: bool,
 }
 
 impl SearchFilter {
@@ -90,6 +97,8 @@ pub struct SearchEngine {
     f_tags: tantivy::schema::Field,
     f_type: tantivy::schema::Field,
     f_date: tantivy::schema::Field,
+    f_title_jamo: tantivy::schema::Field,
+    f_title_cho: tantivy::schema::Field,
 }
 
 impl From<tantivy::TantivyError> for CoreError {
@@ -109,6 +118,15 @@ fn bigram_text() -> TextOptions {
         TextFieldIndexing::default()
             .set_tokenizer("bigram")
             .set_index_option(IndexRecordOption::WithFreqsAndPositions),
+    )
+}
+
+/// 자모·초성 필드용. 저장하지 않고 색인만 한다 (원문은 title에 이미 있다).
+fn jamo_text() -> TextOptions {
+    TextOptions::default().set_indexing_options(
+        TextFieldIndexing::default()
+            .set_tokenizer("jamo")
+            .set_index_option(IndexRecordOption::Basic),
     )
 }
 
@@ -137,12 +155,25 @@ impl SearchEngine {
         let f_tags = b.add_text_field("tags", bigram_text().set_stored());
         let f_type = b.add_text_field("type", STRING | STORED);
         let f_date = b.add_text_field("date", STRING | STORED);
+        // 퍼지·초성용 제목 파생 필드. **제목만** 넣는다 —
+        // 본문까지 자모로 색인하면 인덱스가 몇 배가 되는데, 제목은 짧아서 거의 공짜다.
+        let f_title_jamo = b.add_text_field("title_jamo", jamo_text());
+        let f_title_cho = b.add_text_field("title_cho", jamo_text());
         let schema = b.build();
 
         let index = Index::open_or_create(MmapDirectory::open(dir)?, schema)?;
         index.tokenizers().register(
             "bigram",
             TextAnalyzer::builder(NgramTokenizer::new(1, 2, false).map_err(|e| {
+                CoreError::Invalid(format!("토크나이저 오류: {e}"))
+            })?)
+            .filter(LowerCaser)
+            .build(),
+        );
+        // 자모는 1그램이 의미가 없다(ㅏ 하나가 온 vault에 다 걸린다). 2~3그램으로.
+        index.tokenizers().register(
+            "jamo",
+            TextAnalyzer::builder(NgramTokenizer::new(2, 3, false).map_err(|e| {
                 CoreError::Invalid(format!("토크나이저 오류: {e}"))
             })?)
             .filter(LowerCaser)
@@ -160,6 +191,8 @@ impl SearchEngine {
             f_tags,
             f_type,
             f_date,
+            f_title_jamo,
+            f_title_cho,
         })
     }
 
@@ -173,6 +206,8 @@ impl SearchEngine {
             self.f_tags => note.tags.join(" "),
             self.f_type => note.note_type.clone(),
             self.f_date => note.date.clone(),
+            self.f_title_jamo => korean::to_jamo(&note.title),
+            self.f_title_cho => korean::chosung(&note.title),
         ))?;
         Ok(())
     }
@@ -199,8 +234,10 @@ impl SearchEngine {
         self.search_filtered(query, &SearchFilter::default(), limit)
     }
 
-    /// 필터를 건 검색. tantivy에는 넉넉히 물어보고 결과를 걸러 상위 `limit`만 돌려준다.
-    /// (필터 조건이 색인 쿼리로 표현되기엔 종류가 잡다해서, 후필터가 단순하고 정확하다.)
+    /// 필터를 건 검색.
+    ///
+    /// 두 번 묻는다 — 먼저 정확 검색, 결과가 모자라고 퍼지가 켜져 있으면 완화 검색.
+    /// 정확히 맞은 것이 늘 위에 오고, 퍼지로 건진 것이 그 뒤에 붙는다.
     pub fn search_filtered(
         &self,
         query: &str,
@@ -211,15 +248,161 @@ impl SearchEngine {
         if query.is_empty() {
             return Ok(vec![]);
         }
-        let mut parser = QueryParser::for_index(
-            &self.index,
-            vec![self.f_title, self.f_body, self.f_tags],
-        );
+        let searcher = self.reader.searcher();
+        // 초성 쿼리("ㅋㄹㅋㄷ")는 본문 색인에 아예 없는 문자라 정확 검색이 헛일이다
+        let chosung_only = filter.fuzzy && korean::is_chosung_query(query);
+
+        let mut out: Vec<SearchHit> = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
+
+        if !chosung_only {
+            let raws = self.fetch(&searcher, self.strict_query(query), filter, limit)?;
+            for r in raws.into_iter().take(limit) {
+                seen.push(r.rel_path.clone());
+                out.push(r.into_hit(query));
+            }
+        }
+
+        if filter.fuzzy && out.len() < limit {
+            let fuzzy_q = if chosung_only {
+                self.chosung_query(query)
+            } else {
+                self.relaxed_query(query)
+            };
+            if let Some(fq) = fuzzy_q {
+                // 후보를 넉넉히 받아 자모로 검증한다 (완화 쿼리는 회수용이라 헐겁다)
+                let raws = self.fetch(&searcher, fq, filter, limit * 2)?;
+                let mut scored: Vec<(f32, Raw)> = Vec::new();
+                for r in raws {
+                    if seen.contains(&r.rel_path) {
+                        continue;
+                    }
+                    let s = if chosung_only {
+                        chosung_score(query, &r.title)
+                    } else {
+                        fuzzy_score(query, &r)
+                    };
+                    if s > 0.0 {
+                        scored.push((s, r));
+                    }
+                }
+                // 닮은 순. 같으면 제목이 짧은 쪽이 더 정확한 매치다
+                scored.sort_by(|a, b| {
+                    b.0.partial_cmp(&a.0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(a.1.title.chars().count().cmp(&b.1.title.chars().count()))
+                });
+                for (_, r) in scored.into_iter().take(limit - out.len()) {
+                    out.push(r.into_hit(query));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// 지금까지의 검색 — 모든 n그램을 AND로 묶는다
+    fn strict_query(&self, query: &str) -> Box<dyn Query> {
+        let mut parser =
+            QueryParser::for_index(&self.index, vec![self.f_title, self.f_body, self.f_tags]);
         parser.set_conjunction_by_default();
         parser.set_field_boost(self.f_title, 3.0);
         parser.set_field_boost(self.f_tags, 2.0);
         let (q, _errors) = parser.parse_query_lenient(query);
+        q
+    }
 
+    /// 오타를 견디는 완화 검색. 전부 맞으라고 하지 않고 **오타 예산만큼 빠져도** 후보로 본다.
+    ///
+    /// 몇 개가 맞아야 하는지를 비율(예: 60%)로 정하지 않는다. 오타 하나가 망치는 그램 수가
+    /// 그램 크기마다 다르기 때문이다 — 음절 1그램은 1개, 자모 2~3그램은 5개(2그램 2 + 3그램 3)를
+    /// 한꺼번에 잃는다. 비율로 정하면 짧은 쿼리에서 오타 하나가 문턱을 넘지 못한다
+    /// (3음절 "소나키"는 1·2그램 5개 중 2개만 남아 60%를 못 넘는다).
+    ///
+    /// **본문·태그는 음절 1그램만 쓴다.** 2그램은 정확할 때만 도움이 되고 오타에는 해롭다.
+    /// 정밀도는 뒤의 자모 검증(`fuzzy_score`)이 담당한다.
+    fn relaxed_query(&self, query: &str) -> Option<Box<dyn Query>> {
+        let budget = korean::error_budget(query);
+        let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+
+        let uni = ngrams(query, 1, 1);
+        let need_uni = uni.len().saturating_sub(budget).max(1);
+        for (field, boost) in [
+            (self.f_title, 3.0),
+            (self.f_body, 1.0),
+            (self.f_tags, 2.0),
+        ] {
+            if let Some(q) = self.min_match_query(field, &uni, need_uni, boost) {
+                clauses.push((Occur::Should, q));
+            }
+        }
+
+        // 제목은 자모로도 물어본다 — 오타에 훨씬 강하다
+        let jamo = ngrams(&korean::to_jamo(query), 2, 3);
+        let need_jamo = jamo.len().saturating_sub(5 * budget).max(1);
+        if let Some(q) = self.min_match_query(self.f_title_jamo, &jamo, need_jamo, 4.0) {
+            clauses.push((Occur::Should, q));
+        }
+
+        if clauses.is_empty() {
+            return None;
+        }
+        Some(Box::new(BooleanQuery::new(clauses)))
+    }
+
+    /// 초성 검색 — 제목 초성 문자열에 쿼리 초성이 들어 있는 노트
+    fn chosung_query(&self, query: &str) -> Option<Box<dyn Query>> {
+        let cho = korean::chosung(query);
+        let grams = ngrams(&cho, 2, 3);
+        // 초성은 헐거우면 온 vault가 걸리므로 전부 맞으라고 한다
+        let terms: Vec<Box<dyn Query>> = grams
+            .iter()
+            .map(|g| {
+                Box::new(TermQuery::new(
+                    Term::from_field_text(self.f_title_cho, g),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>
+            })
+            .collect();
+        if terms.is_empty() {
+            return None;
+        }
+        Some(Box::new(BooleanQuery::intersection(terms)))
+    }
+
+    /// 그램 중 `need`개 이상 맞으면 되는 질의
+    fn min_match_query(
+        &self,
+        field: tantivy::schema::Field,
+        grams: &[String],
+        need: usize,
+        boost: f32,
+    ) -> Option<Box<dyn Query>> {
+        if grams.is_empty() {
+            return None;
+        }
+        let need = need.clamp(1, grams.len());
+        let terms: Vec<Box<dyn Query>> = grams
+            .iter()
+            .map(|g| {
+                Box::new(TermQuery::new(
+                    Term::from_field_text(field, g),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>
+            })
+            .collect();
+        let q = BooleanQuery::union_with_minimum_required_clauses(terms, need);
+        Some(Box::new(tantivy::query::BoostQuery::new(Box::new(q), boost)))
+    }
+
+    /// 질의 하나를 던져 필터를 통과한 문서들의 원본 필드를 모은다.
+    /// 발췌는 여기서 만들지 않는다 — 퍼지 후보는 버려질 수 있어서 헛일이 된다.
+    fn fetch(
+        &self,
+        searcher: &tantivy::Searcher,
+        q: Box<dyn Query>,
+        filter: &SearchFilter,
+        want: usize,
+    ) -> Result<Vec<Raw>, CoreError> {
         // scope는 색인 쿼리로 표현한다. 후필터로 하면 걸러질 문서의 본문까지
         // 압축 해제하게 되고, 본문이 수만~20만 자인 첨부에서는 그 비용이 검색 시간을
         // 지배한다 (실측: 후필터 62ms → 쿼리 절)
@@ -238,14 +421,16 @@ impl SearchEngine {
             ])),
         };
 
-        let active = filter.is_active();
-        let fetch = if active { (limit * 4).max(200) } else { limit };
+        let fetch = if filter.is_active() {
+            (want * 4).max(200)
+        } else {
+            want
+        };
         let since = filter.since_date();
         let note_filters = filter.scope == SearchScope::Notes;
 
-        let searcher = self.reader.searcher();
         let top = searcher.search(&q, &TopDocs::with_limit(fetch))?;
-        let mut out = Vec::with_capacity(top.len().min(limit));
+        let mut out = Vec::with_capacity(top.len().min(want));
         for (_score, addr) in top {
             let doc: TantivyDocument = searcher.doc(addr)?;
             let get = |f| {
@@ -265,8 +450,8 @@ impl SearchEngine {
                     continue;
                 }
             }
+            let tags = get(self.f_tags);
             if note_filters && !filter.tags.is_empty() {
-                let tags = get(self.f_tags);
                 let has = filter
                     .tags
                     .iter()
@@ -275,20 +460,99 @@ impl SearchEngine {
                     continue;
                 }
             }
-            let body = get(self.f_body);
-            out.push(SearchHit {
+            out.push(Raw {
                 rel_path: get(self.f_path),
                 note_type,
                 title: get(self.f_title),
                 date,
-                snippet: excerpt(&body, query),
+                tags,
+                body: get(self.f_body),
             });
-            if out.len() >= limit {
+            if out.len() >= want {
                 break;
             }
         }
         Ok(out)
     }
+}
+
+/// 검색 결과 후보의 원본 필드 (발췌 만들기 전)
+struct Raw {
+    rel_path: String,
+    note_type: String,
+    title: String,
+    date: String,
+    tags: String,
+    body: String,
+}
+
+impl Raw {
+    fn into_hit(self, query: &str) -> SearchHit {
+        SearchHit {
+            snippet: excerpt(&self.body, query),
+            rel_path: self.rel_path,
+            note_type: self.note_type,
+            title: self.title,
+            date: self.date,
+        }
+    }
+}
+
+/// 완화 쿼리로 건진 후보가 정말 "거의 같은 말"인지 자모로 검증하고 점수를 낸다.
+/// 0.0이면 버린다.
+///
+/// 본문은 앞 `FUZZY_BODY_SCAN`자까지만 본다 — 자모 편집거리는 O(쿼리×대상)이라
+/// 20만 자 첨부 본문을 매 후보마다 훑으면 타이핑 중에 체감된다.
+/// 찾는 말은 대개 제목이나 문서 앞머리에 있다.
+fn fuzzy_score(query: &str, r: &Raw) -> f32 {
+    let title = korean::best_window_similarity(query, &r.title);
+    if korean::is_near(query, &r.title) {
+        return 1.0 + title; // 제목이 맞은 것은 늘 본문보다 위
+    }
+    if !r.tags.is_empty() && korean::is_near(query, &r.tags) {
+        return 0.9;
+    }
+    let head: String = r.body.chars().take(FUZZY_BODY_SCAN).collect();
+    if korean::is_near(query, &head) {
+        return 0.5 + korean::best_window_similarity(query, &head) * 0.4;
+    }
+    0.0
+}
+
+/// 초성 검색 점수 — 제목 초성에 정말 들어 있는지 확인한다
+/// (색인 쿼리는 n그램 교집합이라 순서가 뒤바뀐 것도 통과할 수 있다)
+fn chosung_score(query: &str, title: &str) -> f32 {
+    let q = korean::chosung(query);
+    let t = korean::chosung(title);
+    if t.starts_with(&q) {
+        1.0
+    } else if t.contains(&q) {
+        0.9
+    } else {
+        0.0
+    }
+}
+
+/// 텍스트를 색인과 같은 방식으로 n그램으로 쪼갠다 (소문자화·중복 제거).
+/// 공백으로 끊어서 만든다 — 색인은 공백을 넘는 그램도 갖고 있지만,
+/// 쿼리 쪽에서 띄어쓰기에 기대면 "클린코드"와 "클린 코드"가 갈린다.
+fn ngrams(text: &str, min: usize, max: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for token in text.split_whitespace() {
+        let chars: Vec<char> = token.to_lowercase().chars().collect();
+        for n in min..=max {
+            if chars.len() < n {
+                continue;
+            }
+            for w in chars.windows(n) {
+                let g: String = w.iter().collect();
+                if !out.contains(&g) {
+                    out.push(g);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// 쿼리 토큰이 처음 등장하는 위치 주변의 본문 발췌.
@@ -526,7 +790,17 @@ mod tests {
             );
             for q in queries {
                 let (us, hits) = time_query(&s, q, &SearchFilter::default(), 20);
-                println!("  전체   {q:<12} {us:>7}µs  {hits}건");
+                println!("  노트   {q:<12} {us:>7}µs  {hits}건");
+            }
+            // 퍼지는 정확 검색이 결과를 다 채우면 완화 쿼리를 건너뛴다.
+            // 그래서 결과가 적은 쿼리(오타)에서만 값을 치른다 — 그걸 재야 한다.
+            let fz = SearchFilter {
+                fuzzy: true,
+                ..Default::default()
+            };
+            for q in ["독서", "토크나이져", "ㅌㅋㄴㅇㅈ", "코두 리뷰"] {
+                let (us, hits) = time_query(&s, q, &fz, 20);
+                println!("  퍼지   {q:<12} {us:>7}µs  {hits}건");
             }
             if with_files {
                 let only_files = SearchFilter {
@@ -665,6 +939,120 @@ mod tests {
             ..Default::default()
         };
         assert!(s.search_filtered("독서", &old_only, 10).unwrap().is_empty());
+    }
+
+    fn fuzzy() -> SearchFilter {
+        SearchFilter {
+            fuzzy: true,
+            ..Default::default()
+        }
+    }
+
+    fn vault_for_fuzzy() -> (tempfile::TempDir, SearchEngine) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = SearchEngine::open(dir.path()).unwrap();
+        s.upsert(&note(
+            "Free/클린 코드.md",
+            "클린 코드",
+            "좋은 코드에 대한 책",
+            &["독서"],
+        ))
+        .unwrap();
+        s.upsert(&note(
+            "Free/함께 자라기.md",
+            "함께 자라기",
+            "애자일 이야기",
+            &[],
+        ))
+        .unwrap();
+        s.upsert(&note(
+            "Daily/2026-07-30.md",
+            "2026-07-30",
+            "여름 소나기 이야기를 읽었다. 전용면적 84제곱미터.",
+            &["부동산"],
+        ))
+        .unwrap();
+        s.commit().unwrap();
+        (dir, s)
+    }
+
+    #[test]
+    fn fuzzy_off_is_exactly_old_behavior() {
+        let (_d, s) = vault_for_fuzzy();
+        // 오타는 안 잡힌다 (기존 동작)
+        assert!(s.search("클닌 코드", 10).unwrap().is_empty());
+        // 초성도 안 잡힌다
+        assert!(s.search("ㅋㄹㅋㄷ", 10).unwrap().is_empty());
+        // 정확한 말은 잡힌다
+        assert_eq!(s.search("클린", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fuzzy_finds_typo_in_title() {
+        let (_d, s) = vault_for_fuzzy();
+        let f = fuzzy();
+        let hits = s.search_filtered("클닌 코드", &f, 10).unwrap();
+        assert!(!hits.is_empty(), "오타를 못 찾았다");
+        assert_eq!(hits[0].rel_path, "Free/클린 코드.md");
+
+        // 자모 하나 틀린 다른 예
+        let hits = s.search_filtered("함께 자라키", &fuzzy(), 10).unwrap();
+        assert_eq!(hits[0].rel_path, "Free/함께 자라기.md");
+    }
+
+    #[test]
+    fn fuzzy_finds_typo_in_body() {
+        let (_d, s) = vault_for_fuzzy();
+        // 본문에 있는 "소나기"를 "소나키"로 잘못 쳤다
+        let hits = s
+            .search_filtered("소나키", &fuzzy(), 10)
+            .unwrap();
+        assert!(!hits.is_empty(), "본문 오타를 못 찾았다");
+        assert_eq!(hits[0].rel_path, "Daily/2026-07-30.md");
+    }
+
+    #[test]
+    fn chosung_search_finds_titles() {
+        let (_d, s) = vault_for_fuzzy();
+        let hits = s.search_filtered("ㅋㄹㅋㄷ", &fuzzy(), 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].rel_path, "Free/클린 코드.md");
+
+        let hits = s.search_filtered("ㅎㄲㅈㄹㄱ", &fuzzy(), 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].rel_path, "Free/함께 자라기.md");
+
+        // 없는 초성 조합은 아무것도 안 나온다
+        assert!(s
+            .search_filtered("ㅃㅃㅃ", &fuzzy(), 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn exact_matches_rank_above_fuzzy_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = SearchEngine::open(dir.path()).unwrap();
+        // 정확히 맞는 노트와, 오타로만 닮은 노트를 같이 둔다
+        s.upsert(&note("Free/a.md", "코드 리뷰", "리뷰 이야기", &[]))
+            .unwrap();
+        s.upsert(&note("Free/b.md", "코두 리뷰", "다른 이야기", &[]))
+            .unwrap();
+        s.commit().unwrap();
+
+        let hits = s.search_filtered("코드 리뷰", &fuzzy(), 10).unwrap();
+        assert_eq!(hits[0].rel_path, "Free/a.md", "정확 일치가 위여야 한다");
+        assert!(hits.len() >= 2, "퍼지 결과도 따라와야 한다");
+    }
+
+    #[test]
+    fn fuzzy_does_not_drag_in_unrelated_notes() {
+        let (_d, s) = vault_for_fuzzy();
+        // 아무 관계 없는 말은 퍼지를 켜도 결과가 없다
+        let hits = s
+            .search_filtered("양자컴퓨터", &fuzzy(), 10)
+            .unwrap();
+        assert!(hits.is_empty(), "관계 없는 노트가 끌려왔다: {hits:?}");
     }
 
     #[test]
