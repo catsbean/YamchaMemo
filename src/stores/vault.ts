@@ -213,6 +213,10 @@ export const useVault = create<VaultStore>((set, get) => {
     await get().refreshSchemas();
     await get().refresh();
     await get().refreshCallouts();
+    // vault를 바꾸면 색인이 새로 만들어진다 — 첨부 검색이 켜져 있으면 다시 채운다
+    if (get().searchInFiles) {
+      commands.buildFileIndex().catch(() => {});
+    }
   }
 
   return {
@@ -401,6 +405,11 @@ export const useVault = create<VaultStore>((set, get) => {
           // 오래된 휴지통 항목 자동 정리 (실패는 무시)
           if (trashRetentionDays > 0) {
             commands.purgeTrash(trashRetentionDays).catch(() => {});
+          }
+          // set_vault가 검색 색인을 비우고 노트만 다시 채우므로, 첨부 검색이 켜져 있으면
+          // 여기서 다시 채워야 한다. 추출 캐시가 있어 재추출은 없다(실측 105개 1.3초).
+          if (searchInFiles) {
+            commands.buildFileIndex().catch(() => {});
           }
           // 마지막 메뉴·노트 복원 (실패는 조용히 무시, 기본 home)
           try {

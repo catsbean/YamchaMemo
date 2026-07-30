@@ -551,9 +551,35 @@ mod tests {
             "노트 검색에 첨부가 섞였다"
         );
 
+        // 인덱스 크기 — "끄면 원래 크기로 돌아온다"가 실제로 그런지 본다
+        let index_dir = root.join(".yamcha/search");
+        let size_mb = |p: &std::path::Path| -> f64 {
+            fn walk(p: &std::path::Path) -> u64 {
+                std::fs::read_dir(p)
+                    .map(|rd| {
+                        rd.flatten()
+                            .map(|e| {
+                                let path = e.path();
+                                if path.is_dir() {
+                                    walk(&path)
+                                } else {
+                                    e.metadata().map(|m| m.len()).unwrap_or(0)
+                                }
+                            })
+                            .sum()
+                    })
+                    .unwrap_or(0)
+            }
+            walk(p) as f64 / 1_048_576.0
+        };
+        println!("첨부 켠 인덱스 {:.1}MB", size_mb(&index_dir));
+
         // 끄면 사라지고, 다시 켜면 재추출 없이 돌아온다
+        let t = std::time::Instant::now();
         drop_all(&mut s).unwrap();
+        println!("끄기 {}ms → 인덱스 {:.1}MB", t.elapsed().as_millis(), size_mb(&index_dir));
         assert!(s.search_filtered(&needle, &files, 50).unwrap().is_empty());
+
         let t = std::time::Instant::now();
         rebuild_from_cache(&v, &mut i, &mut s).unwrap();
         println!("재추출 없이 복구 {}ms", t.elapsed().as_millis());

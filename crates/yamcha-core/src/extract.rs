@@ -59,10 +59,6 @@ impl Status {
         }
     }
 
-    /// 다시 시도해 볼 가치가 있는지 (파일이 그대로일 때)
-    pub fn worth_retry(&self) -> bool {
-        false
-    }
 }
 
 pub struct Extracted {

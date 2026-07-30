@@ -25,7 +25,8 @@
 | 에디터 | CodeMirror 6 | `src/editor/` |
 | 코어 로직(Rust) | 순수 크레이트 (vault/파싱/인덱스/검색/템플릿) | `crates/yamcha-core/` |
 | Tauri 커맨드 | tauri-specta로 TS 바인딩 자동 생성 | `src-tauri/src/commands.rs` → `src/bindings.ts` |
-| 검색 | tantivy | `crates/yamcha-core/src/search.rs` |
+| 검색 | tantivy (1~2그램 + 자모 퍼지 + 초성) | `crates/yamcha-core/src/search.rs`, `korean.rs` |
+| 첨부 문서 검색 | 자체 hwp 파서 + pdf-extract·calamine·zip (feature `docs`) | `crates/yamcha-core/src/extract.rs`, `file_index.rs` |
 | HTTP | reqwest 0.12 (`json`, `gzip` feature) | `src-tauri/Cargo.toml:24` |
 | 설정 저장 | tauri-plugin-store → `settings.json` | `%APPDATA%\com.yamcha.memo\settings.json` |
 
@@ -41,6 +42,9 @@
 - `src-tauri/src/lib.rs` — `collect_commands![]` 등록부 (커맨드 추가 시 여기도 추가)
 - `src-tauri/src/watcher.rs` — vault 파일 감시, 자기쓰기 억제(전역 타임스탬프 2.5초)
 - `crates/yamcha-core/src/vault.rs` — 파일 CRUD, 휴지통(`.yamcha/trash`), 템플릿, 미러
+- `crates/yamcha-core/src/korean.rs` — 자모 분해·초성·오타 예산 (의존성 0, 퍼지 검색의 토대)
+- `crates/yamcha-core/src/extract.rs` — 첨부 문서 평문 추출 (hwp는 자체 파서, §9 참고)
+- `crates/yamcha-core/src/file_index.rs` — 첨부 색인 켜기/끄기, 추출 캐시(`doc_text`)
 
 ---
 
@@ -54,11 +58,21 @@
 ### 2.2 빌드/실행/테스트 명령
 ```bash
 pnpm tauri dev                      # 개발 실행 (Vite:1420 + cargo run). 파일 변경 자동 반영
-cargo test -p yamcha-core           # 코어 테스트 (현재 46개 통과)
-cargo test -p yamcha-app --lib      # 앱 테스트 (현재 8개 + ignored 1개)
+cargo test -p yamcha-core           # 코어 테스트 (현재 143개 통과 + ignored 3개)
+cargo test -p yamcha-app --lib      # 앱 테스트 (현재 14개 + ignored 2개)
 cargo test -p yamcha-app --lib kyobo_live_probe -- --ignored --nocapture   # 실네트워크 교보 검증
 npx tsc --noEmit -p tsconfig.json   # 프론트 타입체크
 npx vite build                      # 프론트 번들 검증
+```
+
+수동 실행용 측정·검증 테스트 (`--ignored`, **릴리스로 돌려야 수치가 의미 있다**):
+```bash
+# 검색 규모별 응답시간 (노트 2,000건 + 첨부 155건)
+cargo test -p yamcha-core --release search_scale_bench -- --ignored --nocapture
+# 실파일 하나 추출 확인 (바이너리 hwp는 fixture로 만들 수 없다)
+YAMCHA_DOC_SAMPLE=<파일경로> cargo test -p yamcha-core --release real_document -- --ignored --nocapture
+# 실제 vault로 첨부 색인 종단 확인
+YAMCHA_VAULT=<vault경로> YAMCHA_FIND=<찾을말> cargo test -p yamcha-core --release real_vault_end_to_end -- --ignored --nocapture
 ```
 ⚠️ **dev 서버 실행 중엔 cargo가 빌드 락에 걸림**("Blocking waiting for file lock"). 오래 걸리면 dev 서버를 먼저 종료하거나 기다린다. dev 서버는 rs 파일 변경 시 자동 재컴파일하므로, 코드 수정 → 테스트는 별도 `cargo test`로 돌리고 실행 확인은 dev 창에서 하면 된다.
 
@@ -246,7 +260,16 @@ npx tsc --noEmit -p tsconfig.json
 8. `pnpm release:win` → NSIS exe 생성.
 9. 실네트워크 프로브: `cargo test -p yamcha-app --lib kyobo_live_probe -- --ignored --nocapture` 통과.
 
-**회귀 기준선**: 시작 시점 테스트 수 = core 46 + app 8(+ignored 1). 작업 후 감소 금지, D2에서 core 증가 예상.
+**회귀 기준선**: 0.5.0 시점 테스트 수 = **core 143(+ignored 3) + app 14(+ignored 2)**. 작업 후 감소 금지.
+
+**검색 기능 수동 회귀 (0.5.0에서 추가)** — `pnpm tauri dev`로 실행하며 Ctrl+K:
+10. 토글 둘 다 꺼짐 — 기존 검색 결과·순위가 그대로인가.
+11. `≈ 오타 허용` 켜고 오타("클닌 코드")·초성("ㅋㄹㅋㄷ") → 잡히는가. 정확 일치가 맨 위인가.
+12. `📄 파일 속` 첫 켜기 — 진행률이 오르고, 그동안 검색·편집이 멈추지 않는가.
+13. 첨부 문서의 본문 문구로 검색 → 해당 파일이 잡히고 발췌가 맞는가. 클릭=기본 앱, Ctrl+클릭=폴더.
+14. `📄` 끄기 → 파일 결과가 즉시 사라지는가. 다시 켜면 재추출 없이 즉시 돌아오는가.
+15. 앱 밖에서 첨부를 고치면 결과가 갱신되는가(watcher). 앱 재시작 후 토글 상태가 남는가.
+16. 깨진·암호 문서를 넣어도 앱이 죽지 않고 "검색되지 않습니다" 안내가 뜨는가.
 
 ---
 
@@ -263,6 +286,22 @@ npx tsc --noEmit -p tsconfig.json
 9. 프론트에서 frontmatter `null` 패치는 **필드 삭제**를 의미(`update_frontmatter`가 remove). 값 유지와 혼동 금지.
 10. `with_ctx_write`가 자기쓰기 마킹을 담당 — vault 파일을 쓰는 새 커맨드에서 `with_ctx`를 쓰면 watcher가 외부 변경으로 오인한다.
 
+**5단계(검색 강화)에서 밟은 것**
+
+11. **오래 걸리는 일을 하면서 `AppState` 잠금을 쥐면 앱 전체가 멈춘다.** 모든 커맨드가 같은
+    Mutex를 지나므로, 문서 추출(PDF 한 건 최악 15초) 같은 작업은 잠금 밖에서 해야 한다.
+    `file_index::IndexAccess`가 그래서 있다 — 잠금 구간을 호출자가 정한다. watcher도 같다.
+12. **`tauri dev`는 cargo를 `--no-default-features`로 실행한다.** 앱 크레이트에 default feature를
+    두면 **dev에서만 조용히 꺼진다**. 그래서 `docs` feature는 yamcha-core 쪽에만 둔다.
+13. **디버그 빌드로 성능을 재면 안 된다.** 첨부 105개 색인이 debug 9.7분 / release 수십 초다.
+    측정 테스트는 반드시 `--release`로.
+14. **tantivy 스키마를 바꾸면 `open()`이 인덱스를 지운다**(설계된 동작). `set_vault`가 곧바로
+    재색인하므로 사용자에겐 첫 실행이 조금 느린 것으로만 보인다 — 노트 2,000건 0.9초.
+15. **이벤트 payload 타입은 `bindings.ts`에 생성되지 않는다.** 커맨드 시그니처에서 도달할 수
+    없기 때문이다. 프론트에 직접 타입을 적는다(`EnrichDialog`의 `Progress`와 같은 관례).
+16. **pdf-extract는 실제로 패닉한다** (`unsupported encoding UniKS-UCS2-H` 등). `extract()`의
+    `catch_unwind`를 걷어내면 앱이 죽는다.
+
 ---
 
 ## 8. 범위 밖 (하지 말 것)
@@ -272,3 +311,8 @@ npx tsc --noEmit -p tsconfig.json
 - Android/iOS 실제 초기화 — RELEASE.md에 절차 기록만.
 - kakaoApiKey의 OS 키체인 이전(현행 평문 유지 — 토이 프로젝트 단계).
 - 기존 UI 문구·레이아웃의 취향성 변경(명세에 있는 것만).
+
+**검색 관련 범위 밖** (자세한 근거는 `HANDOFF-search.md` §7·§8)
+- OCR(스캔 PDF·이미지) · 벡터/의미 검색 · AI 질의응답 — 모델이 수백MB다.
+- vault 밖 외부 폴더 색인, HWP 3.0, 배포용 HWP(ViewText) 복호, 형태소 분석기(lindera).
+- Docufinder(BSL 1.1) 소스 재사용 — 크레이트 선택 근거만 참고했다.

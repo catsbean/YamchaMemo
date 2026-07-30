@@ -53,6 +53,22 @@ pnpm release:mac
 ```
 
 > ⚠️ 개발 서버(`pnpm tauri dev`)가 떠 있으면 cargo 빌드 락에 걸립니다. 먼저 종료하세요.
+> ⚠️ 릴리스 빌드에는 디스크 여유가 넉넉히 필요합니다(워크스페이스 `target/`이 수십 GB까지
+> 자랍니다). 공간이 부족하면 링크 단계에서 `os error 112`로 실패합니다 — `cargo clean` 후 재시도.
+
+## 초경량 빌드 (첨부 문서 검색 없이)
+
+첨부 문서(pdf·hwp·오피스) 본문 검색을 뺀 설치본을 만들려면
+`src-tauri/Cargo.toml`의 yamcha-core 의존성에 `default-features = false`를 붙입니다.
+
+```toml
+yamcha-core = { path = "../crates/yamcha-core", default-features = false }
+```
+
+- 설치본이 약 3MB 작아집니다.
+- `📄 파일 속` 토글은 남아 있지만 아무 문서도 찾지 못합니다.
+- 앱 크레이트의 default feature로 두지 않는 이유는 `tauri dev`가 cargo를
+  `--no-default-features`로 실행해서 **dev에서만 조용히 꺼지기** 때문입니다.
 
 ## 추후 체크리스트 (이번 범위 밖)
 

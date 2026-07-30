@@ -1370,6 +1370,11 @@ pub fn set_history_policy(
 pub fn reindex(state: State<'_, AppState>) -> Result<u32, String> {
     with_ctx(&state, |c| {
         let n = yamcha_core::reindex_all(&c.vault, &mut c.indexer, &mut c.search)?;
+        // 재색인은 색인을 비우고 노트만 다시 넣는다. 첨부 검색이 켜져 있으면
+        // 캐시에서 첨부도 다시 채운다 (재추출 없음).
+        if FILE_INDEX_ON.load(Ordering::Relaxed) {
+            yamcha_core::file_index::rebuild_from_cache(&c.vault, &mut c.indexer, &mut c.search)?;
+        }
         Ok(n as u32)
     })
 }
