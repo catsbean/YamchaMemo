@@ -49,7 +49,7 @@
 ### 2.1 환경
 - Windows 11, 셸은 PowerShell 5.1이 기본(파이프라인 `&&` 없음 — `;` 또는 `if ($?)`), Git Bash 사용 가능.
 - cargo 산출물은 **워크스페이스 루트** `target/`에 생김 (`src-tauri/target` 아님).
-- Python: `C:\Users\SG\AppData\Local\Programs\Python\Python313\python` (콘솔 한글 출력이 깨지므로 결과는 UTF-8 파일로 저장 후 읽기).
+- Python: `python` (콘솔 한글 출력이 깨지므로 결과는 UTF-8 파일로 저장 후 읽기).
 
 ### 2.2 빌드/실행/테스트 명령
 ```bash
