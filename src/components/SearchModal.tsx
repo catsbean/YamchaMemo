@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { commands, type SearchHit } from "../bindings";
 import { typeLabel, useVault } from "../stores/vault";
 import { isImeEnter } from "../lib/ime";
@@ -47,9 +47,25 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
   const [selected, setSelected] = useState(0);
   const [types, setTypes] = useState<string[]>([]);
   const [days, setDays] = useState(0);
+  const [tags, setTags] = useState<string[]>([]);
+  const [allTagsOpen, setAllTagsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const notes = useVault((s) => s.notes);
 
-  const filterCount = types.length + (days > 0 ? 1 : 0);
+  const filterCount = types.length + tags.length + (days > 0 ? 1 : 0);
+
+  // 많이 쓴 태그를 앞에 (태그가 수십 개가 되면 다 늘어놓을 수 없다)
+  const tagList = useMemo(() => {
+    const count = new Map<string, number>();
+    for (const n of notes) for (const t of n.tags) count.set(t, (count.get(t) ?? 0) + 1);
+    return [...count.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "ko"))
+      .map(([t]) => t);
+  }, [notes]);
+  // 고른 태그는 접혀 있어도 늘 보이게
+  const shownTags = allTagsOpen
+    ? tagList
+    : [...new Set([...tags, ...tagList.slice(0, 8)])];
 
   // 디바운스 검색
   useEffect(() => {
@@ -59,14 +75,14 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
       return;
     }
     const t = setTimeout(async () => {
-      const r = await commands.search(query, { types, days, tags: [] });
+      const r = await commands.search(query, { types, days, tags });
       if (r.status === "ok") {
         setHits(r.data);
         setSelected(0);
       }
     }, 150);
     return () => clearTimeout(t);
-  }, [query, types, days]);
+  }, [query, types, days, tags]);
 
   function toggleType(id: string) {
     setTypes((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
@@ -137,12 +153,44 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
               onClick={() => {
                 setTypes([]);
                 setDays(0);
+                setTags([]);
               }}
             >
               초기화
             </button>
           )}
         </div>
+
+        {tagList.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 border-b border-neutral-100 px-4 py-2">
+            <span className="text-2xs text-neutral-400">태그</span>
+            {shownTags.map((t) => (
+              <button
+                key={t}
+                className={`rounded-full px-2.5 py-0.5 text-xs ${
+                  tags.includes(t)
+                    ? "bg-violet-600 text-white"
+                    : "bg-violet-50 text-violet-600 hover:bg-violet-100"
+                }`}
+                onClick={() =>
+                  setTags((cur) =>
+                    cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t],
+                  )
+                }
+              >
+                #{t}
+              </button>
+            ))}
+            {tagList.length > shownTags.length && (
+              <button
+                className="text-xs text-neutral-500 underline hover:text-neutral-800"
+                onClick={() => setAllTagsOpen(true)}
+              >
+                +{tagList.length - shownTags.length}개 더
+              </button>
+            )}
+          </div>
+        )}
 
         <ul className="max-h-96 overflow-y-auto">
           {hits.map((h, i) => (
