@@ -42,6 +42,7 @@ pub fn run() {
         commands::get_backlinks_detailed,
         commands::get_tags,
         commands::rename_tag,
+        commands::preview_template,
         commands::notes_by_tag,
         commands::reindex,
         commands::list_entries,

@@ -339,6 +339,19 @@ async renameTag(from: string, to: string) : Promise<Result<number, string>> {
 }
 },
 /**
+ * 템플릿 미리보기 — 오늘 날짜로 자리표시자를 채워 돌려준다.
+ * 화면에서 직접 치환하지 않고 이 명령을 쓰는 이유는, 실제로 노트를 만들 때와
+ * 똑같은 함수를 거쳐야 미리보기가 거짓말을 하지 않기 때문이다.
+ */
+async previewTemplate(content: string, title: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("preview_template", { content, title }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 특정 태그가 달린 노트들
  */
 async notesByTag(tag: string) : Promise<Result<NoteRef[], string>> {

@@ -985,6 +985,17 @@ pub fn get_backlinks_detailed(
     })
 }
 
+/// 템플릿 미리보기 — 오늘 날짜로 자리표시자를 채워 돌려준다.
+/// 화면에서 직접 치환하지 않고 이 명령을 쓰는 이유는, 실제로 노트를 만들 때와
+/// 똑같은 함수를 거쳐야 미리보기가 거짓말을 하지 않기 때문이다.
+#[tauri::command]
+#[specta::specta]
+pub fn preview_template(content: String, title: String) -> Result<String, String> {
+    let today = yamcha_core::Vault::today();
+    let t = if title.trim().is_empty() { "제목".to_string() } else { title };
+    Ok(yamcha_core::template::render_template(&content, &today, &t))
+}
+
 /// 태그 이름 바꾸기 / 병합 → 바뀐 노트 수.
 /// `to`가 이미 쓰이는 태그면 그게 곧 병합이다.
 #[tauri::command]

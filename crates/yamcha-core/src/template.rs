@@ -67,8 +67,11 @@ pub fn compose_book_body(intro: &str, records: &str) -> String {
 const WEEKDAYS: [&str; 7] = ["월", "화", "수", "목", "금", "토", "일"];
 
 /// 템플릿 플레이스홀더 치환.
-/// `{{date}}` `{{title}}` `{{weekday}}` `{{yesterday}}` `{{time}}`
-/// — 날짜 파생 값은 `date`가 `YYYY-MM-DD`일 때만 치환되고, 아니면 원문을 남긴다.
+///
+/// `{{date}}` `{{title}}` `{{time}}` 은 언제나,
+/// 날짜에서 나오는 값(`{{weekday}}` `{{yesterday}}` `{{tomorrow}}` `{{month}}`
+/// `{{year}}` `{{week}}`)은 `date`가 `YYYY-MM-DD`일 때만 치환한다.
+/// 모르는 자리표시자는 건드리지 않고 원문으로 남긴다 — 사용자가 오타를 알아채야 한다.
 pub fn render_template(template: &str, date: &str, title: &str) -> String {
     let mut s = template.replace("{{date}}", date).replace("{{title}}", title);
     if s.contains("{{time}}") {
@@ -82,6 +85,20 @@ pub fn render_template(template: &str, date: &str, title: &str) -> String {
         if s.contains("{{yesterday}}") {
             let y = d - chrono::Duration::days(1);
             s = s.replace("{{yesterday}}", &y.format("%Y-%m-%d").to_string());
+        }
+        if s.contains("{{tomorrow}}") {
+            let t = d + chrono::Duration::days(1);
+            s = s.replace("{{tomorrow}}", &t.format("%Y-%m-%d").to_string());
+        }
+        if s.contains("{{month}}") {
+            s = s.replace("{{month}}", &d.format("%Y-%m").to_string());
+        }
+        if s.contains("{{year}}") {
+            s = s.replace("{{year}}", &d.format("%Y").to_string());
+        }
+        if s.contains("{{week}}") {
+            // ISO 주차 — 주간 회고를 적어 두기 좋다
+            s = s.replace("{{week}}", &format!("{}주", d.iso_week().week()));
         }
     }
     s
@@ -925,4 +942,26 @@ mod tests {
         assert_eq!(intro2, "소개만 있음");
         assert_eq!(records2, "");
     }
+
+    #[test]
+    fn template_placeholders_all() {
+        let out = render_template(
+            "{{date}} {{weekday}} {{yesterday}} {{tomorrow}} {{month}} {{year}} {{week}} {{title}}",
+            "2026-07-30",
+            "제목",
+        );
+        assert!(out.starts_with("2026-07-30 목 2026-07-29 2026-07-31 2026-07 2026 "));
+        assert!(out.contains("주 제목"), "주차와 제목: {out}");
+    }
+
+    #[test]
+    fn template_keeps_unknown_and_bad_date() {
+        // 모르는 자리표시자는 그대로 남긴다 (오타를 알아채도록)
+        let out = render_template("{{nope}} {{date}}", "2026-07-30", "t");
+        assert_eq!(out, "{{nope}} 2026-07-30");
+        // 날짜 꼴이 아니면 날짜 파생 값은 손대지 않는다
+        let out = render_template("{{weekday}} {{tomorrow}}", "무제", "t");
+        assert_eq!(out, "{{weekday}} {{tomorrow}}");
+    }
+
 }

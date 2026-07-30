@@ -962,9 +962,26 @@ function NoteTemplateSection() {
               frontmatter는 건드리지 않으며, 비워 두면 기본값으로 돌아갑니다.
             </p>
             <p className="mt-1">
-              쓸 수 있는 자리표시자: <code>{"{{date}}"}</code>(2026-07-27){" "}
-              <code>{"{{weekday}}"}</code>(월) <code>{"{{yesterday}}"}</code>{" "}
-              <code>{"{{time}}"}</code>(09:30) <code>{"{{title}}"}</code>
+              쓸 수 있는 자리표시자:{" "}
+              {[
+                ["{{date}}", "2026-07-30"],
+                ["{{weekday}}", "목"],
+                ["{{yesterday}}", "어제"],
+                ["{{tomorrow}}", "내일"],
+                ["{{month}}", "2026-07"],
+                ["{{year}}", "2026"],
+                ["{{week}}", "31주"],
+                ["{{time}}", "09:30"],
+                ["{{title}}", "제목"],
+              ].map(([k, v]) => (
+                <code key={k} className="mr-1.5 whitespace-nowrap">
+                  {k}
+                  <span className="text-neutral-300">({v})</span>
+                </code>
+              ))}
+            </p>
+            <p className="mt-1">
+              모르는 자리표시자는 그대로 남습니다 — 오타를 바로 알아챌 수 있게요.
             </p>
             <p className="mt-1">
               할 일 개수는 <b>내용이 있는</b> <code>- [ ]</code> 만 셉니다 —
@@ -992,6 +1009,7 @@ function NoteTemplateSection() {
               onChange={(e) => setDaily(e.target.value)}
               placeholder="## 할 일\n\n- [ ] \n\n## 기록\n"
             />
+            <TemplatePreview content={daily} />
           </div>
           <div>
             <div className="mb-1 flex items-center justify-between">
@@ -1014,6 +1032,7 @@ function NoteTemplateSection() {
               onChange={(e) => setFree(e.target.value)}
               placeholder="(기본은 빈 문서 — 원하는 템플릿을 넣어보세요)"
             />
+            <TemplatePreview content={free} />
           </div>
 
           <TitlePrefixSection />
@@ -1189,6 +1208,7 @@ function CustomTypeRow({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
           />
+          <TemplatePreview content={draft} />
           <div className="flex items-center gap-2">
             <button
               className="self-start rounded bg-neutral-800 px-3 py-1 text-xs text-white hover:bg-neutral-600 disabled:opacity-50"
@@ -1212,5 +1232,38 @@ function CustomTypeRow({
         </div>
       )}
     </li>
+  );
+}
+
+/** 템플릿 미리보기 — 오늘 날짜로 채운 결과를 보여 준다.
+ *  화면에서 직접 치환하지 않고 백엔드를 거친다. 노트를 실제로 만들 때와 같은
+ *  함수를 써야 미리보기가 거짓말을 하지 않는다. */
+function TemplatePreview({ content }: { content: string }) {
+  const [out, setOut] = useState("");
+
+  useEffect(() => {
+    if (!content.trim()) {
+      setOut("");
+      return;
+    }
+    let alive = true;
+    const t = setTimeout(async () => {
+      const r = await commands.previewTemplate(content, "");
+      if (alive && r.status === "ok") setOut(r.data);
+    }, 200);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [content]);
+
+  if (!out) return null;
+  return (
+    <div className="mt-1">
+      <span className="text-2xs text-neutral-400">오늘 날짜로 채우면</span>
+      <pre className="mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 px-2 py-1 text-2xs leading-relaxed text-neutral-600">
+        {out}
+      </pre>
+    </div>
   );
 }
