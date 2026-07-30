@@ -65,8 +65,10 @@ pnpm release:mac
 yamcha-core = { path = "../crates/yamcha-core", default-features = false }
 ```
 
-- 설치본이 약 3MB 작아집니다.
-- `📄 파일 속` 토글은 남아 있지만 아무 문서도 찾지 못합니다.
+- 실행파일이 **2.05MB 작아집니다** (실측: 23.41MB → 21.36MB).
+- `첨부내용검색` 토글은 남아 있지만 아무 문서도 찾지 못합니다.
+- 잰 뒤에는 바이너리에 추출기 문자열(`"OLE 컨테이너"`)이 있는지 확인하세요.
+  빌드가 안 끝났는데 낡은 exe를 재는 실수를 그것으로 걸러냅니다.
 - 앱 크레이트의 default feature로 두지 않는 이유는 `tauri dev`가 cargo를
   `--no-default-features`로 실행해서 **dev에서만 조용히 꺼지기** 때문입니다.
 

@@ -58,7 +58,7 @@
 ### 2.2 빌드/실행/테스트 명령
 ```bash
 pnpm tauri dev                      # 개발 실행 (Vite:1420 + cargo run). 파일 변경 자동 반영
-cargo test -p yamcha-core           # 코어 테스트 (현재 146개 통과 + ignored 3개)
+cargo test -p yamcha-core           # 코어 테스트 (현재 149개 통과 + ignored 3개)
 cargo test -p yamcha-app --lib      # 앱 테스트 (현재 14개 + ignored 2개)
 cargo test -p yamcha-app --lib kyobo_live_probe -- --ignored --nocapture   # 실네트워크 교보 검증
 npx tsc --noEmit -p tsconfig.json   # 프론트 타입체크
@@ -260,8 +260,8 @@ npx tsc --noEmit -p tsconfig.json
 8. `pnpm release:win` → NSIS exe 생성.
 9. 실네트워크 프로브: `cargo test -p yamcha-app --lib kyobo_live_probe -- --ignored --nocapture` 통과.
 
-**회귀 기준선**: 0.5.1 시점 테스트 수 = **core 146(+ignored 3) + app 14(+ignored 2)**. 작업 후 감소 금지.
-`--no-default-features`(docs 끔)로도 돌려 본다 — 134개 통과. 추출에 기대는 테스트는 feature 게이트를 달아야 한다.
+**회귀 기준선**: 0.5.1 시점 테스트 수 = **core 149(+ignored 3) + app 14(+ignored 2)**. 작업 후 감소 금지.
+`--no-default-features`(docs 끔)로도 돌려 본다 — 137개 통과. 추출에 기대는 테스트는 feature 게이트를 달아야 한다.
 
 **검색 기능 수동 회귀 (0.5.0에서 추가)** — `pnpm tauri dev`로 실행하며 Ctrl+K:
 10. 토글 둘 다 꺼짐 — 기존 검색 결과·순위가 그대로인가.
