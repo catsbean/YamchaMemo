@@ -169,13 +169,16 @@ fn hwp(path: &Path) -> Extracted {
     let encrypted = flags & 0x02 != 0;
     let distributed = flags & 0x04 != 0;
     if encrypted {
-        return Extracted::err(Status::Encrypted);
-    }
-    if distributed {
-        // 배포용 문서는 ViewText가 AES로 잠겨 있다 — 유예(HANDOFF-search.md §8)
+        // 비밀번호가 걸린 문서 — 비밀번호 없이는 열 수 없다
         return Extracted::err(Status::Encrypted);
     }
 
+    // 배포용 문서는 본문이 ViewText에 AES로 잠겨 들어간다
+    let prefix = if distributed {
+        "ViewText/Section"
+    } else {
+        "BodyText/Section"
+    };
     let mut names: Vec<String> = comp
         .walk()
         .filter(|e| e.is_stream())
@@ -185,32 +188,171 @@ fn hwp(path: &Path) -> Extracted {
                 .trim_start_matches('/')
                 .replace('\\', "/")
         })
-        .filter(|p| p.starts_with("BodyText/Section"))
+        .filter(|p| p.starts_with(prefix))
         .collect();
     if names.is_empty() {
         return Extracted::fail("본문 스트림 없음");
     }
     names.sort();
 
+    let doc_info = if distributed {
+        read_stream(&mut comp, "DocInfo").unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
     let mut out = String::new();
+    let mut locked = 0usize;
     for name in names {
         let Some(raw) = read_stream(&mut comp, &name) else {
             continue;
         };
-        let data = if compressed {
-            match inflate(&raw) {
-                Some(d) => d,
-                None => continue,
+        if distributed {
+            match view_text_section(&raw, &doc_info, compressed) {
+                Some(text) => out.push_str(&text),
+                None => locked += 1,
             }
         } else {
-            raw
-        };
-        scan_records(&data, &mut out);
+            let data = if compressed {
+                match inflate(&raw) {
+                    Some(d) => d,
+                    None => continue,
+                }
+            } else {
+                raw
+            };
+            scan_records(&data, &mut out);
+        }
         if out.chars().count() > MAX_CHARS {
             break;
         }
     }
+    // 열쇠를 못 찾은 배포용 문서는 실패가 아니라 "잠김"으로 남긴다
+    if out.trim().is_empty() && locked > 0 {
+        return Extracted::err(Status::Encrypted);
+    }
     Extracted::ok(out)
+}
+
+// ---------- 배포용 hwp (ViewText) ----------
+//
+// 한글의 "배포용 문서로 저장"은 본문을 `BodyText/`가 아니라 `ViewText/`에 넣고
+// AES-128-ECB로 잠근다. 열쇠는 스트림 앞머리 260바이트(레코드 헤더 4 + 데이터 256)에
+// 난독화되어 들어 있다 — MSVC `rand()`와 같은 선형 합동 생성기로 XOR 스트림을 만들어 풀고,
+// 첫 바이트 하위 4비트가 가리키는 자리에서 16바이트를 꺼내면 그것이 AES 키다.
+//
+// ⚠️ 포맷 문서가 불완전해서 구현마다 열쇠를 꺼내는 자리가 다르다(섹션 앞머리 vs DocInfo).
+// 그래서 후보를 모두 시도하고 **평문이 나오는 것을 고른다** — 아래 `looks_like_text`.
+
+/// MSVC `rand()` — seed를 그대로 쓰는 선형 합동 생성기.
+/// 한글이 난독화에 쓰는 것과 같다.
+#[cfg(feature = "docs")]
+struct MsvcRng(u32);
+
+#[cfg(feature = "docs")]
+impl MsvcRng {
+    fn next(&mut self) -> u32 {
+        self.0 = self.0.wrapping_mul(214013).wrapping_add(2531011);
+        (self.0 >> 16) & 0x7FFF
+    }
+}
+
+/// 260바이트 앞머리에서 AES 키를 꺼낸다. 실패하면 None.
+#[cfg(feature = "docs")]
+fn distribution_key(head: &[u8]) -> Option<[u8; 16]> {
+    if head.len() < 260 {
+        return None;
+    }
+    // 레코드 헤더 4바이트를 뺀 256바이트가 난독화된 데이터다
+    let mut data = [0u8; 256];
+    data.copy_from_slice(&head[4..260]);
+
+    let seed = i32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    let mut rng = MsvcRng(seed as u32);
+    let mut key_byte = 0u8;
+    let mut run = 0i32;
+    for (i, b) in data.iter_mut().enumerate() {
+        if run == 0 {
+            key_byte = (rng.next() & 0xFF) as u8;
+            run = (rng.next() & 0x0F) as i32 + 1;
+        }
+        // 앞 4바이트(seed)는 그대로 두고 나머지만 푼다
+        if i >= 4 {
+            *b ^= key_byte;
+        }
+        run -= 1;
+    }
+
+    let offset = 4 + (seed & 0x0F) as usize;
+    if offset + 16 > 256 {
+        return None;
+    }
+    let mut key = [0u8; 16];
+    key.copy_from_slice(&data[offset..offset + 16]);
+    Some(key)
+}
+
+/// AES-128-ECB 복호. 블록에 안 맞는 꼬리는 버린다(암호문은 블록 배수다).
+#[cfg(feature = "docs")]
+fn aes_ecb_decrypt(key: &[u8; 16], data: &[u8]) -> Vec<u8> {
+    use aes::cipher::{BlockCipherDecrypt, KeyInit};
+    let Ok(cipher) = aes::Aes128::new_from_slice(key) else {
+        return Vec::new();
+    };
+    let usable = data.len() - (data.len() % 16);
+    let mut out = data[..usable].to_vec();
+    for block in out.chunks_exact_mut(16) {
+        let Ok(b) = <&mut aes::cipher::Array<u8, aes::cipher::consts::U16>>::try_from(block)
+        else {
+            continue;
+        };
+        cipher.decrypt_block(b);
+    }
+    out
+}
+
+/// 복호·해제 결과가 정말 본문인지 — PARA_TEXT 레코드에서 글자가 나오는지 본다.
+/// 열쇠 후보를 고를 판단 기준이다.
+#[cfg(feature = "docs")]
+fn looks_like_text(data: &[u8]) -> Option<String> {
+    let mut out = String::new();
+    scan_records(data, &mut out);
+    let printable = out
+        .chars()
+        .filter(|c| !c.is_control() && !c.is_whitespace())
+        .count();
+    (printable >= 8).then_some(out)
+}
+
+/// 배포용 문서의 한 섹션에서 평문을 뽑는다.
+/// 열쇠 후보(섹션 앞머리 / DocInfo 앞머리)를 차례로 시도한다.
+#[cfg(feature = "docs")]
+fn view_text_section(raw: &[u8], doc_info: &[u8], compressed: bool) -> Option<String> {
+    if raw.len() <= 260 {
+        return None;
+    }
+    let body = &raw[260..];
+    for head in [raw, doc_info] {
+        let Some(key) = distribution_key(head) else {
+            continue;
+        };
+        let decrypted = aes_ecb_decrypt(&key, body);
+        if decrypted.is_empty() {
+            continue;
+        }
+        let candidate = if compressed {
+            match inflate(&decrypted) {
+                Some(d) => d,
+                None => continue,
+            }
+        } else {
+            decrypted
+        };
+        if let Some(text) = looks_like_text(&candidate) {
+            return Some(text);
+        }
+    }
+    None
 }
 
 #[cfg(feature = "docs")]
@@ -585,6 +727,138 @@ mod tests {
         let r = extract(&big);
         assert_eq!(r.status, Status::Ok);
         assert_eq!(r.text.chars().count(), MAX_CHARS);
+    }
+
+    /// 난독화에 쓰는 생성기가 MSVC `rand()`와 같은지 — C의 `srand(1); rand()` 값으로 확인.
+    /// 이 값이 틀리면 배포용 문서의 열쇠를 절대 못 찾는다.
+    #[test]
+    #[cfg(feature = "docs")]
+    fn msvc_rng_matches_c_rand() {
+        let mut r = MsvcRng(1);
+        let got: Vec<u32> = (0..6).map(|_| r.next()).collect();
+        assert_eq!(got, vec![41, 18467, 6334, 26500, 19169, 15724]);
+    }
+
+    /// 배포용 hwp를 직접 만들어(암호화까지) 되읽는다.
+    ///
+    /// 이 왕복 테스트가 확인하는 것: 플래그 판독 · ViewText 경로 선택 · 260바이트 앞머리 건너뛰기
+    /// · AES-128-ECB 복호 · 압축 해제 · 레코드 스캔.
+    /// 확인하지 **못하는** 것: 열쇠를 꺼내는 자리가 한글의 실제 규칙과 같은지
+    /// (같은 규칙으로 넣고 빼므로 자기 일관성만 본다) → 실파일 검증이 따로 필요하다.
+    #[test]
+    #[cfg(feature = "docs")]
+    fn distribution_hwp_roundtrip() {
+        use aes::cipher::{BlockCipherEncrypt, KeyInit};
+
+        let d = dir();
+        let path = d.path().join("배포용.hwp");
+
+        // ① 앞머리 260바이트를 만든다 — 우리 키 유도의 역순으로 키를 심는다
+        let seed: i32 = 0x1234_5678;
+        let key: [u8; 16] = *b"0123456789abcdef";
+        let mut plain = [0u8; 256];
+        plain[..4].copy_from_slice(&seed.to_le_bytes());
+        let offset = 4 + (seed & 0x0F) as usize;
+        plain[offset..offset + 16].copy_from_slice(&key);
+        // 같은 XOR 스트림으로 덮어 난독화한다 (XOR이라 넣기와 빼기가 같다)
+        let mut rng = MsvcRng(seed as u32);
+        let mut kb = 0u8;
+        let mut run = 0i32;
+        for (i, b) in plain.iter_mut().enumerate() {
+            if run == 0 {
+                kb = (rng.next() & 0xFF) as u8;
+                run = (rng.next() & 0x0F) as i32 + 1;
+            }
+            if i >= 4 {
+                *b ^= kb;
+            }
+            run -= 1;
+        }
+        let mut head = vec![0u8; 4]; // 레코드 헤더 자리 (내용은 안 본다)
+        head.extend_from_slice(&plain);
+        assert_eq!(distribution_key(&head), Some(key), "심은 키를 되찾지 못했다");
+
+        // ② 본문 레코드를 만들어 압축하고 AES로 잠근다
+        let text = "여름 소나기 배포용 공고문";
+        let utf16: Vec<u8> = text
+            .encode_utf16()
+            .flat_map(|u| u.to_le_bytes())
+            .collect();
+        let mut record = Vec::new();
+        let header: u32 = (HWPTAG_PARA_TEXT & 0x3FF) | ((utf16.len() as u32) << 20);
+        record.extend_from_slice(&header.to_le_bytes());
+        record.extend_from_slice(&utf16);
+
+        let mut deflated = Vec::new();
+        {
+            use std::io::Write;
+            let mut enc =
+                flate2::write::DeflateEncoder::new(&mut deflated, flate2::Compression::default());
+            enc.write_all(&record).unwrap();
+            enc.finish().unwrap();
+        }
+        let cipher = aes::Aes128::new_from_slice(&key).unwrap();
+        let mut sealed = deflated.clone();
+        sealed.resize(sealed.len() + (16 - sealed.len() % 16) % 16, 0);
+        for block in sealed.chunks_exact_mut(16) {
+            let b = <&mut aes::cipher::Array<u8, aes::cipher::consts::U16>>::try_from(block).unwrap();
+            cipher.encrypt_block(b);
+        }
+
+        // ③ OLE 컨테이너로 쓴다 — FileHeader(압축+배포용) + ViewText/Section0
+        {
+            use std::io::Write;
+            let mut comp = cfb::create(&path).unwrap();
+            let mut fh = vec![0u8; 256];
+            fh[..17].copy_from_slice(b"HWP Document File");
+            fh[32..36].copy_from_slice(&0x0501_0001u32.to_le_bytes());
+            fh[36..40].copy_from_slice(&0x05u32.to_le_bytes()); // 압축 + 배포용
+            comp.create_stream("/FileHeader")
+                .unwrap()
+                .write_all(&fh)
+                .unwrap();
+            let mut section = head.clone();
+            section.extend_from_slice(&sealed);
+            comp.create_storage("/ViewText").unwrap();
+            comp.create_stream("/ViewText/Section0")
+                .unwrap()
+                .write_all(&section)
+                .unwrap();
+            comp.flush().unwrap();
+        }
+
+        // ④ 되읽는다
+        let r = extract(&path);
+        assert_eq!(r.status, Status::Ok, "배포용 문서를 읽지 못했다");
+        assert!(r.text.contains("여름 소나기"), "{:?}", r.text);
+        assert!(r.text.contains("배포용 공고문"), "{:?}", r.text);
+    }
+
+    /// 열쇠를 못 찾는 배포용 문서는 실패가 아니라 "잠김"으로 남는다
+    #[test]
+    #[cfg(feature = "docs")]
+    fn undecryptable_distribution_reports_encrypted() {
+        use std::io::Write;
+        let d = dir();
+        let path = d.path().join("못푸는배포용.hwp");
+        let mut comp = cfb::create(&path).unwrap();
+        let mut fh = vec![0u8; 256];
+        fh[..17].copy_from_slice(b"HWP Document File");
+        fh[36..40].copy_from_slice(&0x05u32.to_le_bytes());
+        comp.create_stream("/FileHeader")
+            .unwrap()
+            .write_all(&fh)
+            .unwrap();
+        comp.create_storage("/ViewText").unwrap();
+        // 앞머리 260바이트 + 아무 의미 없는 암호문
+        comp.create_stream("/ViewText/Section0")
+            .unwrap()
+            .write_all(&vec![0x7Au8; 260 + 64])
+            .unwrap();
+        comp.flush().unwrap();
+        drop(comp);
+
+        assert_eq!(extract(&path).status, Status::Encrypted);
     }
 
     /// 실파일 검증. 바이너리 hwp는 fixture로 만들 수 없어(OLE 컨테이너) 실파일로만 확인된다.

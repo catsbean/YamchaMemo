@@ -26,7 +26,7 @@
 | 코어 로직(Rust) | 순수 크레이트 (vault/파싱/인덱스/검색/템플릿) | `crates/yamcha-core/` |
 | Tauri 커맨드 | tauri-specta로 TS 바인딩 자동 생성 | `src-tauri/src/commands.rs` → `src/bindings.ts` |
 | 검색 | tantivy (1~2그램 + 자모 퍼지 + 초성) | `crates/yamcha-core/src/search.rs`, `korean.rs` |
-| 첨부 문서 검색 | 자체 hwp 파서 + pdf-extract·calamine·zip (feature `docs`) | `crates/yamcha-core/src/extract.rs`, `file_index.rs` |
+| 첨부 문서 검색 | 자체 hwp 파서(배포용 문서 복호 포함) + pdf-extract·calamine·zip·aes (feature `docs`) | `crates/yamcha-core/src/extract.rs`, `file_index.rs` |
 | HTTP | reqwest 0.12 (`json`, `gzip` feature) | `src-tauri/Cargo.toml:24` |
 | 설정 저장 | tauri-plugin-store → `settings.json` | `%APPDATA%\com.yamcha.memo\settings.json` |
 
@@ -58,7 +58,7 @@
 ### 2.2 빌드/실행/테스트 명령
 ```bash
 pnpm tauri dev                      # 개발 실행 (Vite:1420 + cargo run). 파일 변경 자동 반영
-cargo test -p yamcha-core           # 코어 테스트 (현재 143개 통과 + ignored 3개)
+cargo test -p yamcha-core           # 코어 테스트 (현재 146개 통과 + ignored 3개)
 cargo test -p yamcha-app --lib      # 앱 테스트 (현재 14개 + ignored 2개)
 cargo test -p yamcha-app --lib kyobo_live_probe -- --ignored --nocapture   # 실네트워크 교보 검증
 npx tsc --noEmit -p tsconfig.json   # 프론트 타입체크
@@ -260,7 +260,8 @@ npx tsc --noEmit -p tsconfig.json
 8. `pnpm release:win` → NSIS exe 생성.
 9. 실네트워크 프로브: `cargo test -p yamcha-app --lib kyobo_live_probe -- --ignored --nocapture` 통과.
 
-**회귀 기준선**: 0.5.0 시점 테스트 수 = **core 143(+ignored 3) + app 14(+ignored 2)**. 작업 후 감소 금지.
+**회귀 기준선**: 0.5.1 시점 테스트 수 = **core 146(+ignored 3) + app 14(+ignored 2)**. 작업 후 감소 금지.
+`--no-default-features`(docs 끔)로도 돌려 본다 — 134개 통과. 추출에 기대는 테스트는 feature 게이트를 달아야 한다.
 
 **검색 기능 수동 회귀 (0.5.0에서 추가)** — `pnpm tauri dev`로 실행하며 Ctrl+K:
 10. 토글 둘 다 꺼짐 — 기존 검색 결과·순위가 그대로인가.
@@ -301,6 +302,8 @@ npx tsc --noEmit -p tsconfig.json
     없기 때문이다. 프론트에 직접 타입을 적는다(`EnrichDialog`의 `Progress`와 같은 관례).
 16. **pdf-extract는 실제로 패닉한다** (`unsupported encoding UniKS-UCS2-H` 등). `extract()`의
     `catch_unwind`를 걷어내면 앱이 죽는다.
+17. **`docs` feature를 끈 빌드도 테스트해야 한다.** 추출에 기대는 테스트에 게이트를 안 달면
+    초경량 빌드에서만 깨진다 — 실제로 `file_index` 테스트 4개가 그랬다.
 
 ---
 
@@ -314,5 +317,7 @@ npx tsc --noEmit -p tsconfig.json
 
 **검색 관련 범위 밖** (자세한 근거는 `HANDOFF-search.md` §7·§8)
 - OCR(스캔 PDF·이미지) · 벡터/의미 검색 · AI 질의응답 — 모델이 수백MB다.
-- vault 밖 외부 폴더 색인, HWP 3.0, 배포용 HWP(ViewText) 복호, 형태소 분석기(lindera).
+- **vault 밖 외부 폴더 색인 — 이 프로그램의 범위를 넘는다**(2026-07-30 결정). 다운로드 폴더
+  하나가 105개·481MB였다. 수천 개짜리 업무 폴더는 아키텍처가 다른 Docufinder의 영역이다.
+- HWP 3.0(1996~2002), 형태소 분석기(lindera ko-dic).
 - Docufinder(BSL 1.1) 소스 재사용 — 크레이트 선택 근거만 참고했다.

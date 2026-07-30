@@ -297,6 +297,8 @@ pub fn status_of(indexer: &Indexer) -> Result<FileIndexStatus, CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // zip fixture를 만드는 테스트에서만 쓴다 (docs를 끄면 그 테스트가 빠진다)
+    #[cfg(feature = "docs")]
     use std::io::Write;
 
     /// 테스트용 접근자 — 잠금 대신 RefCell 하나로 둘을 함께 빌려준다
@@ -376,6 +378,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "docs")]
     fn build_indexes_attachments_and_drop_removes_them() {
         let (_d, v, i, s) = vault_with_attachments();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -426,6 +429,7 @@ mod tests {
     /// watcher는 바뀐 파일 하나만 넘긴다. 그때 나머지 캐시가 날아가면 안 된다.
     /// (예전엔 build 안에서 prune을 해서 이 경로가 나머지를 다 지웠다)
     #[test]
+    #[cfg(feature = "docs")]
     fn partial_build_keeps_other_cache_entries() {
         let (_d, v, mut i, mut s) = vault_with_attachments();
         run_build(&v, &mut i, &mut s, Arc::new(AtomicBool::new(false)));
@@ -477,6 +481,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "docs")]
     fn refresh_one_follows_the_file() {
         let (d, v, mut i, mut s) = vault_with_attachments();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -587,6 +592,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "docs")]
     fn gaps_are_reported_for_unreadable_documents() {
         let (d, v, mut i, mut s) = vault_with_attachments();
         // 깨진 hwp — 읽히지 않는다

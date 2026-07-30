@@ -70,13 +70,14 @@
 | DOCX / PPTX | zip + XML 태그 제거 | `zip` | MIT | ✅ 6/6 · 1/1 성공 |
 | XLSX / XLS | 시트 순회 | `calamine` 0.36 | MIT | ✅ 13/16 성공(나머지 3은 암호 걸린 파일) |
 | TXT / CSV | 인코딩 감지 후 읽기 | `encoding_rs` (**이미 있음**) | MIT/Apache | ✅ CP949/EUC-KR 대응 |
-| HWP 배포용 문서(ViewText) | AES-128 복호 필요 | — | — | ⏸ 유예 — 코퍼스 24개 중 0개. 상태로만 표시 |
+| HWP 배포용 문서(ViewText) | AES-128-ECB 복호 + 난독화 역변환 | `aes` | MIT/Apache | ✅ 6단계에서 구현 (§9) |
 | HWP 3.0 (1996~2002) | — | (Docufinder `kordoc`뿐) | BSL | ❌ 범위 밖 |
 | 스캔 PDF·이미지 | OCR | PaddleOCR/Tesseract | — | ❌ 범위 밖 (모델 수백MB) |
 
 **`hwpers`는 쓰지 않는다.** 실파일에 대고 재 보니 `HwpReader::from_file`이
-`IO error: failed to fill whole buffer`로 파싱 자체를 실패했다(배포용 문서 경로에서 DocInfo 전체를
-inflate하려 드는 구조적 문제로 보인다). 게다가 `aes`·`zstd`·`xz2`·`image`를 함께 끌고 온다.
+`IO error: failed to fill whole buffer`로 파싱 자체를 실패했다. **원인은 특정하지 않았다** —
+그 파일은 배포용 문서가 아니었으므로(플래그 확인) 배포용 처리 경로 때문은 아니다.
+게다가 `zstd`·`xz2`·`image`를 함께 끌고 온다.
 
 대신 **HWP 5.0 평문 추출을 직접 구현했고, 그게 더 잘 된다.** 원리는 단순하다 —
 OLE(CFB) 컨테이너에서 `BodyText/Section*` 스트림을 꺼내 raw deflate로 풀고,
@@ -464,7 +465,10 @@ cargo test -p yamcha-core && cargo test -p yamcha-app --lib
 
 - **Docufinder 소스 재사용** — BSL 1.1. 크레이트 선택 근거만 참고했다
 - OCR(스캔 PDF·이미지) · 벡터/의미 검색 · AI 질의응답 · 문서 미리보기/비교 — 전부 수백MB급
-- vault 밖 외부 폴더 색인 — 별도 폴더 관리 UI·watcher·권한이 필요하다. Docufinder의 영역
+- **vault 밖 외부 폴더 색인 — 이 프로그램의 범위를 넘는다** (2026-07-30 결정).
+  폴더 관리 UI·루트별 watcher·절대경로 캐시가 새로 필요하고, 무엇보다 규모가 다르다:
+  다운로드 폴더 하나가 105개·481MB였고 첫 색인 37.9초였다. 업무 폴더가 수천 개면
+  수십 분·수백MB가 되는데, 거기서부터는 아키텍처가 다른 Docufinder의 영역이다
 - HWP 3.0(1996~2002) · 형태소 분석기(lindera ko-dic) 도입 · 검색 연산자 문법(`"구문"`, `-제외`, `ext:`)
 - PDF 렌더링 — 3단계에서 이미 "PDF 렌더러를 앱에 넣지 않는다"로 결정했다
 
@@ -472,7 +476,47 @@ cargo test -p yamcha-core && cargo test -p yamcha-app --lib
 
 - 자모 ngram 필드 — §4-1 한계가 실제로 걸리면, **토글 ON일 때만** 색인하는 방식으로
 - 검색 연산자(`"구문"` · `-제외` · `ext:pdf`) — 파일 결과가 늘어난 뒤에 필요해진다
-- 외부 폴더 1~3개 지정 — 첨부 검색을 써 보고 "이걸 다운로드 폴더에도" 소리가 나오면
-- **HWP 배포용 문서(ViewText) 복호** — AES-128 + 난독화 변환이 필요하다. 실측 코퍼스 24개 중 0개라
-  지금 만들 근거가 없다. `encrypted` 상태로 표시해 두고, 실제로 걸리는 파일이 나오면 그때
 - HWP 3.0 — Docufinder의 Change Date(2030-04-15) 이후엔 Apache 2.0이 된다
+
+---
+
+## 9. 6단계 — 배포용 hwp 지원 (2026-07-30)
+
+한글의 **"배포용 문서로 저장"** 은 본문을 `BodyText/`가 아니라 `ViewText/`에 넣고 AES-128-ECB로
+잠근다. 공공기관 공고문·안내문에 흔한 형태다. 5단계에서는 `encrypted` 상태로 표시만 하고 넘어갔다.
+
+**구조** — `FileHeader`의 속성 플래그 bit 2(`0x04`)가 배포용 표시다.
+각 `ViewText/SectionN` 스트림은 앞머리 260바이트(레코드 헤더 4 + 데이터 256)가 열쇠 꾸러미이고,
+그 뒤부터가 암호문이다. 열쇠는 이렇게 꺼낸다.
+
+1. 256바이트의 앞 4바이트가 seed (i32 LE)
+2. seed로 **MSVC `rand()`와 같은 선형 합동 생성기**를 돌려 XOR 스트림을 만든다 —
+   한 번 뽑은 바이트를 `(rand() & 0x0F) + 1`번 반복해 쓴다
+3. 앞 4바이트를 뺀 나머지를 그 스트림으로 XOR
+4. `4 + (seed & 0x0F)` 자리에서 16바이트 → AES 키
+
+**열쇠 자리가 구현마다 다르다.** 포맷 문서가 이 부분을 정확히 적어 두지 않아서
+"섹션 앞머리에서 꺼낸다"는 구현과 "DocInfo 앞머리에서 꺼낸다"는 구현이 공존한다.
+그래서 **둘 다 시도하고 평문이 나오는 쪽을 고른다**(`view_text_section`).
+판단 기준은 복호·압축해제 결과에서 `PARA_TEXT` 레코드를 훑어 읽을 수 있는 글자가
+8자 이상 나오는지다(`looks_like_text`). 열쇠를 못 찾으면 실패가 아니라 `Encrypted`로 남긴다.
+
+**새 의존성은 `aes` 하나**(RustCrypto, MIT/Apache). ECB 블록 복호만 쓴다.
+`docs` feature 안에 들어가므로 초경량 빌드에서는 함께 빠진다.
+
+**검증**
+- `msvc_rng_matches_c_rand` — 생성기가 C `srand(1); rand()`의 알려진 수열
+  (41, 18467, 6334, 26500, 19169, 15724)과 같은지. 이게 틀리면 열쇠를 절대 못 찾는다.
+- `distribution_hwp_roundtrip` — **배포용 hwp를 직접 만들어**(키 심기 → 난독화 → deflate →
+  AES 암호화 → OLE 컨테이너 작성) 되읽는다. 플래그 판독·ViewText 경로·260바이트 건너뛰기·
+  복호·압축해제·레코드 스캔이 이어지는지 확인한다.
+- `undecryptable_distribution_reports_encrypted` — 못 푸는 배포용 문서가 `Encrypted`로 남는지.
+
+⚠️ **왕복 테스트가 확인하지 못하는 것** — 열쇠를 꺼내는 자리가 한글의 실제 규칙과 같은지.
+같은 규칙으로 넣고 빼므로 자기 일관성만 본다. **실제 배포용 문서로 확인해야 완결된다**:
+```bash
+YAMCHA_DOC_SAMPLE=<배포용.hwp> cargo test -p yamcha-core --release real_document -- --ignored --nocapture
+```
+실측 코퍼스(hwp 24개)에 배포용 문서가 0개여서 이 확인이 아직 남아 있다.
+만약 실파일에서 실패하면 볼 곳은 §9의 4단계 중 어디서 어긋났는지다 —
+`distribution_key`에 seed·offset을 찍어 보면 바로 좁혀진다.
