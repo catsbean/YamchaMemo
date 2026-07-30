@@ -12,3 +12,11 @@ serde_yaml_ng = "0.10"
 regex = "1"
 rusqlite = { version = "0.34", features = ["bundled"] }
 tantivy = "0.24"
+# 첨부 문서 텍스트 추출 (feature "docs"). cfb·flate2·encoding_rs는 이미
+# 의존성 트리에 있던 것(infer·reqwest 경유)이라 버전을 그대로 맞춰 중복을 피한다.
+cfb = "0.7"
+flate2 = "1"
+encoding_rs = "0.8"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+calamine = "0.36"
+pdf-extract = "0.12"

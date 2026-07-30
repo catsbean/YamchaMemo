@@ -336,20 +336,24 @@ CREATE TABLE IF NOT EXISTS doc_text(
   **퍼지 OFF면 기존 동작 그대로**(회귀) — core 129개
 - 커밋: `5단계-1 — 자모 퍼지 검색과 초성 검색`
 
-### 5-2. 문서 추출기 (코어)
+### 5-2. 문서 추출기 — ✅ 완료
 
-프로토타입(`_spike_hwp/src/extract.rs`)이 이미 109개 실파일을 통과했다. 옮기면서 다듬는 일이다.
-
-- 새 파일 `crates/yamcha-core/src/extract.rs` — 프로토타입 이식 + 확장자 디스패치 + 안전장치(§4-2)
-  + `encrypted` 상태 분리(암호 문서를 실패로 묶지 않는다)
-- `Cargo.toml` — `zip`·`calamine`·`pdf-extract` 추가(feature `docs`, 기본 on).
-  `cfb`는 트리의 0.7.3과 버전 정합을 먼저 확인
-- `indexer.rs` — `doc_text` 테이블 + get/put/prune + `status` 처리
-- fixture: 우리가 직접 만든 작은 샘플(docx·xlsx·pptx·hwpx·txt)을 `crates/yamcha-core/tests/fixtures/`에.
-  **남의 문서·개인 문서 커밋 금지** — hwp는 최소 내용으로 직접 저장한 것만
-- 테스트: 포맷별 추출 성공 · mtime 같으면 재추출 건너뜀 · 깨진 파일이 패닉 없이 기록됨 ·
-  암호 파일이 `encrypted` · 상한 초과 시 `too_big` · **표가 있는 hwp에서 셀 텍스트가 나오는지**
+- 새 파일 `crates/yamcha-core/src/extract.rs` — 프로토타입 이식 + `Encrypted` 상태 분리
+- `indexer.rs` — `doc_text` 캐시 테이블 + `cached_doc`/`put_doc`/`all_docs`/`prune_docs`/
+  `doc_status_counts`/`clear_docs`
+- **Cargo feature `docs`** (기본 on) — 끄면 추출기 전체가 빠지고 `extract()`가 늘 `Unsupported`를
+  돌려준다. 두 조합 모두 테스트 통과(ON 137개 / OFF 132개)
+- 새 크레이트는 `zip`·`calamine`·`pdf-extract` 셋뿐. `cfb`(0.7)·`flate2`·`encoding_rs`는
+  이미 트리에 있던 버전에 맞춰 중복을 피했다
+- **fixture를 저장소에 넣지 않았다.** zip 기반 포맷(docx·pptx·hwpx)은 테스트가 그때그때 zip을
+  만들어 쓴다. 개인 문서를 커밋할 일이 없고, 파서 경로는 그대로 통과한다
+- 바이너리 hwp는 fixture로 만들 수 없어(OLE 컨테이너) 실파일 검증 테스트를 남겼다:
+  `YAMCHA_DOC_SAMPLE=<경로> cargo test -p yamcha-core real_document -- --ignored --nocapture`
+  → 기준 파일(여름 소나기 공고)에서 20만 자·27ms·깨진 문자 0 확인
 - 커밋: `5단계-2 — pdf·hwp·오피스 텍스트 추출`
+
+**남은 확인** — exe 크기 증가는 지금 재면 오해를 부른다. 아직 앱이 `extract()`를 호출하지 않아
+링커가 파서 코드를 걷어내기 때문이다. 5-3에서 실제로 쓰이기 시작한 뒤 5-5에서 잰다.
 
 ### 5-3. 첨부 색인 + 커맨드
 

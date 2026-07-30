@@ -6,6 +6,7 @@
 pub mod audit;
 pub mod enrich;
 pub mod error;
+pub mod extract;
 pub mod history;
 pub mod index_file;
 pub mod indexer;
