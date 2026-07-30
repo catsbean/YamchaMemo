@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { commands, type SearchHit } from "../bindings";
+import { listen } from "@tauri-apps/api/event";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { commands, type FileIndexStatus, type SearchHit } from "../bindings";
 import { typeLabel, useVault } from "../stores/vault";
 import { isImeEnter } from "../lib/ime";
 import { openNoteWindow } from "../lib/trashWindow";
@@ -31,6 +33,79 @@ function Highlight({ text, query }: { text: string; query: string }) {
   );
 }
 
+/** `file-index-progress` 이벤트 payload.
+ *  커맨드 반환 타입이 아니라 이벤트라서 bindings에 생성되지 않는다
+ *  (EnrichDialog의 Progress와 같은 관례). */
+type FileIndexProgress = { done: number; total: number; current: string };
+
+/** 켜고 끄는 것임이 한눈에 보이는 스위치.
+ *  칩(필터)과 구분되어야 해서 손잡이가 움직이는 트랙을 단다. */
+function Switch({
+  on,
+  label,
+  title,
+  color,
+  onClick,
+}: {
+  on: boolean;
+  label: string;
+  title: string;
+  color: "sky" | "emerald";
+  onClick: () => void;
+}) {
+  const onBg = color === "sky" ? "bg-sky-600" : "bg-emerald-600";
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      title={title}
+      onClick={onClick}
+      className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs transition-colors ${
+        on
+          ? `border-transparent ${onBg} text-white`
+          : "border-neutral-300 text-neutral-600 hover:bg-neutral-100"
+      }`}
+    >
+      <span
+        className={`relative inline-block h-3 w-6 shrink-0 rounded-full transition-colors ${
+          on ? "bg-white/40" : "bg-neutral-300"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 h-2 w-2 rounded-full bg-white transition-all ${
+            on ? "left-3.5" : "left-0.5"
+          }`}
+        />
+      </span>
+      {label}
+    </button>
+  );
+}
+
+/** 파일 이름에서 확장자 배지 문자열 */
+function extOf(name: string): string {
+  const i = name.lastIndexOf(".");
+  return i > 0 ? name.slice(i + 1).toUpperCase() : "파일";
+}
+
+/** vault 상대경로 → 절대경로 (열기·폴더에서 보기) */
+async function filePath(rel: string): Promise<string | null> {
+  const r = await commands.getVaultPath();
+  if (!r) return null;
+  return `${r}/${rel}`;
+}
+
+/** 안 잡히는 문서를 사용자에게 설명한다 (스캔본·암호·실패) */
+function gapNote(s: FileIndexStatus): string {
+  const parts: string[] = [];
+  if (s.empty > 0) parts.push(`텍스트가 없는 문서 ${s.empty}개(스캔본)`);
+  if (s.encrypted > 0) parts.push(`암호 걸린 문서 ${s.encrypted}개`);
+  if (s.failed > 0) parts.push(`읽지 못한 문서 ${s.failed}개`);
+  if (s.too_big > 0) parts.push(`너무 큰 문서 ${s.too_big}개`);
+  return parts.length > 0 ? `${parts.join(" · ")}는 검색되지 않습니다` : "";
+}
+
 const PERIODS: [number, string][] = [
   [0, "전체 기간"],
   [7, "1주"],
@@ -42,17 +117,33 @@ const PERIODS: [number, string][] = [
 export default function SearchModal({ onClose }: { onClose: () => void }) {
   const openNote = useVault((s) => s.openNote);
   const schemas = useVault((s) => s.schemas);
+  const searchFuzzy = useVault((s) => s.searchFuzzy);
+  const toggleSearchFuzzy = useVault((s) => s.toggleSearchFuzzy);
+  const searchInFiles = useVault((s) => s.searchInFiles);
+  const toggleSearchInFiles = useVault((s) => s.toggleSearchInFiles);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [fileHits, setFileHits] = useState<SearchHit[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [progress, setProgress] = useState<FileIndexProgress | null>(null);
+  const [fileStatus, setFileStatus] = useState<FileIndexStatus | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const seqRef = useRef(0);
   const [selected, setSelected] = useState(0);
   const [types, setTypes] = useState<string[]>([]);
   const [days, setDays] = useState(0);
   const [tags, setTags] = useState<string[]>([]);
+  const [excludeText, setExcludeText] = useState("");
   const [allTagsOpen, setAllTagsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const notes = useVault((s) => s.notes);
 
-  const filterCount = types.length + tags.length + (days > 0 ? 1 : 0);
+  const exclude = useMemo(
+    () => excludeText.split(/[\s,]+/).filter(Boolean),
+    [excludeText],
+  );
+  const filterCount =
+    types.length + tags.length + (days > 0 ? 1 : 0) + exclude.length;
 
   // 많이 쓴 태그를 앞에 (태그가 수십 개가 되면 다 늘어놓을 수 없다)
   const tagList = useMemo(() => {
@@ -75,14 +166,81 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
       return;
     }
     const t = setTimeout(async () => {
-      const r = await commands.search(query, { types, days, tags });
+      // 요청 일련번호 — 타이핑이 이어지면 응답 순서가 뒤집힐 수 있다
+      const seq = ++seqRef.current;
+
+      // 1단계: 노트. 여기까지가 첫 화면이고, 첨부가 몇 개든 이 시간은 안 늘어난다.
+      const r = await commands.search(query, {
+        types,
+        days,
+        tags,
+        scope: "Notes",
+        fuzzy: searchFuzzy,
+        exclude,
+      });
+      if (seq !== seqRef.current) return;
       if (r.status === "ok") {
         setHits(r.data);
         setSelected(0);
       }
+
+      // 2단계: 첨부 문서. 노트 결과를 이미 그린 뒤에 뒤에 붙인다.
+      if (!searchInFiles) {
+        // 토글을 끄면 지난 결과를 비운다 — 남겨 두면 "결과가 없습니다"가 가려진다
+        setFileHits([]);
+        return;
+      }
+      setFilesLoading(true);
+      const f = await commands.search(query, {
+        types,
+        days,
+        tags,
+        scope: "Files",
+        fuzzy: searchFuzzy,
+        exclude,
+      });
+      if (seq !== seqRef.current) return;
+      setFilesLoading(false);
+      if (f.status === "ok") setFileHits(f.data);
     }, 150);
     return () => clearTimeout(t);
-  }, [query, types, days, tags]);
+  }, [query, types, days, tags, searchFuzzy, searchInFiles, exclude]);
+
+  // 첨부 색인 진행 상황 (처음 켤 때만 눈에 띈다)
+  useEffect(() => {
+    const unlisten = [
+      listen<FileIndexProgress>("file-index-progress", (e) => setProgress(e.payload)),
+      listen<FileIndexStatus>("file-index-done", (e) => {
+        setProgress(null);
+        setFileStatus(e.payload);
+        // 색인이 끝났으니 지금 쿼리로 다시 물어본다
+        setRefreshTick((n) => n + 1);
+      }),
+    ];
+    commands.fileIndexStatus().then((r) => {
+      if (r.status === "ok") setFileStatus(r.data);
+    });
+    return () => {
+      unlisten.forEach((p) => p.then((f) => f()));
+    };
+  }, []);
+
+  // 색인이 끝난 뒤 첨부 결과만 다시 받는다
+  useEffect(() => {
+    if (!searchInFiles || !query.trim() || refreshTick === 0) return;
+    (async () => {
+      const f = await commands.search(query, {
+        types,
+        days,
+        tags,
+        scope: "Files",
+        fuzzy: searchFuzzy,
+        exclude,
+      });
+      if (f.status === "ok") setFileHits(f.data);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshTick]);
 
   function toggleType(id: string) {
     setTypes((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
@@ -136,6 +294,37 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
               {s.label}
             </button>
           ))}
+          {filterCount > 0 && (
+            <button
+              className="ml-auto text-xs text-neutral-500 underline hover:text-neutral-800"
+              onClick={() => {
+                setTypes([]);
+                setDays(0);
+                setTags([]);
+                setExcludeText("");
+              }}
+            >
+              초기화
+            </button>
+          )}
+        </div>
+
+        {/* 검색 방식 — 분류 칩(필터)과 줄을 나눠 성격이 다름을 드러낸다 */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-neutral-100 px-4 py-2">
+          <Switch
+            on={searchFuzzy}
+            label="오타 허용"
+            color="sky"
+            title="오타와 초성을 견디는 검색 (ㄱㅇㅁ → 구운몽). 정확히 맞는 결과가 늘 위에 옵니다."
+            onClick={() => toggleSearchFuzzy()}
+          />
+          <Switch
+            on={searchInFiles}
+            label="첨부내용검색"
+            color="emerald"
+            title="첨부한 pdf·hwp·오피스 문서의 본문까지 찾습니다. 처음 켤 때 문서를 한 번 읽습니다."
+            onClick={() => toggleSearchInFiles()}
+          />
           <select
             className="ml-auto rounded border border-neutral-300 px-2 py-0.5 text-xs focus:border-neutral-500 focus:outline-none"
             value={days}
@@ -147,16 +336,26 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
               </option>
             ))}
           </select>
-          {filterCount > 0 && (
+        </div>
+
+        {/* 제외어 — 검색어와 반대 방향이라 줄을 따로 둔다 */}
+        <div className="flex items-center gap-2 border-b border-neutral-100 px-4 py-2">
+          <span className="shrink-0 text-xs text-neutral-500">검색제외 :</span>
+          <input
+            className="min-w-0 flex-1 bg-transparent text-xs placeholder:text-neutral-400 focus:outline-none"
+            placeholder="여기 적은 말이 든 결과는 뺍니다 (띄어쓰기로 여러 개)"
+            value={excludeText}
+            onChange={(e) => setExcludeText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") onClose();
+            }}
+          />
+          {excludeText.trim() && (
             <button
-              className="text-xs text-neutral-500 underline hover:text-neutral-800"
-              onClick={() => {
-                setTypes([]);
-                setDays(0);
-                setTags([]);
-              }}
+              className="shrink-0 text-xs text-neutral-500 underline hover:text-neutral-800"
+              onClick={() => setExcludeText("")}
             >
-              초기화
+              지우기
             </button>
           )}
         </div>
@@ -235,7 +434,7 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
               </button>
             </li>
           ))}
-          {query.trim() && hits.length === 0 && (
+          {query.trim() && hits.length === 0 && fileHits.length === 0 && !filesLoading && (
             <li className="px-4 py-6 text-center text-sm text-neutral-400">
               결과가 없습니다
               {filterCount > 0 && (
@@ -244,6 +443,59 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
                 </span>
               )}
             </li>
+          )}
+
+          {/* 2단계 — 첨부 문서. 노트 결과 뒤에 붙는다 */}
+          {searchInFiles && query.trim() && (
+            <>
+              <li className="flex items-center gap-2 border-t border-neutral-100 bg-neutral-50 px-4 py-1.5 text-2xs text-neutral-500">
+                <span>문서 속</span>
+                {filesLoading && <span className="text-neutral-400">찾는 중…</span>}
+                {progress && (
+                  <span className="text-neutral-400">
+                    문서 읽는 중 {progress.done}/{progress.total} — {progress.current}
+                  </span>
+                )}
+                {!filesLoading && !progress && fileHits.length === 0 && (
+                  <span className="text-neutral-400">해당 문서 없음</span>
+                )}
+              </li>
+              {fileHits.map((h) => (
+                <li key={h.rel_path}>
+                  <button
+                    className="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-neutral-50"
+                    title={`${h.rel_path} — 클릭하면 기본 앱으로, Ctrl+클릭하면 폴더에서 보기`}
+                    onClick={async (e) => {
+                      const abs = await filePath(h.rel_path);
+                      if (!abs) return;
+                      if (e.ctrlKey || e.metaKey) await revealItemInDir(abs);
+                      else await openPath(abs);
+                    }}
+                  >
+                    <span className="w-16 shrink-0 self-start rounded bg-emerald-50 px-1.5 py-0.5 text-center text-2xs text-emerald-700">
+                      {extOf(h.title)}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm">
+                        <Highlight text={h.title} query={query} />
+                      </span>
+                      {h.snippet && (
+                        <span className="mt-0.5 line-clamp-2 block text-xs text-neutral-500">
+                          <Highlight text={h.snippet} query={query} />
+                        </span>
+                      )}
+                    </span>
+                    <span className="shrink-0 self-start text-xs text-neutral-400">
+                      {h.date}
+                    </span>
+                  </button>
+                </li>
+              ))}
+              {/* 안 잡히는 문서가 있으면 이유를 알려 준다 — 없으면 "검색이 안 된다"로 오해한다 */}
+              {fileStatus && gapNote(fileStatus) && (
+                <li className="px-4 py-2 text-2xs text-neutral-400">{gapNote(fileStatus)}</li>
+              )}
+            </>
           )}
         </ul>
     </Modal>

@@ -6,9 +6,12 @@
 pub mod audit;
 pub mod enrich;
 pub mod error;
+pub mod extract;
+pub mod file_index;
 pub mod history;
 pub mod index_file;
 pub mod indexer;
+pub mod korean;
 pub mod mirror;
 pub mod parse;
 pub mod schema;
@@ -20,9 +23,10 @@ pub use audit::{IssueKind, NoteIssue};
 pub use enrich::suggest_genre;
 pub use error::CoreError;
 pub use history::{HistoryItem, HistoryPolicy};
+pub use file_index::{FileIndexProgress, FileIndexStatus};
 pub use indexer::{Backlink, Indexer, NoteRef, TagCount};
 pub use schema::{Builtin, EntryKind, FieldDef, FieldKind, TypeDef};
-pub use search::{SearchEngine, SearchFilter, SearchHit};
+pub use search::{SearchEngine, SearchFilter, SearchHit, SearchScope, FILE_TYPE};
 pub use vault::{CalloutDef, NoteContent, NoteSummary, ParsedNote, TrashItem, Vault};
 
 /// vault 전체를 다시 인덱싱한다 (SQLite + tantivy).

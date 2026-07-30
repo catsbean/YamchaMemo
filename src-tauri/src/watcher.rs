@@ -78,6 +78,19 @@ pub fn start(app: AppHandle, root: PathBuf) -> Option<WatcherHandle> {
                     }
                 }
             }
+            // 첨부 변경은 **잠금을 놓은 뒤** 처리한다.
+            // 추출이 파일 하나에 15초까지 걸리는데(실측 PDF) 그동안 상태 잠금을 쥐면
+            // 앱의 모든 커맨드가 멈춘다. 첨부 검색이 꺼져 있으면 아예 하지 않는다.
+            if crate::commands::file_index_active() {
+                let changed: Vec<String> = rels
+                    .iter()
+                    .filter(|r| r.starts_with("_attachments/"))
+                    .cloned()
+                    .collect();
+                if !changed.is_empty() {
+                    crate::commands::refresh_attachments(&app, &changed);
+                }
+            }
             // UI 이벤트만 억제: 자기 저장 직후엔 프론트로 외부 변경 알림을 보내지 않는다.
             if !was_suppressed {
                 let _ = app.emit("vault-external-change", rels);

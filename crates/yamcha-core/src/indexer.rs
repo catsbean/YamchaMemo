@@ -18,6 +18,23 @@ pub struct NoteRef {
     pub date: String,
 }
 
+/// 캐시에서 꺼낸 추출 결과
+#[derive(Debug, Clone)]
+pub struct CachedDoc {
+    pub text: String,
+    pub status: String,
+    pub chars: u32,
+}
+
+/// 색인을 채울 때 쓰는 캐시 한 줄
+#[derive(Debug, Clone)]
+pub struct DocEntry {
+    pub rel_path: String,
+    pub ext: String,
+    pub text: String,
+    pub status: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct TagCount {
     pub tag: String,
@@ -115,6 +132,15 @@ impl Indexer {
             CREATE TABLE IF NOT EXISTS tags(
                 path TEXT NOT NULL,
                 tag TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS doc_text(
+                path TEXT PRIMARY KEY,
+                mtime INTEGER NOT NULL,
+                size INTEGER NOT NULL,
+                ext TEXT NOT NULL,
+                chars INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                status TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_links_target ON links(target);
             CREATE INDEX IF NOT EXISTS idx_links_src ON links(src);
@@ -251,6 +277,124 @@ impl Indexer {
             }
         }
         Ok(out)
+    }
+
+    // ---- 첨부 문서 추출 텍스트 캐시 ----
+    //
+    // 추출은 비싸다 (실측: PDF 한 건 최악 14.7초). 파일이 그대로면 두 번 뽑지 않는다.
+    // 실패·암호·스캔본도 **기억한다** — 깨진 파일을 켤 때마다 다시 붙들지 않기 위해서다.
+    // 덕분에 첨부 검색을 껐다 켜도 재추출 없이 색인만 다시 채울 수 있다.
+
+    /// 캐시에 있는 추출 결과. 파일의 mtime·size가 그대로일 때만 돌려준다.
+    pub fn cached_doc(
+        &self,
+        rel_path: &str,
+        mtime: i64,
+        size: i64,
+    ) -> Result<Option<CachedDoc>, CoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT text, status, chars FROM doc_text
+             WHERE path = ?1 AND mtime = ?2 AND size = ?3",
+        )?;
+        let mut rows = stmt.query(params![rel_path, mtime, size])?;
+        match rows.next()? {
+            Some(r) => Ok(Some(CachedDoc {
+                text: r.get(0)?,
+                status: r.get::<_, String>(1)?,
+                chars: r.get::<_, i64>(2)? as u32,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_doc(
+        &mut self,
+        rel_path: &str,
+        mtime: i64,
+        size: i64,
+        ext: &str,
+        text: &str,
+        status: &str,
+    ) -> Result<(), CoreError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO doc_text(path, mtime, size, ext, chars, text, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                rel_path,
+                mtime,
+                size,
+                ext,
+                text.chars().count() as i64,
+                text,
+                status
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_doc(&mut self, rel_path: &str) -> Result<(), CoreError> {
+        self.conn
+            .execute("DELETE FROM doc_text WHERE path = ?1", params![rel_path])?;
+        Ok(())
+    }
+
+    /// 캐시에 있는 모든 첨부 (색인을 다시 채울 때 쓴다 — 재추출 없이)
+    pub fn all_docs(&self) -> Result<Vec<DocEntry>, CoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, ext, text, status FROM doc_text ORDER BY path")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(DocEntry {
+                rel_path: r.get(0)?,
+                ext: r.get(1)?,
+                text: r.get(2)?,
+                status: r.get(3)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 상태별 개수 — "스캔본 12개 · 암호 걸린 문서 10개"를 화면에 알리는 데 쓴다
+    pub fn doc_status_counts(&self) -> Result<Vec<(String, u32)>, CoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT status, COUNT(*) FROM doc_text GROUP BY status")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u32)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// vault에서 사라진 첨부의 캐시를 지운다
+    pub fn prune_docs(&mut self, existing: &[String]) -> Result<usize, CoreError> {
+        let mut stale: Vec<String> = Vec::new();
+        {
+            let mut stmt = self.conn.prepare("SELECT path FROM doc_text")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            for r in rows {
+                let p = r?;
+                if !existing.contains(&p) {
+                    stale.push(p);
+                }
+            }
+        }
+        for p in &stale {
+            self.conn
+                .execute("DELETE FROM doc_text WHERE path = ?1", params![p])?;
+        }
+        Ok(stale.len())
+    }
+
+    /// 추출 캐시 전체 비우기 (설정의 "다시 읽기")
+    pub fn clear_docs(&mut self) -> Result<(), CoreError> {
+        self.conn.execute_batch("DELETE FROM doc_text;")?;
+        Ok(())
     }
 
     pub fn all_tags(&self) -> Result<Vec<TagCount>, CoreError> {
@@ -391,6 +535,55 @@ mod tests {
         let notes = idx.notes_by_tag("프로젝트").unwrap();
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].rel_path, rel);
+    }
+
+    #[test]
+    fn doc_cache_skips_reextraction_and_prunes() {
+        let (_d, _v, mut idx) = setup();
+        idx.put_doc("_attachments/2026-07/보고서.pdf", 1000, 500, "pdf", "본문 텍스트", "ok")
+            .unwrap();
+        idx.put_doc("_attachments/2026-07/스캔.pdf", 1000, 900, "pdf", "", "empty")
+            .unwrap();
+        idx.put_doc("_attachments/2026-07/잠김.xlsx", 1000, 700, "xlsx", "", "encrypted")
+            .unwrap();
+
+        // 파일이 그대로면 캐시가 나온다
+        let c = idx
+            .cached_doc("_attachments/2026-07/보고서.pdf", 1000, 500)
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.text, "본문 텍스트");
+        assert_eq!(c.status, "ok");
+        assert_eq!(c.chars, 6);
+
+        // mtime이 바뀌면 캐시를 쓰지 않는다 (다시 추출해야 한다)
+        assert!(idx
+            .cached_doc("_attachments/2026-07/보고서.pdf", 2000, 500)
+            .unwrap()
+            .is_none());
+        // 크기가 바뀌어도 마찬가지
+        assert!(idx
+            .cached_doc("_attachments/2026-07/보고서.pdf", 1000, 501)
+            .unwrap()
+            .is_none());
+
+        // 상태별 개수 — 화면에 "스캔본 1개 · 암호 1개"를 알리는 재료
+        let counts = idx.doc_status_counts().unwrap();
+        assert_eq!(counts.iter().find(|(s, _)| s == "empty").unwrap().1, 1);
+        assert_eq!(counts.iter().find(|(s, _)| s == "encrypted").unwrap().1, 1);
+
+        // 색인 재구성용 — 재추출 없이 캐시에서 전부 꺼낸다
+        assert_eq!(idx.all_docs().unwrap().len(), 3);
+
+        // vault에서 사라진 파일은 캐시에서도 지운다
+        let removed = idx
+            .prune_docs(&["_attachments/2026-07/보고서.pdf".to_string()])
+            .unwrap();
+        assert_eq!(removed, 2);
+        assert_eq!(idx.all_docs().unwrap().len(), 1);
+
+        idx.clear_docs().unwrap();
+        assert!(idx.all_docs().unwrap().is_empty());
     }
 
     #[test]

@@ -374,6 +374,55 @@ async reindex() : Promise<Result<number, string>> {
 }
 },
 /**
+ * 첨부 색인 현황 (색인된 수 · 스캔본 · 암호 · 실패)
+ */
+async fileIndexStatus() : Promise<Result<FileIndexStatus, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("file_index_status") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 첨부 색인 시작. **바로 돌려주고 백그라운드에서 추출한다** —
+ * PDF 한 건이 15초까지 걸려서(실측) 커맨드가 기다리면 앱이 멈춘 것처럼 보인다.
+ * 
+ * 진행 상황은 `file-index-progress`, 끝나면 `file-index-done` 이벤트로 알린다.
+ * 이미 추출해 둔 문서는 캐시에서 즉시 채우므로 두 번째부터는 사실상 즉시 끝난다.
+ */
+async buildFileIndex() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("build_file_index") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 첨부를 색인에서 뺀다 (토글 끄기). 추출 캐시는 남겨 다시 켤 때 즉시 복구한다.
+ */
+async dropFileIndex() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("drop_file_index") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 추출 캐시를 비우고 처음부터 다시 읽는다 (설정의 "문서 다시 읽기").
+ * 깨졌던 파일이 고쳐졌거나 추출기가 개선됐을 때 쓴다.
+ */
+async resetFileIndex() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("reset_file_index") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 전체 책의 기록을 엔트리 단위로 펼쳐 반환한다 (정렬·필터는 화면에서).
  */
 async listEntries() : Promise<Result<ReadingEntry[], string>> {
@@ -953,6 +1002,30 @@ export type FieldKind = "text" | "date" | "select" | "tags" | "number" | "url" |
  */
 "wikilink"
 /**
+ * 첨부 색인 상태 — 화면에 "문서 48개 · 스캔본 12개 · 암호 10개"를 알리는 재료
+ */
+export type FileIndexStatus = { 
+/**
+ * 색인에 들어간 문서 수 (텍스트가 있는 것)
+ */
+indexed: number; 
+/**
+ * 텍스트가 없는 문서 — 스캔본으로 보이는 것
+ */
+empty: number; 
+/**
+ * 암호가 걸려 못 읽은 문서
+ */
+encrypted: number; 
+/**
+ * 파서가 실패한 문서
+ */
+failed: number; 
+/**
+ * 크기 상한을 넘은 문서
+ */
+too_big: number }
+/**
  * 스냅샷 한 건
  */
 export type HistoryItem = { 
@@ -1087,12 +1160,41 @@ days: number;
 /**
  * 이 태그 중 하나라도 가진 노트만 (비면 전체)
  */
-tags: string[] }
+tags: string[]; 
+/**
+ * 노트를 볼지 첨부를 볼지
+ */
+scope: SearchScope; 
+/**
+ * 오타·초성을 견디는 검색. 끄면 지금까지의 정확 검색만 한다.
+ */
+fuzzy: boolean; 
+/**
+ * 이 말이 들어간 결과는 뺀다 (제목·본문·태그 어디든).
+ * 퍼지와 무관하게 **정확히** 판단한다 — 뺄 것은 확실히 빼야 한다.
+ */
+exclude: string[] }
 export type SearchHit = { rel_path: string; note_type: string; title: string; date: string; 
 /**
  * 매치 주변 본문 발췌
  */
 snippet: string }
+/**
+ * 검색 대상. 노트와 첨부 문서를 **따로** 묻는다.
+ * 
+ * 같이 묻지 않는 이유: 첨부 검색은 노트 검색보다 훨씬 비싸다(거대한 본문의 발췌 생성).
+ * 화면은 노트 결과를 먼저 그리고 첨부 결과를 뒤에 붙인다 — 첫 응답이 첨부 때문에
+ * 늦어지지 않는다.
+ */
+export type SearchScope = 
+/**
+ * 노트만 (첨부가 색인돼 있어도 제외) — 기존 동작
+ */
+"Notes" | 
+/**
+ * 첨부 문서만
+ */
+"Files"
 /**
  * 첫 실행 화면에 제안할 저장 위치 (클라우드 동기화 폴더 등)
  */

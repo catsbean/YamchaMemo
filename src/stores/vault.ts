@@ -76,6 +76,12 @@ interface VaultStore {
   /** 할 일 구역을 크게 볼지 (기록 영역과 비율을 뒤집는다) */
   todoBig: boolean;
   toggleTodoBig(): Promise<void>;
+  /** 검색에서 오타·초성을 견딜지 (검색창 토글) */
+  searchFuzzy: boolean;
+  toggleSearchFuzzy(): Promise<void>;
+  /** 첨부 문서(pdf·hwp·오피스) 본문까지 찾을지 (검색창 토글) */
+  searchInFiles: boolean;
+  toggleSearchInFiles(): Promise<void>;
   /** 일지 빠른 입력 바의 종류 순서 — 기본 종류는 DailyKind 값, 사용자 정의는 그 이름.
    *  여기 없는 종류(나중에 만든 것)는 뒤에 붙는다. */
   dailyKindOrder: string[];
@@ -207,6 +213,10 @@ export const useVault = create<VaultStore>((set, get) => {
     await get().refreshSchemas();
     await get().refresh();
     await get().refreshCallouts();
+    // vault를 바꾸면 색인이 새로 만들어진다 — 첨부 검색이 켜져 있으면 다시 채운다
+    if (get().searchInFiles) {
+      commands.buildFileIndex().catch(() => {});
+    }
   }
 
   return {
@@ -253,6 +263,24 @@ export const useVault = create<VaultStore>((set, get) => {
       set({ todoBig: v });
       const store = await settings();
       await store.set("todoBig", v);
+    },
+    searchFuzzy: false,
+    async toggleSearchFuzzy() {
+      const v = !get().searchFuzzy;
+      set({ searchFuzzy: v });
+      const store = await settings();
+      await store.set("searchFuzzy", v);
+    },
+    searchInFiles: false,
+    async toggleSearchInFiles() {
+      const v = !get().searchInFiles;
+      set({ searchInFiles: v });
+      const store = await settings();
+      await store.set("searchInFiles", v);
+      // 켜면 백그라운드에서 추출·색인, 끄면 색인에서 즉시 뺀다.
+      // (추출 캐시는 남으므로 다시 켤 때는 재추출 없이 채워진다)
+      if (v) await commands.buildFileIndex();
+      else await commands.dropFileIndex();
     },
     todoPanel: "bottom",
     async setTodoPanel(v) {
@@ -343,6 +371,8 @@ export const useVault = create<VaultStore>((set, get) => {
         const todoPanel =
           (await store.get<"bottom" | "right">("todoPanel")) ?? "bottom";
         const todoBig = (await store.get<boolean>("todoBig")) ?? false;
+        const searchFuzzy = (await store.get<boolean>("searchFuzzy")) ?? false;
+        const searchInFiles = (await store.get<boolean>("searchInFiles")) ?? false;
         const dailyKindOrder =
           (await store.get<string[]>("dailyKindOrder")) ??
           DEFAULT_DAILY_KIND_ORDER;
@@ -359,6 +389,8 @@ export const useVault = create<VaultStore>((set, get) => {
           historyIntervalSecs,
           todoPanel,
           todoBig,
+          searchFuzzy,
+          searchInFiles,
           dailyKindOrder,
         });
         const saved = (await store.get<string>("vaultPath")) ?? null;
@@ -373,6 +405,11 @@ export const useVault = create<VaultStore>((set, get) => {
           // 오래된 휴지통 항목 자동 정리 (실패는 무시)
           if (trashRetentionDays > 0) {
             commands.purgeTrash(trashRetentionDays).catch(() => {});
+          }
+          // set_vault가 검색 색인을 비우고 노트만 다시 채우므로, 첨부 검색이 켜져 있으면
+          // 여기서 다시 채워야 한다. 추출 캐시가 있어 재추출은 없다(실측 105개 1.3초).
+          if (searchInFiles) {
+            commands.buildFileIndex().catch(() => {});
           }
           // 마지막 메뉴·노트 복원 (실패는 조용히 무시, 기본 home)
           try {

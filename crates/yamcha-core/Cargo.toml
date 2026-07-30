@@ -1,6 +1,6 @@
 [package]
 name = "yamcha-core"
-version = "0.2.0"
+version = "0.3.1"
 edition = "2021"
 
 [dependencies]
@@ -14,5 +14,21 @@ regex = { workspace = true }
 rusqlite = { workspace = true }
 tantivy = { workspace = true }
 
+# 첨부 문서 추출 — feature "docs"로 끌 수 있다 (초경량 빌드용 도피구).
+# 끄면 extract()가 늘 Unsupported를 돌려주고 첨부 검색이 비활성이 된다.
+cfb = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+encoding_rs = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
+calamine = { workspace = true, optional = true }
+pdf-extract = { workspace = true, optional = true }
+# 배포용 hwp(ViewText)의 AES-128 복호에만 쓴다
+aes = { workspace = true, optional = true }
+
+[features]
+default = ["docs"]
+docs = ["cfb", "flate2", "encoding_rs", "zip", "calamine", "pdf-extract", "aes"]
+
 [dev-dependencies]
 tempfile = "3"
+zip = { workspace = true }
