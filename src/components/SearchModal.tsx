@@ -133,11 +133,17 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
   const [types, setTypes] = useState<string[]>([]);
   const [days, setDays] = useState(0);
   const [tags, setTags] = useState<string[]>([]);
+  const [excludeText, setExcludeText] = useState("");
   const [allTagsOpen, setAllTagsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const notes = useVault((s) => s.notes);
 
-  const filterCount = types.length + tags.length + (days > 0 ? 1 : 0);
+  const exclude = useMemo(
+    () => excludeText.split(/[\s,]+/).filter(Boolean),
+    [excludeText],
+  );
+  const filterCount =
+    types.length + tags.length + (days > 0 ? 1 : 0) + exclude.length;
 
   // 많이 쓴 태그를 앞에 (태그가 수십 개가 되면 다 늘어놓을 수 없다)
   const tagList = useMemo(() => {
@@ -170,6 +176,7 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
         tags,
         scope: "Notes",
         fuzzy: searchFuzzy,
+        exclude,
       });
       if (seq !== seqRef.current) return;
       if (r.status === "ok") {
@@ -190,13 +197,14 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
         tags,
         scope: "Files",
         fuzzy: searchFuzzy,
+        exclude,
       });
       if (seq !== seqRef.current) return;
       setFilesLoading(false);
       if (f.status === "ok") setFileHits(f.data);
     }, 150);
     return () => clearTimeout(t);
-  }, [query, types, days, tags, searchFuzzy, searchInFiles]);
+  }, [query, types, days, tags, searchFuzzy, searchInFiles, exclude]);
 
   // 첨부 색인 진행 상황 (처음 켤 때만 눈에 띈다)
   useEffect(() => {
@@ -227,6 +235,7 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
         tags,
         scope: "Files",
         fuzzy: searchFuzzy,
+        exclude,
       });
       if (f.status === "ok") setFileHits(f.data);
     })();
@@ -292,6 +301,7 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
                 setTypes([]);
                 setDays(0);
                 setTags([]);
+                setExcludeText("");
               }}
             >
               초기화
@@ -326,6 +336,28 @@ export default function SearchModal({ onClose }: { onClose: () => void }) {
               </option>
             ))}
           </select>
+        </div>
+
+        {/* 제외어 — 검색어와 반대 방향이라 줄을 따로 둔다 */}
+        <div className="flex items-center gap-2 border-b border-neutral-100 px-4 py-2">
+          <span className="shrink-0 text-xs text-neutral-500">검색제외 :</span>
+          <input
+            className="min-w-0 flex-1 bg-transparent text-xs placeholder:text-neutral-400 focus:outline-none"
+            placeholder="여기 적은 말이 든 결과는 뺍니다 (띄어쓰기로 여러 개)"
+            value={excludeText}
+            onChange={(e) => setExcludeText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") onClose();
+            }}
+          />
+          {excludeText.trim() && (
+            <button
+              className="shrink-0 text-xs text-neutral-500 underline hover:text-neutral-800"
+              onClick={() => setExcludeText("")}
+            >
+              지우기
+            </button>
+          )}
         </div>
 
         {tagList.length > 0 && (

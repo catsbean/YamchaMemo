@@ -1168,7 +1168,12 @@ scope: SearchScope;
 /**
  * 오타·초성을 견디는 검색. 끄면 지금까지의 정확 검색만 한다.
  */
-fuzzy: boolean }
+fuzzy: boolean; 
+/**
+ * 이 말이 들어간 결과는 뺀다 (제목·본문·태그 어디든).
+ * 퍼지와 무관하게 **정확히** 판단한다 — 뺄 것은 확실히 빼야 한다.
+ */
+exclude: string[] }
 export type SearchHit = { rel_path: string; note_type: string; title: string; date: string; 
 /**
  * 매치 주변 본문 발췌

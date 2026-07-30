@@ -62,6 +62,9 @@ pub struct SearchFilter {
     pub scope: SearchScope,
     /// 오타·초성을 견디는 검색. 끄면 지금까지의 정확 검색만 한다.
     pub fuzzy: bool,
+    /// 이 말이 들어간 결과는 뺀다 (제목·본문·태그 어디든).
+    /// 퍼지와 무관하게 **정확히** 판단한다 — 뺄 것은 확실히 빼야 한다.
+    pub exclude: Vec<String>,
 }
 
 impl SearchFilter {
@@ -418,16 +421,19 @@ impl SearchEngine {
             Term::from_field_text(self.f_type, FILE_TYPE),
             IndexRecordOption::Basic,
         ));
-        let q: Box<dyn Query> = match filter.scope {
-            SearchScope::Notes => Box::new(BooleanQuery::new(vec![
-                (Occur::Must, q),
-                (Occur::MustNot, file_term),
-            ])),
-            SearchScope::Files => Box::new(BooleanQuery::new(vec![
-                (Occur::Must, q),
-                (Occur::Must, file_term),
-            ])),
-        };
+        let mut clauses: Vec<(Occur, Box<dyn Query>)> = vec![(Occur::Must, q)];
+        match filter.scope {
+            SearchScope::Notes => clauses.push((Occur::MustNot, file_term)),
+            SearchScope::Files => clauses.push((Occur::Must, file_term)),
+        }
+        // 제외어 — 퍼지 경로로 들어와도 여기서는 정확히 판단한다
+        for word in &filter.exclude {
+            if word.trim().is_empty() {
+                continue;
+            }
+            clauses.push((Occur::MustNot, self.strict_query(word.trim())));
+        }
+        let q: Box<dyn Query> = Box::new(BooleanQuery::new(clauses));
 
         let fetch = if filter.is_active() {
             (want * 4).max(200)
@@ -1061,6 +1067,111 @@ mod tests {
             .search_filtered("양자컴퓨터", &fuzzy(), 10)
             .unwrap();
         assert!(hits.is_empty(), "관계 없는 노트가 끌려왔다: {hits:?}");
+    }
+
+    /// 같은 말("이야기")을 공유하는 노트 둘 — 제외어 시험용
+    fn vault_for_exclude() -> (tempfile::TempDir, SearchEngine) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = SearchEngine::open(dir.path()).unwrap();
+        s.upsert(&note(
+            "Free/클린 코드.md",
+            "클린 코드",
+            "좋은 코드 이야기",
+            &["독서"],
+        ))
+        .unwrap();
+        s.upsert(&note(
+            "Free/함께 자라기.md",
+            "함께 자라기",
+            "애자일 이야기",
+            &[],
+        ))
+        .unwrap();
+        s.commit().unwrap();
+        (dir, s)
+    }
+
+    #[test]
+    fn exclude_removes_matching_results() {
+        let (_d, s) = vault_for_exclude();
+        // 평소엔 둘 다 나온다
+        assert_eq!(s.search("이야기", 10).unwrap().len(), 2);
+
+        // "애자일"이 들어간 것은 뺀다
+        let f = SearchFilter {
+            exclude: vec!["애자일".into()],
+            ..Default::default()
+        };
+        let hits = s.search_filtered("이야기", &f, 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].rel_path, "Free/클린 코드.md");
+
+        // 제목에 있는 말로도 뺄 수 있다
+        let f = SearchFilter {
+            exclude: vec!["클린".into()],
+            ..Default::default()
+        };
+        let hits = s.search_filtered("이야기", &f, 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].rel_path, "Free/함께 자라기.md");
+
+        // 여러 개를 빼면 다 빠진다
+        let f = SearchFilter {
+            exclude: vec!["클린".into(), "애자일".into()],
+            ..Default::default()
+        };
+        assert!(s.search_filtered("이야기", &f, 10).unwrap().is_empty());
+
+        // 빈 문자열은 무시한다 (입력 중간 상태)
+        let f = SearchFilter {
+            exclude: vec!["  ".into()],
+            ..Default::default()
+        };
+        assert_eq!(s.search_filtered("이야기", &f, 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn exclude_is_exact_even_when_fuzzy_is_on() {
+        let (_d, s) = vault_for_exclude();
+        // 퍼지를 켜도 제외는 정확히 판단한다 — 비슷하다고 덩달아 빠지면 안 된다
+        let f = SearchFilter {
+            fuzzy: true,
+            exclude: vec!["애자일".into()],
+            ..Default::default()
+        };
+        let hits = s.search_filtered("이야기", &f, 10).unwrap();
+        assert!(hits.iter().all(|h| h.rel_path != "Free/함께 자라기.md"));
+        assert!(hits.iter().any(|h| h.rel_path == "Free/클린 코드.md"));
+    }
+
+    #[test]
+    fn exclude_applies_to_attachments_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = SearchEngine::open(dir.path()).unwrap();
+        s.upsert(&file_doc(
+            "_attachments/2026-07/공고.pdf",
+            "공고.pdf",
+            "임대 공고 안내".into(),
+            "2026-07-01",
+        ))
+        .unwrap();
+        s.upsert(&file_doc(
+            "_attachments/2026-07/안내.pdf",
+            "안내.pdf",
+            "분양 공고 안내".into(),
+            "2026-07-01",
+        ))
+        .unwrap();
+        s.commit().unwrap();
+
+        let f = SearchFilter {
+            scope: SearchScope::Files,
+            exclude: vec!["임대".into()],
+            ..Default::default()
+        };
+        let hits = s.search_filtered("공고", &f, 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "안내.pdf");
     }
 
     #[test]
