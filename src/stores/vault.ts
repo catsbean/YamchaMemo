@@ -79,6 +79,9 @@ interface VaultStore {
   /** 검색에서 오타·초성을 견딜지 (검색창 토글) */
   searchFuzzy: boolean;
   toggleSearchFuzzy(): Promise<void>;
+  /** 첨부 문서(pdf·hwp·오피스) 본문까지 찾을지 (검색창 토글) */
+  searchInFiles: boolean;
+  toggleSearchInFiles(): Promise<void>;
   /** 일지 빠른 입력 바의 종류 순서 — 기본 종류는 DailyKind 값, 사용자 정의는 그 이름.
    *  여기 없는 종류(나중에 만든 것)는 뒤에 붙는다. */
   dailyKindOrder: string[];
@@ -264,6 +267,17 @@ export const useVault = create<VaultStore>((set, get) => {
       const store = await settings();
       await store.set("searchFuzzy", v);
     },
+    searchInFiles: false,
+    async toggleSearchInFiles() {
+      const v = !get().searchInFiles;
+      set({ searchInFiles: v });
+      const store = await settings();
+      await store.set("searchInFiles", v);
+      // 켜면 백그라운드에서 추출·색인, 끄면 색인에서 즉시 뺀다.
+      // (추출 캐시는 남으므로 다시 켤 때는 재추출 없이 채워진다)
+      if (v) await commands.buildFileIndex();
+      else await commands.dropFileIndex();
+    },
     todoPanel: "bottom",
     async setTodoPanel(v) {
       set({ todoPanel: v });
@@ -354,6 +368,7 @@ export const useVault = create<VaultStore>((set, get) => {
           (await store.get<"bottom" | "right">("todoPanel")) ?? "bottom";
         const todoBig = (await store.get<boolean>("todoBig")) ?? false;
         const searchFuzzy = (await store.get<boolean>("searchFuzzy")) ?? false;
+        const searchInFiles = (await store.get<boolean>("searchInFiles")) ?? false;
         const dailyKindOrder =
           (await store.get<string[]>("dailyKindOrder")) ??
           DEFAULT_DAILY_KIND_ORDER;
@@ -371,6 +386,7 @@ export const useVault = create<VaultStore>((set, get) => {
           todoPanel,
           todoBig,
           searchFuzzy,
+          searchInFiles,
           dailyKindOrder,
         });
         const saved = (await store.get<string>("vaultPath")) ?? null;

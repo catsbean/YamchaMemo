@@ -218,6 +218,14 @@ impl SearchEngine {
         Ok(())
     }
 
+    /// 타입이 같은 문서를 한꺼번에 지운다 (첨부 검색을 끌 때 `_file` 일괄 삭제).
+    /// 스키마를 늘리지 않고 `type` 필드를 재활용한 값이 여기서 나온다 — term 하나로 끝난다.
+    pub fn remove_by_type(&mut self, note_type: &str) -> Result<(), CoreError> {
+        self.writer
+            .delete_term(Term::from_field_text(self.f_type, note_type));
+        Ok(())
+    }
+
     pub fn clear(&mut self) -> Result<(), CoreError> {
         self.writer.delete_all_documents()?;
         Ok(())

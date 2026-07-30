@@ -355,22 +355,49 @@ CREATE TABLE IF NOT EXISTS doc_text(
 **남은 확인** — exe 크기 증가는 지금 재면 오해를 부른다. 아직 앱이 `extract()`를 호출하지 않아
 링커가 파서 코드를 걷어내기 때문이다. 5-3에서 실제로 쓰이기 시작한 뒤 5-5에서 잰다.
 
-### 5-3. 첨부 색인 + 커맨드
+### 5-3. 첨부 색인 + 커맨드 — ✅ 완료
 
-- `lib.rs` — `build_file_index(vault, indexer, search, progress, cancel)` / `drop_file_index(search)` / `file_index_status()`
-- `_attachments/` 순회(표지 이미지 제외), 취소·진행 콜백
-- `commands.rs` — 커맨드 3개 + `file-index-progress` 이벤트 emit, `search`에 `include_files` 전달
-- `watcher.rs` — `_attachments/` 변경 시 토글 ON이면 그 파일만 재추출·재색인
-- **바인딩 재생성 필수** (`pnpm tauri dev` 1회 → `src/bindings.ts`)
-- 테스트: 임시 vault + 샘플 첨부 → build → 검색으로 잡힘 → drop → 안 잡힘 → 다시 build는 재추출 없이 즉시
-- 커밋: `5단계-3 — 첨부 문서 색인 토글`
+- 새 파일 `crates/yamcha-core/src/file_index.rs` — `list_attachments`(표지 폴더 제외) ·
+  `build` · `rebuild_from_cache` · `drop_all` · `refresh_one` · `status_of`
+- `search.rs` — `remove_by_type()` 추가. 토글을 끌 때 `_file` term 하나로 첨부를 일괄 삭제한다
+  (스키마를 늘리지 않은 값이 여기서 나온다)
+- `commands.rs` — `file_index_status` · `build_file_index`(백그라운드) · `drop_file_index` ·
+  `reset_file_index`. 진행은 `file-index-progress`, 완료는 `file-index-done` 이벤트
+- `watcher.rs` — 토글이 켜져 있을 때만 `_attachments/` 변경을 따라간다
+- 테스트 5개: 지원 확장자만 목록에 · build로 잡히고 drop으로 사라짐 ·
+  **drop 후 캐시는 남아 재추출 없이 복구** · 취소가 즉시 먹음 · 못 읽은 문서가 현황에 보고됨
 
-### 5-4. UI
+**설계에서 하나 고쳤다 — 잠금 구간.** 처음엔 `build`이 `&mut Indexer`·`&mut SearchEngine`을
+받게 만들었는데, 그러면 커맨드가 추출 내내 `AppState` 잠금을 쥐고 있어야 한다. PDF 한 건이
+15초 걸리는 동안 **다른 모든 커맨드가 멈춘다** — 백그라운드로 돌린 의미가 없어진다.
+그래서 `IndexAccess` 트레이트를 두어 **잠금 구간을 호출자가 정하게** 했다.
+추출은 잠금 밖, 색인 쓰기만 잠금 안이다.
 
-- `SearchModal.tsx` — 토글 칩 2개 · 진행 표시 · 파일 결과 행(확장자 배지·경로·열기) · 스캔본 안내
-- `stores/vault.ts` — `searchFuzzy`·`searchInFiles` 저장/복원 (기존 패턴 그대로)
-- 검증: `npx vite build` + `pnpm tauri dev` 수동 시나리오
-- 커밋: `5단계-4 — 검색창 토글과 파일 결과`
+### 5-4. UI — ✅ 완료
+
+- `SearchModal.tsx` — 토글 칩 2개(`≈ 오타 허용` · `📄 파일 속`) · 2단 검색 ·
+  요청 일련번호로 늦게 온 응답 버리기 · 파일 결과 행(확장자 배지, 클릭=기본 앱, Ctrl+클릭=폴더) ·
+  진행률 표시 · 안 잡히는 문서 안내
+- `stores/vault.ts` — `searchFuzzy`·`searchInFiles` 저장/복원. 토글을 켜면 `buildFileIndex`,
+  끄면 `dropFileIndex`를 부른다
+- 커밋: `5단계-3 — 첨부 문서 색인 토글`, `5단계-4 — 검색창 토글과 파일 결과`
+
+**실제 vault 종단 검증** — `testvault`에 기준 파일(여름 소나기 공고 hwp)과 txt를 넣고
+`YAMCHA_VAULT=<경로> cargo test -p yamcha-core real_vault_end_to_end -- --ignored --nocapture`
+
+| 확인한 것 | 결과 |
+| --- | --- |
+| 첨부 2개 추출+색인 | **4.4초** (20만 자 hwp의 n그램 색인이 대부분) |
+| 첨부 검색 "소나기" | **10.2ms**, 1건 — 그 공고문을 찾았다 |
+| 노트 검색에 첨부가 섞이지 않음 | 통과 |
+| 토글 끄기 → 결과 사라짐 | 통과 |
+| 다시 켜기(재추출 없이) | **1.2초** |
+| 실제 앱에서 `doc_text` 테이블 생성 | 통과 (vault의 index.db에서 확인) |
+
+**여기서 새로 알게 된 것 — 색인이 추출보다 비쌀 수 있다.** 20만 자 문서 하나의 tantivy
+1~2그램 색인이 수 초를 쓴다. 그래서 §4-4의 "첨부 100개 ≤ 60초" 목표는 추출(29.7초)만
+따진 것이라 낙관적이다. 100개면 색인까지 합쳐 1분을 넘길 수 있다 — 5-5에서 실측해
+목표를 고치거나(백그라운드라 사용자가 기다리지 않는다) 문서당 색인 문자 상한을 낮춘다.
 
 ### 5-5. 검증·문서·릴리스
 
