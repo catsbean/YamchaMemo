@@ -11,6 +11,7 @@ import NewNoteDialog from "./NewNoteDialog";
 import { useCreateRequest } from "../lib/shortcuts";
 import HomeDashboard from "./HomeDashboard";
 import ReadingDashboard from "./ReadingDashboard";
+import ReviewDashboard from "./ReviewDashboard";
 import TagBrowser from "./TagBrowser";
 import WritingDashboard from "./WritingDashboard";
 
@@ -27,6 +28,7 @@ export default function Dashboard({
   if (noteType === "reading") return <ReadingDashboard />;
   if (noteType === "writing") return <WritingDashboard />;
   if (noteType === "tags") return <TagBrowser />;
+  if (noteType === "review") return <ReviewDashboard />;
   if (noteType === "audit") return <AuditDashboard />;
   return <ListDashboard noteType={noteType} />;
 }

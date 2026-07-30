@@ -45,6 +45,7 @@ export default function Sidebar({
     for (const s of schemas.filter((x) => x.builtin)) {
       ids.push(s.id);
       if (s.id === "book") ids.push("reading");
+      if (s.id === "daily") ids.push("review");
     }
     ids.push("tags");
     for (const s of schemas.filter((x) => !x.builtin)) ids.push(s.id);
@@ -121,6 +122,10 @@ export default function Sidebar({
             {/* 도서리스트 바로 아래에 독서기록(가상 메뉴) 배치 */}
             {s.id === "book" && (
               <MenuItem id="reading" label="독서기록" icon="📖" />
+            )}
+            {/* 일지 바로 아래에 회고 — 일지를 모아 보는 자리다 */}
+            {s.id === "daily" && (
+              <MenuItem id="review" label="회고" icon="🔭" />
             )}
           </span>
         ))}
