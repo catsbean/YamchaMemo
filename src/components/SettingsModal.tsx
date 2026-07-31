@@ -60,8 +60,6 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
     setQuickCaptureOn,
     quickCaptureShortcut,
     setQuickCaptureShortcut,
-    captureTarget,
-    setCaptureTarget,
     captureError,
     bookPickerView,
     setBookPickerView,
@@ -250,27 +248,6 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
                   onChange={(e) => setQuickCaptureShortcut(e.target.value)}
                 />
               </label>
-              <div className="flex items-center gap-2 text-xs text-neutral-600">
-                담을 곳
-                {(["Daily", "Inbox"] as const).map((t) => (
-                  <button
-                    key={t}
-                    className={`rounded-full px-2.5 py-0.5 ${
-                      captureTarget === t
-                        ? "bg-neutral-800 text-white"
-                        : "bg-neutral-100 hover:bg-neutral-200"
-                    }`}
-                    onClick={() => setCaptureTarget(t)}
-                  >
-                    {t === "Daily" ? "오늘 일지" : "수집함"}
-                  </button>
-                ))}
-                <span className="text-neutral-400">
-                  {captureTarget === "Daily"
-                    ? "오늘 일지의 기록으로 들어갑니다"
-                    : "Free/수집함.md 에 쌓입니다"}
-                </span>
-              </div>
             </div>
           )}
         </section>

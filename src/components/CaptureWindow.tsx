@@ -1,13 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { load } from "@tauri-apps/plugin-store";
-import { commands, type CaptureTarget } from "../bindings";
+import { commands } from "../bindings";
 import { isImeEnter } from "../lib/ime";
-
-const LABELS: Record<CaptureTarget, string> = {
-  Daily: "오늘 일지",
-  Inbox: "수집함",
-};
 
 /** 전역 단축키로 뜨는 작은 담기 창.
  *
@@ -15,17 +9,12 @@ const LABELS: Record<CaptureTarget, string> = {
  *  담기는 커맨드 하나로 끝낸다. 담고 나면 스스로 닫힌다. */
 export default function CaptureWindow() {
   const [text, setText] = useState("");
-  const [target, setTarget] = useState<CaptureTarget>("Daily");
-  const [done, setDone] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    load("settings.json", { autoSave: true, defaults: {} }).then(async (s) => {
-      const t = (await s.get<CaptureTarget>("captureTarget")) ?? "Daily";
-      setTarget(t);
-    });
     ref.current?.focus();
   }, []);
 
@@ -36,14 +25,14 @@ export default function CaptureWindow() {
   async function save() {
     if (!text.trim() || busy) return;
     setBusy(true);
-    const r = await commands.quickCapture(target, text);
+    const r = await commands.quickCapture(text);
     setBusy(false);
     if (r.status === "error") {
       setError(r.error);
       return;
     }
     // 담았다는 것만 잠깐 보여 주고 사라진다
-    setDone(LABELS[target]);
+    setDone(true);
     setTimeout(close, 700);
   }
 
@@ -61,13 +50,13 @@ export default function CaptureWindow() {
   if (done) {
     return (
       <div className="flex h-screen items-center justify-center bg-white text-sm text-neutral-600">
-        {done}에 담았습니다
+        오늘 일지에 담았습니다
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen flex-col bg-white">
+    <div className="flex h-screen flex-col bg-white text-neutral-900">
       <textarea
         ref={ref}
         autoFocus
@@ -81,27 +70,7 @@ export default function CaptureWindow() {
         <div className="px-4 pb-1 text-xs text-rose-600">{error}</div>
       )}
       <div className="flex items-center gap-2 border-t border-neutral-200 px-3 py-1.5">
-        <span className="text-2xs text-neutral-400">담을 곳</span>
-        {(["Daily", "Inbox"] as CaptureTarget[]).map((t) => (
-          <button
-            key={t}
-            className={`rounded-full px-2 py-0.5 text-xs ${
-              target === t
-                ? "bg-neutral-800 text-white"
-                : "text-neutral-600 hover:bg-neutral-100"
-            }`}
-            onClick={async () => {
-              setTarget(t);
-              const s = await load("settings.json", {
-                autoSave: true,
-                defaults: {},
-              });
-              await s.set("captureTarget", t);
-            }}
-          >
-            {LABELS[t]}
-          </button>
-        ))}
+        <span className="text-2xs text-neutral-400">오늘 일지의 기록으로 들어갑니다</span>
         <button
           className="ml-auto rounded bg-neutral-800 px-3 py-0.5 text-xs text-white disabled:opacity-40"
           disabled={!text.trim() || busy}

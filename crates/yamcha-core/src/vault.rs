@@ -1192,44 +1192,6 @@ impl Vault {
         self.read_note(rel)
     }
 
-    /// 수집함(`Free/수집함.md`)에 한 줄 붙이고 rel 경로를 돌려준다. 없으면 만든다.
-    ///
-    /// 빠른 담기의 목적지 중 하나다. 일지와 섞고 싶지 않은 사람을 위한 자리이고,
-    /// 나중에 분류해 옮기는 흐름(inbox)을 전제로 한다.
-    /// 한 줄마다 시각을 붙여 언제 담았는지 남긴다.
-    pub fn append_to_inbox(&self, text: &str) -> Result<String, CoreError> {
-        const TITLE: &str = "수집함";
-        let rel = format!("{}/{TITLE}.md", Builtin::Free.folder());
-        let abs = self
-            .root
-            .join(Builtin::Free.folder())
-            .join(format!("{TITLE}.md"));
-        let today = Local::now().format("%Y-%m-%d").to_string();
-
-        if !abs.exists() {
-            let mut fm = Map::new();
-            fm.insert("title".into(), json!(TITLE));
-            normalize_frontmatter(&mut fm, Builtin::Free.id(), &today);
-            let body = "여기저기서 담은 것들. 정리되면 알맞은 분류로 옮긴다.\n";
-            let content = parse::compose(&fm, body)?;
-            if let Some(parent) = abs.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            self.atomic_write(&abs, &content)?;
-        }
-
-        let note = self.read_note(&rel)?;
-        let stamp = Local::now().format("%Y-%m-%d %H:%M").to_string();
-        let line = format!("- {stamp} {}", text.trim());
-        let body = if note.body.trim_end().is_empty() {
-            format!("{line}\n")
-        } else {
-            format!("{}\n{line}\n", note.body.trim_end())
-        };
-        self.save_note(&rel, note.frontmatter, &body)?;
-        Ok(rel)
-    }
-
     /// 데일리노트에 빠른 입력을 추가한다.
     /// 할 일은 `## 할 일`에 체크박스로, 기록·느낌은 `## 기록`에 시각이 붙은 콜아웃으로 들어간다.
     /// 해당 섹션이 없으면(사용자가 템플릿을 고친 경우) 본문 끝에 새로 만든다.
@@ -2470,27 +2432,6 @@ mod tests {
             .unwrap();
         // "원고 본문 열 글자" 공백 제외 7자
         assert_eq!(summary.char_count, 7);
-    }
-
-    #[test]
-    fn inbox_creates_then_appends() {
-        let (_d, v) = vault();
-        // 없으면 만든다
-        let rel = v.append_to_inbox("첫 줄").unwrap();
-        assert_eq!(rel, "Free/수집함.md");
-        let n = v.read_note(&rel).unwrap();
-        assert!(n.body.contains("첫 줄"));
-        assert_eq!(n.note_type, "free");
-
-        // 두 번째부터는 밑에 쌓인다 (앞의 것을 지우지 않는다)
-        v.append_to_inbox("둘째 줄").unwrap();
-        let n = v.read_note(&rel).unwrap();
-        assert!(n.body.contains("첫 줄"));
-        assert!(n.body.contains("둘째 줄"));
-        // 언제 담았는지 남는다
-        assert!(n.body.contains(&chrono::Local::now().format("%Y-%m-%d").to_string()));
-        // 줄 수가 늘어난다 (덮어쓰기가 아니다)
-        assert_eq!(n.body.lines().filter(|l| l.starts_with("- ")).count(), 2);
     }
 
     #[test]
