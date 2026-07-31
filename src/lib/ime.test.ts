@@ -41,6 +41,15 @@ describe("한글 조합 중 Ctrl+Enter", () => {
     expect(sent).toEqual(["글자"]);
   });
 
+  it("조합 중에도 기본 동작(줄바꿈 삽입)을 막는다", async () => {
+    // 안 막으면 브라우저가 이 Enter로 줄바꿈을 넣어 버려서, 조합이 끝나며
+    // 확정 글자가 들어오는 시점과 뒤섞여 값이 망가질 수 있다.
+    const { field } = mount("value-then-end");
+    field.typeWord(GEULJA); // 마지막 음절 "자"가 조합 중인 채로
+    field.keydown(CTRL_ENTER);
+    expect(field.defaultPrevented).toBe(true);
+  });
+
   it('Enter가 "Process"로 가려져도 알아본다', async () => {
     const { field, sent } = mount("value-then-end");
     field.typeWord(GEULJA);

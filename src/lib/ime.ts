@@ -164,8 +164,12 @@ export function createImeCore<T extends InputEl>(
 
         if (composing.current || settling.current) {
           // 조합이 아직 안 끝났거나 확정 글자가 value에 안 들어왔다.
-          // 여기서 preventDefault하거나 blur로 억지로 확정시키면 IME의 확정과
-          // 겹쳐 같은 음절이 두 번 들어간다. IME에게 맡기고 `input`을 기다린다.
+          // blur로 억지로 확정시키면 IME의 확정과 겹쳐 같은 음절이 두 번
+          // 들어간다 — 그건 하지 않고 IME에게 맡겨 `input`을 기다린다.
+          // 하지만 preventDefault는 반드시 부른다. 안 부르면 브라우저가 이
+          // Enter의 기본 동작(줄바꿈 삽입)을 그대로 실행해 버려서, 조합이
+          // 끝나며 확정 글자가 들어오는 시점과 뒤섞여 값이 망가질 수 있다.
+          e.preventDefault();
           pending.current = true;
           clearTimeout(timer.current);
           timer.current = setTimeout(() => {
