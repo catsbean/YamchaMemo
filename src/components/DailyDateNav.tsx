@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import ReviewModal from "./ReviewModal";
 import { useVault } from "../stores/vault";
 
 /** `Daily/2026/07/2026-07-30.md` → `2026-07-30` */
@@ -21,7 +20,6 @@ export default function DailyDateNav({ date }: { date: string }) {
   const openDailyDate = useVault((s) => s.openDailyDate);
   const openToday = useVault((s) => s.openToday);
   const [calendar, setCalendar] = useState(false);
-  const [review, setReview] = useState(false);
 
   /** 있는 일지들의 날짜 → 경로 (오름차순) */
   const days = useMemo(() => {
@@ -84,16 +82,6 @@ export default function DailyDateNav({ date }: { date: string }) {
           오늘
         </button>
       )}
-
-      <button
-        className="shrink-0 whitespace-nowrap rounded border border-neutral-300 px-1.5 py-0.5 text-2xs text-neutral-500 hover:border-neutral-500"
-        onClick={() => setReview(true)}
-        title="주간·월간으로 모아 보기"
-      >
-        🔭 회고
-      </button>
-
-      {review && <ReviewModal onClose={() => setReview(false)} />}
 
       {calendar && (
         <Calendar

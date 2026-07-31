@@ -12,6 +12,7 @@ import { useCreateRequest } from "../lib/shortcuts";
 import HomeDashboard from "./HomeDashboard";
 import ReadingDashboard from "./ReadingDashboard";
 import ReviewDashboard from "./ReviewDashboard";
+import ReviewModal from "./ReviewModal";
 import TagBrowser from "./TagBrowser";
 import WritingDashboard from "./WritingDashboard";
 
@@ -57,6 +58,7 @@ function ListDashboard({ noteType }: { noteType: string }) {
     useVault();
   const [creating, setCreating] = useState(false);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [review, setReview] = useState(false);
 
   useCreateRequest(() => setCreating(true));
   const ctx = useContextMenu();
@@ -89,7 +91,8 @@ function ListDashboard({ noteType }: { noteType: string }) {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <header className="flex items-center justify-between border-b border-neutral-200 px-6 py-3">
+      {review && <ReviewModal onClose={() => setReview(false)} />}
+      <header className="flex items-center gap-2 border-b border-neutral-200 px-6 py-3">
         <h1 className="text-lg font-bold">
           {/* 일지는 오늘 노트가 본 화면이고 이 목록은 지난 것을 찾아보는 자리다 */}
           {noteType === "daily" ? "지난 일지" : (schema?.label ?? noteType)}{" "}
@@ -97,6 +100,16 @@ function ListDashboard({ noteType }: { noteType: string }) {
             {list.length}개
           </span>
         </h1>
+        <span className="flex-1" />
+        {noteType === "daily" && (
+          <button
+            className="rounded border border-neutral-300 px-3 py-1.5 text-sm text-neutral-600 hover:border-neutral-500 hover:text-neutral-900"
+            onClick={() => setReview(true)}
+            title="주간·월간으로 모아 보기"
+          >
+            🔭 회고
+          </button>
+        )}
         <button
           className="rounded bg-neutral-800 px-3 py-1.5 text-sm text-white hover:bg-neutral-600"
           onClick={() => {

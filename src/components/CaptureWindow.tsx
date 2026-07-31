@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands } from "../bindings";
 import { isImeEnter } from "../lib/ime";
+import { notifyOtherWindows } from "../lib/windowSync";
 
 /** 전역 단축키로 뜨는 작은 담기 창.
  *
@@ -31,6 +32,9 @@ export default function CaptureWindow() {
       setError(r.error);
       return;
     }
+    // 그 일지를 열어 둔 창이 있으면 지금 담은 줄이 바로 보이게 알린다.
+    // 백엔드 watcher는 앱 자신의 쓰기를 억제하므로 창끼리 직접 알려야 한다.
+    await notifyOtherWindows([r.data]);
     // 담았다는 것만 잠깐 보여 주고 사라진다
     setDone(true);
     setTimeout(close, 700);
