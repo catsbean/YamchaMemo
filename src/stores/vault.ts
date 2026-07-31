@@ -5,6 +5,11 @@ import { listen } from "@tauri-apps/api/event";
 import { join } from "@tauri-apps/api/path";
 import { notifyOtherWindows } from "../lib/windowSync";
 import {
+  DEFAULT_CAPTURE_SHORTCUT,
+  disableCapture,
+  enableCapture,
+} from "../lib/quickCapture";
+import {
   commands,
   type DailyKind,
   type CalloutDef,
@@ -76,6 +81,15 @@ interface VaultStore {
   /** 할 일 구역을 크게 볼지 (기록 영역과 비율을 뒤집는다) */
   todoBig: boolean;
   toggleTodoBig(): Promise<void>;
+  /** 빠른 담기 — 전역 단축키로 작은 창을 띄워 앱을 열지 않고 담는다 (기본 꺼짐) */
+  quickCaptureOn: boolean;
+  quickCaptureShortcut: string;
+  captureTarget: "Daily" | "Inbox";
+  /** 단축키를 걸지 못한 사유 (다른 프로그램과 충돌 등). 없으면 null */
+  captureError: string | null;
+  setQuickCaptureOn(v: boolean): Promise<void>;
+  setQuickCaptureShortcut(s: string): Promise<void>;
+  setCaptureTarget(t: "Daily" | "Inbox"): Promise<void>;
   /** 검색에서 오타·초성을 견딜지 (검색창 토글) */
   searchFuzzy: boolean;
   toggleSearchFuzzy(): Promise<void>;
@@ -264,6 +278,35 @@ export const useVault = create<VaultStore>((set, get) => {
       const store = await settings();
       await store.set("todoBig", v);
     },
+    quickCaptureOn: false,
+    quickCaptureShortcut: DEFAULT_CAPTURE_SHORTCUT,
+    captureTarget: "Daily",
+    captureError: null,
+    async setQuickCaptureOn(v) {
+      set({ quickCaptureOn: v, captureError: null });
+      const store = await settings();
+      await store.set("quickCaptureOn", v);
+      if (v) {
+        const err = await enableCapture(get().quickCaptureShortcut);
+        if (err) set({ captureError: err });
+      } else {
+        await disableCapture();
+      }
+    },
+    async setQuickCaptureShortcut(sc) {
+      set({ quickCaptureShortcut: sc, captureError: null });
+      const store = await settings();
+      await store.set("quickCaptureShortcut", sc);
+      if (get().quickCaptureOn) {
+        const err = await enableCapture(sc);
+        if (err) set({ captureError: err });
+      }
+    },
+    async setCaptureTarget(t) {
+      set({ captureTarget: t });
+      const store = await settings();
+      await store.set("captureTarget", t);
+    },
     searchFuzzy: false,
     async toggleSearchFuzzy() {
       const v = !get().searchFuzzy;
@@ -371,6 +414,13 @@ export const useVault = create<VaultStore>((set, get) => {
         const todoPanel =
           (await store.get<"bottom" | "right">("todoPanel")) ?? "bottom";
         const todoBig = (await store.get<boolean>("todoBig")) ?? false;
+        const quickCaptureOn =
+          (await store.get<boolean>("quickCaptureOn")) ?? false;
+        const quickCaptureShortcut =
+          (await store.get<string>("quickCaptureShortcut")) ??
+          DEFAULT_CAPTURE_SHORTCUT;
+        const captureTarget =
+          (await store.get<"Daily" | "Inbox">("captureTarget")) ?? "Daily";
         const searchFuzzy = (await store.get<boolean>("searchFuzzy")) ?? false;
         const searchInFiles = (await store.get<boolean>("searchInFiles")) ?? false;
         const dailyKindOrder =
@@ -389,10 +439,18 @@ export const useVault = create<VaultStore>((set, get) => {
           historyIntervalSecs,
           todoPanel,
           todoBig,
+          quickCaptureOn,
+          quickCaptureShortcut,
+          captureTarget,
           searchFuzzy,
           searchInFiles,
           dailyKindOrder,
         });
+        // 켜 둔 채로 앱을 껐었다면 다시 걸어 준다. 실패해도 시작을 막지 않는다.
+        if (quickCaptureOn) {
+          const err = await enableCapture(quickCaptureShortcut);
+          if (err) set({ captureError: err });
+        }
         const saved = (await store.get<string>("vaultPath")) ?? null;
         if (saved) {
           unwrap(await commands.setVault(saved));

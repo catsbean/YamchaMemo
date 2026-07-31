@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the main window, the trash window, and per-note windows (note-*)",
-  "windows": ["main", "trash", "note-*", "todos-*"],
+  "description": "Default capability for the main window, the trash window, per-note windows (note-*), and the quick capture window",
+  "windows": ["main", "trash", "note-*", "todos-*", "capture"],
   "permissions": [
     "core:default",
     "core:webview:allow-create-webview-window",
@@ -10,8 +10,14 @@
     "core:window:allow-destroy",
     "core:window:allow-close",
     "core:window:allow-set-focus",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-center",
     "dialog:default",
     "opener:default",
-    "store:default"
+    "store:default",
+    "global-shortcut:allow-is-registered",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister"
   ]
 }

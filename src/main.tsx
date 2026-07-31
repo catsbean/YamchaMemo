@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { load } from "@tauri-apps/plugin-store";
 import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
+import CaptureWindow from "./components/CaptureWindow";
 import NoteWindow from "./components/NoteWindow";
 import TodoWindow from "./components/TodoWindow";
 import TrashWindow from "./components/TrashWindow";
@@ -12,11 +13,13 @@ import "./styles.css";
 // 별도 창은 ?view= 로 구분한다 (메인 앱 로직은 실행하지 않음)
 //   ?view=trash            → 휴지통
 //   ?view=note&rel=<경로>  → 노트 한 편
+//   ?view=capture          → 빠른 담기 (전역 단축키로 뜨는 작은 창)
 const params = new URLSearchParams(window.location.search);
 const view = params.get("view");
 const rel = params.get("rel") ?? "";
 
 function Root() {
+  if (view === "capture") return <CaptureWindow />;
   if (view === "trash") return <TrashWindow />;
   if (view === "note" && rel) return <NoteWindow relPath={rel} />;
   if (view === "todos" && rel) return <TodoWindow relPath={rel} />;

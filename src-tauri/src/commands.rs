@@ -698,6 +698,47 @@ pub fn append_daily_entry(
     })
 }
 
+// ---------- 빠른 담기 ----------
+
+/// 담긴 것이 어디로 갈지
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone, Copy, PartialEq, Debug)]
+pub enum CaptureTarget {
+    /// 오늘 일지에 `기록` 콜아웃으로 (기본값)
+    Daily,
+    /// `Free/수집함.md` 한 파일에 계속 쌓기
+    Inbox,
+}
+
+/// 빠른 담기 — 한 줄을 정한 곳에 붙이고 그 노트의 rel 경로를 돌려준다.
+///
+/// 앱 화면을 거치지 않고 불릴 수 있으므로(전역 단축키 → 작은 창) **여기서 스스로
+/// 필요한 것을 만든다** — 오늘 일지가 없으면 만들고, 수집함이 없으면 만든다.
+#[tauri::command]
+#[specta::specta]
+pub fn quick_capture(
+    state: State<'_, AppState>,
+    target: CaptureTarget,
+    text: String,
+) -> Result<String, String> {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err("담을 내용이 비어 있습니다".into());
+    }
+    with_ctx_write(&state, |c| {
+        let rel = match target {
+            CaptureTarget::Daily => {
+                let rel = c.vault.open_daily(&Vault::today())?;
+                c.vault
+                    .append_daily_entry(&rel, yamcha_core::schema::DailyKind::Log, &text)?;
+                rel
+            }
+            CaptureTarget::Inbox => c.vault.append_to_inbox(&text)?,
+        };
+        refresh_note(c, &rel)?;
+        Ok(rel)
+    })
+}
+
 /// 일지의 할 일 한 건 (index는 문서에 적힌 순서 — 화면 정렬과 무관하게 이 값으로 조작한다)
 #[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone)]
 pub struct NoteTodo {

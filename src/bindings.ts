@@ -374,6 +374,20 @@ async reindex() : Promise<Result<number, string>> {
 }
 },
 /**
+ * 빠른 담기 — 한 줄을 정한 곳에 붙이고 그 노트의 rel 경로를 돌려준다.
+ * 
+ * 앱 화면을 거치지 않고 불릴 수 있으므로(전역 단축키 → 작은 창) **여기서 스스로
+ * 필요한 것을 만든다** — 오늘 일지가 없으면 만들고, 수집함이 없으면 만든다.
+ */
+async quickCapture(target: CaptureTarget, text: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("quick_capture", { target, text }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 첨부 색인 현황 (색인된 수 · 스캔본 · 암호 · 실패)
  */
 async fileIndexStatus() : Promise<Result<FileIndexStatus, string>> {
@@ -897,6 +911,18 @@ color: string;
  * 어디에 쓸지: "daily" | "book" | "both"
  */
 scope: string }
+/**
+ * 담긴 것이 어디로 갈지
+ */
+export type CaptureTarget = 
+/**
+ * 오늘 일지에 `기록` 콜아웃으로 (기본값)
+ */
+"Daily" | 
+/**
+ * `Free/수집함.md` 한 파일에 계속 쌓기
+ */
+"Inbox"
 /**
  * 데일리노트 하단 요약 바에 뿌릴 값들 (템플릿과 무관하게 항상 계산한다)
  */

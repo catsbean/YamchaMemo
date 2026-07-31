@@ -30,6 +30,7 @@ notify-debouncer-full = "0.5"
 # 앱 쪽에 default feature로 두지 않는 이유: `tauri dev`가 cargo를
 # `--no-default-features`로 실행해서, dev에서만 문서 검색이 조용히 꺼진다.
 yamcha-core = { path = "../crates/yamcha-core" }
+tauri-plugin-global-shortcut = "2.3.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

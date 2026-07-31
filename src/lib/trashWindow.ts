@@ -68,3 +68,26 @@ export async function openTrashWindow(): Promise<void> {
   });
   w.once("tauri://error", (e) => console.error("휴지통 창 열기 실패", e));
 }
+
+/** 빠른 담기 창 — 전역 단축키로 부른다.
+ *  이미 떠 있으면 새로 만들지 않고 앞으로 가져온다(연타로 창이 쌓이지 않게). */
+export async function openCaptureWindow(): Promise<void> {
+  const existing = await WebviewWindow.getByLabel("capture");
+  if (existing) {
+    await existing.setFocus();
+    return;
+  }
+  const w = new WebviewWindow("capture", {
+    url: "index.html?view=capture",
+    title: "빠른 담기",
+    width: 560,
+    height: 200,
+    resizable: false,
+    center: true,
+    alwaysOnTop: true,
+    decorations: true,
+    skipTaskbar: true,
+  });
+  w.once("tauri://created", () => w.setFocus());
+  w.once("tauri://error", (e) => console.error("빠른 담기 창 열기 실패", e));
+}

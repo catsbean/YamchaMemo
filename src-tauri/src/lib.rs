@@ -45,6 +45,7 @@ pub fn run() {
         commands::preview_template,
         commands::notes_by_tag,
         commands::reindex,
+        commands::quick_capture,
         commands::file_index_status,
         commands::build_file_index,
         commands::drop_file_index,
@@ -103,6 +104,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(AppState(Mutex::new(None)))
         .manage(WatcherState(Mutex::new(None)))
         .invoke_handler(builder.invoke_handler())
