@@ -352,7 +352,7 @@ mod tests {
 
         let att = dir.path().join("_attachments").join("2026-07");
         std::fs::create_dir_all(&att).unwrap();
-        std::fs::write(att.join("메모.txt"), "여름 소나기 이야기 전용면적 84").unwrap();
+        std::fs::write(att.join("메모.txt"), "공고문 본문 전용면적 84제곱미터").unwrap();
         std::fs::write(att.join("일정.csv"), "날짜,내용\n2026-07-30,청약 접수").unwrap();
         // 표지 폴더는 훑지 않는다
         let covers = dir.path().join("_attachments").join("covers");
@@ -399,14 +399,14 @@ mod tests {
         assert_eq!(seen.len(), 2);
 
         // 노트 검색(기본)에는 첨부가 안 나온다
-        assert!(s.search("소나기", 10).unwrap().is_empty());
+        assert!(s.search("전용면적", 10).unwrap().is_empty());
 
         // 첨부 검색에는 나온다
         let files = crate::search::SearchFilter {
             scope: crate::search::SearchScope::Files,
             ..Default::default()
         };
-        let hits = s.search_filtered("소나기", &files, 10).unwrap();
+        let hits = s.search_filtered("전용면적", &files, 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].rel_path, "_attachments/2026-07/메모.txt");
         // 제목 자리에 파일 이름이 들어가므로 파일명 검색도 된다
@@ -416,14 +416,14 @@ mod tests {
 
         // 끄면 색인에서 사라진다
         drop_all(&mut s).unwrap();
-        assert!(s.search_filtered("소나기", &files, 10).unwrap().is_empty());
+        assert!(s.search_filtered("전용면적", &files, 10).unwrap().is_empty());
         // 노트는 그대로 (첨부만 빠졌다)
         assert_eq!(i.all_docs().unwrap().len(), 2, "추출 캐시는 남아 있어야 한다");
 
         // 다시 켜면 재추출 없이 즉시 복구된다
         let st = rebuild_from_cache(&v, &mut i, &mut s).unwrap();
         assert_eq!(st.indexed, 2);
-        assert_eq!(s.search_filtered("소나기", &files, 10).unwrap().len(), 1);
+        assert_eq!(s.search_filtered("전용면적", &files, 10).unwrap().len(), 1);
     }
 
     /// watcher는 바뀐 파일 하나만 넘긴다. 그때 나머지 캐시가 날아가면 안 된다.
@@ -499,7 +499,7 @@ mod tests {
         // mtime 해상도가 초 단위라 크기까지 달라지도록 썼다
         refresh_one(&v, &mut i, &mut s, rel).unwrap();
         assert_eq!(s.search_filtered("토크나이저", &files, 10).unwrap().len(), 1);
-        assert!(s.search_filtered("소나기", &files, 10).unwrap().is_empty());
+        assert!(s.search_filtered("전용면적", &files, 10).unwrap().is_empty());
 
         // 파일이 사라지면 색인·캐시에서 빠진다
         std::fs::remove_file(&abs).unwrap();
@@ -517,7 +517,7 @@ mod tests {
     #[ignore]
     fn real_vault_end_to_end() {
         let path = std::env::var("YAMCHA_VAULT").expect("YAMCHA_VAULT에 vault 경로를 넣어 주세요");
-        let needle = std::env::var("YAMCHA_FIND").unwrap_or_else(|_| "소나기".to_string());
+        let needle = std::env::var("YAMCHA_FIND").unwrap_or_else(|_| "전용면적".to_string());
         let root = std::path::PathBuf::from(&path);
         let v = Vault::open(&root).unwrap();
         let mut i = Indexer::open(&root.join(".yamcha/index.db")).unwrap();

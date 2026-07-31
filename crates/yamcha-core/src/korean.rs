@@ -223,7 +223,7 @@ mod tests {
     fn chosung_extraction() {
         assert_eq!(chosung("클린 코드"), "ㅋㄹㅋㄷ");
         assert_eq!(chosung("함께 자라기"), "ㅎㄲㅈㄹㄱ");
-        assert_eq!(chosung("여름 소나기"), "ㅇㅅㅇㅌㄹ");
+        assert_eq!(chosung("공공 주택"), "ㄱㄱㅈㅌ");
     }
 
     #[test]
@@ -275,7 +275,7 @@ mod tests {
         // 예산: 자모 6개마다 1개
         assert_eq!(error_budget("소나기"), 1); // 6자모
         assert_eq!(error_budget("클린 코드"), 1); // 10자모
-        assert_eq!(error_budget("여름 소나기 입주자"), 3); // 20자모
+        assert_eq!(error_budget("여름 소나기 이야기"), 2); // 17자모
 
         // 오타 하나는 통과
         assert!(is_near("소나키", "여름 소나기 이야기"));

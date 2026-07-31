@@ -640,13 +640,13 @@ mod tests {
             &hwpx,
             &[(
                 "Contents/section0.xml",
-                r#"<hml><hp:p><hp:t>여름 소나기</hp:t></hp:p><hp:p><hp:t>입주자모집공고</hp:t></hp:p></hml>"#,
+                r#"<hml><hp:p><hp:t>첫째 문단</hp:t></hp:p><hp:p><hp:t>둘째 문단</hp:t></hp:p></hml>"#,
             )],
         );
         let r = extract(&hwpx);
         assert_eq!(r.status, Status::Ok);
-        assert!(r.text.contains("여름 소나기"));
-        assert!(r.text.contains("입주자모집공고"));
+        assert!(r.text.contains("첫째 문단"));
+        assert!(r.text.contains("둘째 문단"));
 
         let pptx = d.path().join("발표.pptx");
         make_zip(
@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(distribution_key(&head), Some(key), "심은 키를 되찾지 못했다");
 
         // ② 본문 레코드를 만들어 압축하고 AES로 잠근다
-        let text = "여름 소나기 배포용 공고문";
+        let text = "배포용 문서의 본문 한 줄";
         let utf16: Vec<u8> = text
             .encode_utf16()
             .flat_map(|u| u.to_le_bytes())
@@ -830,8 +830,8 @@ mod tests {
         // ④ 되읽는다
         let r = extract(&path);
         assert_eq!(r.status, Status::Ok, "배포용 문서를 읽지 못했다");
-        assert!(r.text.contains("여름 소나기"), "{:?}", r.text);
-        assert!(r.text.contains("배포용 공고문"), "{:?}", r.text);
+        assert!(r.text.contains("배포용 문서"), "{:?}", r.text);
+        assert!(r.text.contains("본문 한 줄"), "{:?}", r.text);
     }
 
     /// 열쇠를 못 찾는 배포용 문서는 실패가 아니라 "잠김"으로 남는다
