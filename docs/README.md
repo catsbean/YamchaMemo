@@ -8,5 +8,6 @@
 | [ROADMAP.md](ROADMAP.md) | 단계별 계획과 **그 순서를 고른 이유**, 이미 내린 결정 |
 | [RELEASE.md](RELEASE.md) | 배포 절차(버전 올리기 → 태그 → Release 발행), 초경량 빌드 |
 | [HANDOFF-search.md](HANDOFF-search.md) | 5·6단계 검색 강화의 설계 기록 — 실측 수치, 결정 근거, 밟은 함정 |
+| [HANDOFF-capture.md](HANDOFF-capture.md) | 7단계 담기(빠른 담기·웹 스크랩·통계·백업) 계획 |
 
 새 사람이 붙는다면 `HANDOFF.md` §0~§2를 먼저 읽으면 됩니다.
