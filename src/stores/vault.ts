@@ -88,6 +88,9 @@ interface VaultStore {
   captureError: string | null;
   setQuickCaptureOn(v: boolean): Promise<void>;
   setQuickCaptureShortcut(s: string): Promise<void>;
+  /** 회고에 독서기록도 함께 볼지 (회고 화면 토글) */
+  reviewShowReading: boolean;
+  toggleReviewShowReading(): Promise<void>;
   /** 검색에서 오타·초성을 견딜지 (검색창 토글) */
   searchFuzzy: boolean;
   toggleSearchFuzzy(): Promise<void>;
@@ -299,6 +302,13 @@ export const useVault = create<VaultStore>((set, get) => {
         if (err) set({ captureError: err });
       }
     },
+    reviewShowReading: false,
+    async toggleReviewShowReading() {
+      const v = !get().reviewShowReading;
+      set({ reviewShowReading: v });
+      const store = await settings();
+      await store.set("reviewShowReading", v);
+    },
     searchFuzzy: false,
     async toggleSearchFuzzy() {
       const v = !get().searchFuzzy;
@@ -411,6 +421,8 @@ export const useVault = create<VaultStore>((set, get) => {
         const quickCaptureShortcut =
           (await store.get<string>("quickCaptureShortcut")) ??
           DEFAULT_CAPTURE_SHORTCUT;
+        const reviewShowReading =
+          (await store.get<boolean>("reviewShowReading")) ?? false;
         const searchFuzzy = (await store.get<boolean>("searchFuzzy")) ?? false;
         const searchInFiles = (await store.get<boolean>("searchInFiles")) ?? false;
         const dailyKindOrder =
@@ -431,6 +443,7 @@ export const useVault = create<VaultStore>((set, get) => {
           todoBig,
           quickCaptureOn,
           quickCaptureShortcut,
+          reviewShowReading,
           searchFuzzy,
           searchInFiles,
           dailyKindOrder,

@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { commands, type NoteBlock, type NoteTodo } from "../bindings";
+import {
+  commands,
+  type NoteBlock,
+  type NoteTodo,
+  type ReadingEntry,
+} from "../bindings";
 import { kindByLabel, styleOf } from "../lib/callouts";
 import { bodyToHtml, wrapDocument } from "../lib/exportHtml";
 import { printHtml, saveTextAs } from "../lib/exportFile";
@@ -33,6 +38,10 @@ export default function ReviewDashboard() {
   const [anchor, setAnchor] = useState(() => ymd(new Date()));
   const [days, setDays] = useState<Day[] | null>(null);
   const [kindOff, setKindOff] = useState<Set<string>>(new Set());
+  /** 독서기록도 함께 볼지 (설정에 남는다) */
+  const showReading = useVault((s) => s.reviewShowReading);
+  const toggleReading = useVault((s) => s.toggleReviewShowReading);
+  const [reading, setReading] = useState<ReadingEntry[]>([]);
 
   const { from, to, label } = useMemo(() => range(span, anchor), [span, anchor]);
 
@@ -71,7 +80,37 @@ export default function ReviewDashboard() {
     };
   }, [rels]);
 
+  // 독서기록은 책 노트에 흩어져 있어 한 번에 받아 기간으로 거른다
+  useEffect(() => {
+    if (!showReading) {
+      setReading([]);
+      return;
+    }
+    let alive = true;
+    commands.listEntries().then((r) => {
+      if (!alive || r.status !== "ok") return;
+      setReading(r.data.filter((e) => e.date >= from && e.date <= to));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [showReading, from, to, notes]);
+
   const shift = (by: number) => setAnchor(step(span, anchor, by));
+
+  /** 날짜별로 묶은 독서기록 (일지와 같은 날짜 아래 붙여 보여 준다) */
+  const readingByDate = useMemo(() => {
+    const m = new Map<string, ReadingEntry[]>();
+    for (const e of reading) m.set(e.date, [...(m.get(e.date) ?? []), e]);
+    return m;
+  }, [reading]);
+
+  /** 일지가 없는 날에도 독서기록만 있으면 그 날을 보여 준다 */
+  const allDates = useMemo(() => {
+    const set = new Set<string>((days ?? []).map((d) => d.date));
+    for (const d of readingByDate.keys()) set.add(d);
+    return [...set].sort((a, b) => b.localeCompare(a));
+  }, [days, readingByDate]);
 
   // 기간 전체 집계
   const stat = useMemo(() => {
@@ -165,7 +204,18 @@ export default function ReviewDashboard() {
             이번 {span === "week" ? "주" : "달"}
           </button>
           <button
-            className="ml-2 rounded border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 hover:border-neutral-500 disabled:opacity-40"
+            className={`ml-2 rounded-full border px-2.5 py-1 text-xs ${
+              showReading
+                ? "border-transparent bg-amber-600 text-white"
+                : "border-neutral-300 text-neutral-600 hover:bg-neutral-100"
+            }`}
+            onClick={() => toggleReading()}
+            title="책에 남긴 발췌·생각·요약·질문도 날짜별로 함께 봅니다"
+          >
+            📖 독서기록
+          </button>
+          <button
+            className="rounded border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 hover:border-neutral-500 disabled:opacity-40"
             disabled={!days || days.length === 0}
             onClick={() => printHtml(buildHtml())}
             title="인쇄 창에서 PDF로 저장할 수 있습니다"
@@ -236,28 +286,34 @@ export default function ReviewDashboard() {
         {days === null && (
           <p className="mt-16 text-center text-sm text-neutral-400">불러오는 중…</p>
         )}
-        {days?.length === 0 && (
+        {days !== null && allDates.length === 0 && (
           <p className="mt-16 text-center text-sm text-neutral-400">
-            이 {span === "week" ? "주" : "달"}에는 쓴 일지가 없습니다.
+            이 {span === "week" ? "주" : "달"}에는 쓴 것이 없습니다.
           </p>
         )}
-        {days?.map((d) => {
-          const recs = d.blocks.filter(
+        {days !== null &&
+          allDates.map((date) => {
+          const d = days.find((x) => x.date === date);
+          const recs = (d?.blocks ?? []).filter(
             (b) => b.kind === "callout" && visible(b.kind_label),
           );
-          const done = d.todos.filter((t) => t.done);
-          const open = d.todos.filter((t) => !t.done);
-          if (recs.length === 0 && d.todos.length === 0) return null;
+          const todos = d?.todos ?? [];
+          const done = todos.filter((t) => t.done);
+          const open = todos.filter((t) => !t.done);
+          const books = readingByDate.get(date) ?? [];
+          if (recs.length === 0 && todos.length === 0 && books.length === 0)
+            return null;
           return (
-            <section key={d.rel} className="mb-6">
+            <section key={date} className="mb-6">
               <button
-                className="mb-2 flex items-baseline gap-2 rounded px-1 hover:bg-neutral-100"
-                onClick={() => openNote(d.rel)}
-                title="이 날 일지 열기"
+                className="mb-2 flex items-baseline gap-2 rounded px-1 hover:bg-neutral-100 disabled:hover:bg-transparent"
+                disabled={!d}
+                onClick={() => d && openNote(d.rel)}
+                title={d ? "이 날 일지 열기" : "이 날은 일지가 없습니다"}
               >
-                <h2 className="text-sm font-bold">{d.date}</h2>
+                <h2 className="text-sm font-bold">{date}</h2>
                 <span className="text-2xs text-neutral-400">
-                  ({weekdayOf(d.date)})
+                  ({weekdayOf(date)})
                 </span>
                 {done.length > 0 && (
                   <span className="text-2xs text-emerald-600">
@@ -316,6 +372,42 @@ export default function ReviewDashboard() {
                   );
                 })}
               </div>
+
+              {books.length > 0 && (
+                <div className="mt-1.5 flex flex-col gap-1.5">
+                  {books.map((e, i) => {
+                    const k = kindByLabel(
+                      e.kind_label,
+                      callouts.map((c) => ({
+                        label: c.label,
+                        icon: c.icon ?? "",
+                        color: c.color as never,
+                      })),
+                    );
+                    return (
+                      <button
+                        key={`b${i}`}
+                        className={`rounded-md border px-3 py-2 text-left ${styleOf(k.color).card}`}
+                        onClick={() => openNote(e.book_rel)}
+                        title="이 책 열기"
+                      >
+                        <div className="mb-0.5 flex items-baseline gap-1.5 text-2xs">
+                          <span className="rounded bg-amber-100 px-1 text-amber-700">
+                            📖 {e.book_title}
+                          </span>
+                          <span className="font-semibold opacity-70">
+                            {k.icon} {e.kind_label}
+                          </span>
+                        </div>
+                        <NoteText
+                          text={e.text}
+                          className="whitespace-pre-wrap text-sm"
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </section>
           );
         })}
