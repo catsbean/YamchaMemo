@@ -6483,6 +6483,7 @@ dependencies = [
  "tauri-plugin-store",
  "tauri-specta",
  "tokio",
+ "url",
  "yamcha-core",
 ]
 

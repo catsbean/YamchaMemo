@@ -396,6 +396,18 @@ async fetchPageTitle(url: string) : Promise<string | null> {
     return await TAURI_INVOKE("fetch_page_title", { url });
 },
 /**
+ * 7-3a 스파이크 — 숨은 창으로 JS 렌더링 후 본문을 가져올 수 있는지 확인한다.
+ * (실험용. 검증되면 정식 모듈로 옮기고 이 커맨드는 지운다)
+ */
+async spikeRenderPage(url: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("spike_render_page", { url }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 첨부 색인 현황 (색인된 수 · 스캔본 · 암호 · 실패)
  */
 async fileIndexStatus() : Promise<Result<FileIndexStatus, string>> {
@@ -828,7 +840,7 @@ async cancelEnrich() : Promise<void> {
     await TAURI_INVOKE("cancel_enrich");
 },
 /**
- * 데일리/자유노트 본문 템플릿 읽기 (kind: "daily"|"free"). 커스텀 없으면 기본값.
+ * 노트 본문 템플릿 읽기 (kind: "daily"|"free"|"info"|"writing"). 커스텀 없으면 기본값.
  */
 async getNoteTemplate(kind: string) : Promise<Result<string, string>> {
     try {

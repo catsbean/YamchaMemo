@@ -31,6 +31,10 @@ notify-debouncer-full = "0.5"
 # `--no-default-features`로 실행해서, dev에서만 문서 검색이 조용히 꺼진다.
 yamcha-core = { path = "../crates/yamcha-core" }
 tauri-plugin-global-shortcut = "2.3.2"
+# 스크랩(7-3)의 숨은 창 왕복 — eval_with_callback 결과를 oneshot으로 받고 timeout을 건다.
+# tokio 런타임 자체는 tauri가 이미 돌리고 있으므로 sync·time만 있으면 된다.
+tokio = { version = "1", features = ["sync", "time"] }
+url = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

@@ -893,11 +893,13 @@ impl Vault {
         )
     }
 
-    /// 데일리/자유 커스텀 템플릿 파일 경로 (kind: "daily"|"free")
+    /// 커스텀 템플릿 파일 경로 (kind: "daily"|"free"|"info"|"writing")
     fn template_file_path(&self, kind: &str) -> Option<PathBuf> {
         let name = match kind {
             "daily" => "daily.md",
             "free" => "free.md",
+            "info" => "info.md",
+            "writing" => "writing.md",
             _ => return None,
         };
         Some(self.root.join(".yamcha").join("templates").join(name))
@@ -907,6 +909,8 @@ impl Vault {
         match kind {
             "daily" => Some(Builtin::Daily),
             "free" => Some(Builtin::Free),
+            "info" => Some(Builtin::Info),
+            "writing" => Some(Builtin::Writing),
             _ => None,
         }
     }
@@ -917,6 +921,8 @@ impl Vault {
         let kind = match b {
             Builtin::Daily => "daily",
             Builtin::Free => "free",
+            Builtin::Info => "info",
+            Builtin::Writing => "writing",
             _ => return template::builtin_body_template(b).to_string(),
         };
         if let Some(p) = self.template_file_path(kind) {
@@ -985,7 +991,8 @@ impl Vault {
                 let stem =
                     Self::sanitize_filename(&self.apply_title_prefix(type_id, &today, &raw));
                 let abs = self.unique_path(&self.root.join(&def.folder), &stem);
-                (abs, template::render_template(&def.template, &today, &raw))
+                let tmpl = self.body_template(Builtin::Info);
+                (abs, template::render_template(&tmpl, &today, &raw))
             }
             Some(Builtin::Free) | Some(Builtin::Writing) | None => {
                 // 자유노트·글쓰기·사용자 정의 타입은 제목 = 파일명
@@ -999,9 +1006,11 @@ impl Vault {
                 if type_id == Builtin::Writing.id() && !fm.contains_key("started") {
                     fm.insert("started".into(), json!(today));
                 }
-                // 자유노트는 사용자 템플릿 우선, 그 외는 타입 정의 템플릿
+                // 자유노트·글쓰기는 사용자 템플릿 우선, 그 외(사용자 정의 타입)는 타입 정의 템플릿
                 let tmpl = if type_id == Builtin::Free.id() {
                     self.body_template(Builtin::Free)
+                } else if type_id == Builtin::Writing.id() {
+                    self.body_template(Builtin::Writing)
                 } else {
                     def.template.clone()
                 };

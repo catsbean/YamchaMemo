@@ -56,6 +56,78 @@ static ENRICH_CANCEL: AtomicBool = AtomicBool::new(false);
 
 // ---------- URL 붙여넣기: 제목만 가져오기 ----------
 
+/// 7-3a 스파이크 — 숨은 창으로 JS 렌더링 후 본문을 가져올 수 있는지 확인한다.
+/// (실험용. 검증되면 정식 모듈로 옮기고 이 커맨드는 지운다)
+#[tauri::command]
+#[specta::specta]
+pub async fn spike_render_page(app: tauri::AppHandle, url: String) -> Result<String, String> {
+    use std::sync::Arc;
+    use tauri::webview::PageLoadEvent;
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
+    let label = format!("spike-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis());
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
+    let tx_for_load = tx.clone();
+
+    // on_page_load는 빌더에만 있다 — 만들어진 창에는 없다
+    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+        .visible(false)
+        .inner_size(1280.0, 2000.0) // 일부 사이트는 화면 크기로 렌더 여부를 가른다
+        .on_page_load(move |w, payload| {
+            if !matches!(payload.event(), PageLoadEvent::Finished) {
+                return;
+            }
+            let w2 = w.clone();
+            let tx2 = tx_for_load.clone();
+            // SPA 하이드레이션 시간을 준다 — Finished는 초기 HTML 로드 시점이지
+            // 클라이언트 JS가 본문을 다 그린 시점이 아니다 (7-0에서 Threads로 확인한 문제)
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(1500));
+                let _ = w2.eval_with_callback(
+                    r#"JSON.stringify({
+                        title: document.title,
+                        len: document.body.innerText.length,
+                        head: document.body.innerText.slice(0, 400)
+                    })"#,
+                    move |result| {
+                        if let Some(sender) = tx2.lock().unwrap().take() {
+                            let _ = sender.send(result);
+                        }
+                    },
+                );
+            });
+        })
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let result = tokio::time::timeout(Duration::from_secs(15), rx)
+        .await
+        .map_err(|_| "15초 안에 렌더링이 끝나지 않았습니다".to_string())?
+        .map_err(|_| "콜백 채널이 닫혔습니다".to_string())?;
+    let _ = window.close();
+    Ok(unwrap_eval_json(&result))
+}
+
+/// `eval_with_callback`이 문자열을 몇 겹으로 감싸 주는지가 페이지마다 다르게 보였다
+/// (실측 — Threads 글 하나는 한 겹, 다른 하나는 두 겹). JSON으로 파싱했는데 그 결과가
+/// 또 문자열이면 한 번 더 푼다. 몇 겹이든 안전하게 알맹이까지 내려간다.
+fn unwrap_eval_json(raw: &str) -> String {
+    let mut cur = raw.to_string();
+    for _ in 0..3 {
+        match serde_json::from_str::<serde_json::Value>(&cur) {
+            Ok(serde_json::Value::String(inner)) => cur = inner,
+            _ => break,
+        }
+    }
+    cur
+}
+
 /// 붙여넣기용 짧은 타임아웃 클라이언트. `http_client()`(15초)는 붙여넣는 순간에는 느리다 —
 /// 실패해도 원본 URL이 그대로 남으므로 길게 기다릴 이유가 없다.
 fn quick_http_client() -> reqwest::Client {
@@ -2755,7 +2827,7 @@ async fn download_cover(url: &str) -> Option<(Vec<u8>, String)> {
 
 // ---------- 노트 템플릿 (고급) ----------
 
-/// 데일리/자유노트 본문 템플릿 읽기 (kind: "daily"|"free"). 커스텀 없으면 기본값.
+/// 노트 본문 템플릿 읽기 (kind: "daily"|"free"|"info"|"writing"). 커스텀 없으면 기본값.
 #[tauri::command]
 #[specta::specta]
 pub fn get_note_template(state: State<'_, AppState>, kind: String) -> Result<String, String> {

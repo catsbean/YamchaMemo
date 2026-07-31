@@ -47,6 +47,7 @@ pub fn run() {
         commands::reindex,
         commands::quick_capture,
         commands::fetch_page_title,
+        commands::spike_render_page,
         commands::file_index_status,
         commands::build_file_index,
         commands::drop_file_index,

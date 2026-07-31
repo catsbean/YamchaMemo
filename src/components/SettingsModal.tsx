@@ -282,7 +282,13 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             <h3 className="mb-2 text-sm font-semibold text-neutral-600">
               사용자 추가 분류
             </h3>
-            <ul className="flex flex-col gap-1">
+            <p className="mb-2 text-xs text-neutral-400">
+              각 분류로 새로 만드는 노트의 본문 템플릿입니다. frontmatter는
+              건드리지 않으며, 이미 만든 노트에는 영향을 주지 않습니다.{" "}
+              <code>{"{{date}}"}</code>, <code>{"{{title}}"}</code> 등의 자리표시자를
+              쓸 수 있습니다.
+            </p>
+            <ul className="flex flex-col gap-2">
               {customs.map((s) => (
                 <CustomTypeRow
                   key={s.id}
@@ -966,35 +972,90 @@ function HistorySection() {
   );
 }
 
-/** 고급 — 데일리/자유노트 본문 템플릿 편집 (frontmatter는 건드리지 않음) */
+/** 고급 — 노트 본문 템플릿 편집에서 다루는 내장 종류들 */
+const NOTE_TEMPLATE_KINDS: { id: string; label: string; placeholder: string }[] = [
+  { id: "daily", label: "데일리노트", placeholder: "## 할 일\n\n- [ ] \n\n## 기록\n" },
+  {
+    id: "free",
+    label: "자유노트",
+    placeholder: "(기본은 빈 문서 — 원하는 템플릿을 넣어보세요)",
+  },
+  { id: "info", label: "정보노트", placeholder: "## 요약\n\n## 내용\n\n## 메모\n" },
+  {
+    id: "writing",
+    label: "글쓰기",
+    placeholder: "(기본은 빈 문서 — 원고를 바로 씁니다)",
+  },
+];
+
+/** 라벨 + textarea + 저장 버튼 + 미리보기 — 본문 템플릿 편집이 공유하는 모양 */
+function TemplateEditor({
+  label,
+  value,
+  placeholder,
+  saved,
+  onChange,
+  onSave,
+}: {
+  label: string;
+  value: string;
+  placeholder?: string;
+  saved: boolean;
+  onChange: (v: string) => void;
+  onSave: () => void;
+}) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-xs font-medium text-neutral-600">{label}</span>
+        <span className="flex items-center gap-2">
+          {saved && <span className="text-xs text-emerald-600">저장됨</span>}
+          <button
+            className="rounded border border-neutral-300 px-2 py-0.5 text-xs hover:border-neutral-500"
+            onClick={onSave}
+          >
+            저장
+          </button>
+        </span>
+      </div>
+      <textarea
+        className="h-24 w-full resize-y rounded border border-neutral-300 px-2 py-1 font-mono text-xs focus:border-neutral-500 focus:outline-none"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <TemplatePreview content={value} />
+    </div>
+  );
+}
+
+/** 고급 — 내장 노트 종류들의 본문 템플릿 편집 (frontmatter는 건드리지 않음) */
 function NoteTemplateSection() {
   const [open, setOpen] = useState(false);
-  const [daily, setDaily] = useState("");
-  const [free, setFree] = useState("");
+  const [values, setValues] = useState<Record<string, string>>({});
   const [loaded, setLoaded] = useState(false);
   const [saved, setSaved] = useState("");
 
   useEffect(() => {
     if (!open || loaded) return;
     (async () => {
-      const d = await commands.getNoteTemplate("daily");
-      if (d.status === "ok") setDaily(d.data);
-      const f = await commands.getNoteTemplate("free");
-      if (f.status === "ok") setFree(f.data);
+      const next: Record<string, string> = {};
+      for (const k of NOTE_TEMPLATE_KINDS) {
+        const r = await commands.getNoteTemplate(k.id);
+        next[k.id] = r.status === "ok" ? r.data : "";
+      }
+      setValues(next);
       setLoaded(true);
     })();
   }, [open, loaded]);
 
-  async function save(kind: "daily" | "free", content: string) {
-    const r = await commands.setNoteTemplate(kind, content);
+  async function save(kind: string) {
+    const r = await commands.setNoteTemplate(kind, values[kind] ?? "");
     if (r.status === "ok") {
       setSaved(kind);
       setTimeout(() => setSaved(""), 2000);
     }
   }
-
-  const taCls =
-    "h-24 w-full resize-y rounded border border-neutral-300 px-2 py-1 font-mono text-xs focus:border-neutral-500 focus:outline-none";
 
   return (
     <section className="mb-5">
@@ -1008,8 +1069,8 @@ function NoteTemplateSection() {
         <div className="mt-2 flex flex-col gap-4">
           <div className="text-xs text-neutral-400">
             <p>
-              새로 만드는 데일리·자유노트의 <b>본문</b> 템플릿입니다.
-              frontmatter는 건드리지 않으며, 비워 두면 기본값으로 돌아갑니다.
+              새로 만드는 노트의 <b>본문</b> 템플릿입니다. frontmatter는
+              건드리지 않으며, 비워 두면 기본값으로 돌아갑니다.
             </p>
             <p className="mt-1">
               쓸 수 있는 자리표시자:{" "}
@@ -1038,52 +1099,17 @@ function NoteTemplateSection() {
               템플릿에 빈 체크박스를 넣어 두어도 숫자가 늘지 않습니다.
             </p>
           </div>
-          <div>
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-xs font-medium text-neutral-600">데일리노트</span>
-              <span className="flex items-center gap-2">
-                {saved === "daily" && (
-                  <span className="text-xs text-emerald-600">저장됨</span>
-                )}
-                <button
-                  className="rounded border border-neutral-300 px-2 py-0.5 text-xs hover:border-neutral-500"
-                  onClick={() => save("daily", daily)}
-                >
-                  저장
-                </button>
-              </span>
-            </div>
-            <textarea
-              className={taCls}
-              value={daily}
-              onChange={(e) => setDaily(e.target.value)}
-              placeholder="## 할 일\n\n- [ ] \n\n## 기록\n"
+          {NOTE_TEMPLATE_KINDS.map((k) => (
+            <TemplateEditor
+              key={k.id}
+              label={k.label}
+              value={values[k.id] ?? ""}
+              placeholder={k.placeholder}
+              saved={saved === k.id}
+              onChange={(v) => setValues((s) => ({ ...s, [k.id]: v }))}
+              onSave={() => save(k.id)}
             />
-            <TemplatePreview content={daily} />
-          </div>
-          <div>
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-xs font-medium text-neutral-600">자유노트</span>
-              <span className="flex items-center gap-2">
-                {saved === "free" && (
-                  <span className="text-xs text-emerald-600">저장됨</span>
-                )}
-                <button
-                  className="rounded border border-neutral-300 px-2 py-0.5 text-xs hover:border-neutral-500"
-                  onClick={() => save("free", free)}
-                >
-                  저장
-                </button>
-              </span>
-            </div>
-            <textarea
-              className={taCls}
-              value={free}
-              onChange={(e) => setFree(e.target.value)}
-              placeholder="(기본은 빈 문서 — 원하는 템플릿을 넣어보세요)"
-            />
-            <TemplatePreview content={free} />
-          </div>
+          ))}
 
           <TitlePrefixSection />
         </div>
@@ -1180,7 +1206,6 @@ function CustomTypeRow({
   onTemplateSaved: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
-  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(template);
   const [saved, setSaved] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -1199,95 +1224,67 @@ function CustomTypeRow({
     setBusy(false);
   }
 
+  async function save() {
+    setBusy(true);
+    const { commands } = await import("../bindings");
+    const r = await commands.updateCustomTypeTemplate(id, draft);
+    if (r.status === "ok") {
+      await onTemplateSaved();
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    }
+    setBusy(false);
+  }
+
   return (
-    <li className="rounded border border-neutral-200 px-3 py-1.5 text-sm">
-      <div className="flex items-center justify-between">
+    <li className="rounded border border-neutral-200 px-3 py-2 text-sm">
+      <div className="mb-1.5 flex items-center justify-between">
         <span>📁 {label}</span>
-        <span className="flex items-center gap-2">
-          <button
-            className="text-xs text-neutral-500 hover:text-neutral-700"
-            onClick={() => {
-              setDraft(template);
-              setEditing((v) => !v);
-            }}
-          >
-            {editing ? "닫기" : "템플릿 수정"}
-          </button>
-          {confirming ? (
-            <span className="flex items-center gap-1">
-              <span className="text-2xs text-neutral-400">
-                노트는 자유노트로 이동
-              </span>
-              <button
-                className="rounded bg-rose-600 px-2 py-0.5 text-xs font-bold text-white hover:bg-rose-500 disabled:opacity-50"
-                disabled={busy}
-                onClick={() => {
-                  setConfirming(false);
-                  remove();
-                }}
-              >
-                제거 확인
-              </button>
-              <button
-                className="rounded px-1.5 py-0.5 text-xs text-neutral-500 hover:bg-neutral-100"
-                onClick={() => setConfirming(false)}
-              >
-                취소
-              </button>
+        {confirming ? (
+          <span className="flex items-center gap-1">
+            <span className="text-2xs text-neutral-400">
+              노트는 자유노트로 이동
             </span>
-          ) : (
             <button
-              className="text-xs text-rose-400 hover:text-rose-600 disabled:opacity-50"
+              className="rounded bg-rose-600 px-2 py-0.5 text-xs font-bold text-white hover:bg-rose-500 disabled:opacity-50"
               disabled={busy}
-              onClick={() => setConfirming(true)}
-            >
-              제거
-            </button>
-          )}
-        </span>
-      </div>
-      {editing && (
-        <div className="mt-2 flex flex-col gap-1.5">
-          <p className="text-2xs text-neutral-400">
-            이 분류로 새로 만드는 노트의 본문 템플릿입니다. frontmatter는 건드리지
-            않습니다. <code>{"{{date}}"}</code>, <code>{"{{title}}"}</code> 사용
-            가능. 이미 만든 노트에는 영향을 주지 않습니다.
-          </p>
-          <textarea
-            className="h-24 w-full resize-y rounded border border-neutral-300 px-2 py-1 font-mono text-xs focus:border-neutral-500 focus:outline-none"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-          />
-          <TemplatePreview content={draft} />
-          <div className="flex items-center gap-2">
-            <button
-              className="self-start rounded bg-neutral-800 px-3 py-1 text-xs text-white hover:bg-neutral-600 disabled:opacity-50"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                const { commands } = await import("../bindings");
-                const r = await commands.updateCustomTypeTemplate(id, draft);
-                if (r.status === "ok") {
-                  await onTemplateSaved();
-                  setSaved(true);
-                  setTimeout(() => setSaved(false), 2000);
-                }
-                setBusy(false);
+              onClick={() => {
+                setConfirming(false);
+                remove();
               }}
             >
-              저장
+              제거 확인
             </button>
-            {saved && <span className="text-xs text-emerald-600">저장됨</span>}
-          </div>
-        </div>
-      )}
+            <button
+              className="rounded px-1.5 py-0.5 text-xs text-neutral-500 hover:bg-neutral-100"
+              onClick={() => setConfirming(false)}
+            >
+              취소
+            </button>
+          </span>
+        ) : (
+          <button
+            className="text-xs text-rose-400 hover:text-rose-600 disabled:opacity-50"
+            disabled={busy}
+            onClick={() => setConfirming(true)}
+          >
+            제거
+          </button>
+        )}
+      </div>
+      <TemplateEditor
+        label="본문 템플릿"
+        value={draft}
+        saved={saved}
+        onChange={setDraft}
+        onSave={save}
+      />
     </li>
   );
 }
 
-/** 템플릿 미리보기 — 오늘 날짜로 채운 결과를 보여 준다.
- *  화면에서 직접 치환하지 않고 백엔드를 거친다. 노트를 실제로 만들 때와 같은
- *  함수를 써야 미리보기가 거짓말을 하지 않는다. */
+/** 템플릿 미리보기 — 화면에서 직접 치환하지 않고 백엔드를 거친다.
+ *  노트를 실제로 만들 때와 같은 함수를 써야 미리보기가 거짓말을 하지 않는다. */
 function TemplatePreview({ content }: { content: string }) {
   const [out, setOut] = useState("");
 
@@ -1309,11 +1306,8 @@ function TemplatePreview({ content }: { content: string }) {
 
   if (!out) return null;
   return (
-    <div className="mt-1">
-      <span className="text-2xs text-neutral-400">오늘 날짜로 채우면</span>
-      <pre className="mt-0.5 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 px-2 py-1 text-2xs leading-relaxed text-neutral-600">
-        {out}
-      </pre>
-    </div>
+    <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded border border-neutral-200 bg-neutral-50 px-2 py-1 text-2xs leading-relaxed text-neutral-600">
+      {out}
+    </pre>
   );
 }
