@@ -22,6 +22,7 @@ import {
 import { commands } from "../bindings";
 import { formatKeymap } from "./format";
 import { livePreview } from "./livePreview";
+import { urlPaste } from "./urlPaste";
 import {
   wikiLinkClick,
   wikiLinkCompletion,
@@ -152,6 +153,7 @@ export default function Editor({
         syntaxHighlighting(defaultHighlightStyle),
         livePreview(),
         pasteImage,
+        urlPaste(),
         EditorView.domEventHandlers({
           contextmenu(event, view) {
             if (!onContextMenuRef.current) return false;

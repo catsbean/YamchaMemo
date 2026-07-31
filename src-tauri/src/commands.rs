@@ -27,6 +27,10 @@ fn effective_key(user: &str) -> &str {
     }
 }
 
+/// 브라우저처럼 보이는 UA. UA가 없으면 교보는 500, 위키백과는 403으로 거부한다 —
+/// 두 곳 다 겪어서 확인했다.
+const BROWSER_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
+
 /// 타임아웃을 건 일반 HTTP 클라이언트 (15초 전체 / 5초 연결).
 fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -49,6 +53,75 @@ fn net_err(e: &reqwest::Error) -> String {
 
 /// 일괄 자동채우기 취소 플래그 (enrich_books/enrich_preview 시작 시 reset, cancel_enrich가 set)
 static ENRICH_CANCEL: AtomicBool = AtomicBool::new(false);
+
+// ---------- URL 붙여넣기: 제목만 가져오기 ----------
+
+/// 붙여넣기용 짧은 타임아웃 클라이언트. `http_client()`(15초)는 붙여넣는 순간에는 느리다 —
+/// 실패해도 원본 URL이 그대로 남으므로 길게 기다릴 이유가 없다.
+fn quick_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(BROWSER_UA)
+        .timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(3))
+        .build()
+        .unwrap_or_default()
+}
+
+/// `<title>...</title>`를 뽑아 엔티티를 풀고 공백을 정리한다. 없으면 None.
+fn extract_title(html: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    let start = lower.find("<title")?;
+    let open_end = html[start..].find('>')? + start + 1;
+    let close = html[open_end..].to_lowercase().find("</title>")? + open_end;
+    let raw = html_unescape(&html[open_end..close]);
+    let cleaned: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cleaned = cleaned.trim().to_string();
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
+/// URL에서 호스트의 첫 라벨을 뽑는다 (`www.threads.com` → `threads`).
+fn host_label(url: &str) -> Option<String> {
+    let after_scheme = url.split("://").nth(1)?;
+    let host = after_scheme.split(['/', '?', '#']).next()?;
+    let host = host.split('@').next_back()?; // user:pass@host 형태 방어
+    let host = host.split(':').next()?; // 포트 제거
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    host.split('.').next().map(|s| s.to_lowercase())
+}
+
+/// 제목이 사이트 이름뿐이라 쓸모없는지 — SPA 껍데기가 `<title>앱이름</title>`만
+/// 주는 흔한 패턴을 잡는다 (예: threads.com → "Threads"). 소문자·공백 제거한 값이
+/// 호스트 첫 라벨과 같으면 의미없다고 본다.
+fn is_meaningless_title(title: &str, url: &str) -> bool {
+    let Some(label) = host_label(url) else {
+        return false;
+    };
+    let normalized: String = title
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    normalized == label
+}
+
+/// URL 붙여넣기용 — 페이지 제목만 가져온다. 실패·의미없는 제목이면 `Ok(None)`.
+/// (편집기가 "실패하면 원본 URL을 그대로 둔다"로 처리하므로 여기서는 실패를 에러로
+/// 올리지 않는다 — 에러 문구를 화면에 보여줄 자리가 없다)
+#[tauri::command]
+#[specta::specta]
+pub async fn fetch_page_title(url: String) -> Option<String> {
+    let client = quick_http_client();
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let html = resp.text().await.ok()?;
+    let title = extract_title(&html)?;
+    if is_meaningless_title(&title, &url) {
+        return None;
+    }
+    Some(title)
+}
 
 /// 카카오 isbn 필드("10자리 13자리")에서 13자리(마지막 토큰)를 뽑는다.
 fn isbn13(raw: &str) -> String {
@@ -1915,12 +1988,10 @@ pub struct KyoboMeta {
     pub rating: String,
 }
 
-const KYOBO_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
-
-/// 브라우저처럼 보이는 UA를 기본으로 실은 클라이언트. 교보는 UA 없는 요청을 500으로 거부한다.
+/// 교보는 UA 없는 요청을 500으로 거부한다 — BROWSER_UA를 기본으로 싣는다.
 fn kyobo_client() -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent(KYOBO_UA)
+        .user_agent(BROWSER_UA)
         .timeout(Duration::from_secs(15))
         .connect_timeout(Duration::from_secs(5))
         .build()
@@ -2770,6 +2841,83 @@ mod key_tests {
             kakao_docs("아무거나", "").await,
             Err(KakaoErr::NoKey)
         ));
+    }
+}
+
+#[cfg(test)]
+mod url_paste_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_title_and_unescapes_entities() {
+        let html = r#"<html><head><title>클린 코드 &amp; 리팩터링</title></head></html>"#;
+        assert_eq!(extract_title(html).as_deref(), Some("클린 코드 & 리팩터링"));
+    }
+
+    #[test]
+    fn title_can_have_attributes_and_whitespace() {
+        let html = "<title lang=\"ko\">\n  줄바꿈이   섞인   제목\n</title>";
+        assert_eq!(extract_title(html).as_deref(), Some("줄바꿈이 섞인 제목"));
+    }
+
+    #[test]
+    fn no_title_tag_returns_none() {
+        assert_eq!(extract_title("<html><body>본문만</body></html>"), None);
+        assert_eq!(extract_title("<title></title>"), None);
+        assert_eq!(extract_title("<title>   </title>"), None);
+    }
+
+    #[test]
+    fn host_label_strips_www_port_and_path() {
+        assert_eq!(host_label("https://www.threads.com/share/abc").as_deref(), Some("threads"));
+        assert_eq!(host_label("https://d2.naver.com:443/home").as_deref(), Some("d2"));
+        assert_eq!(host_label("https://ko.wikipedia.org/wiki/x").as_deref(), Some("ko"));
+    }
+
+    /// threads.com이 실제로 주는 값 — 7-0 스파이크에서 실측한 것과 같다
+    #[test]
+    fn meaningless_title_matches_bare_hostname() {
+        assert!(is_meaningless_title("Threads", "https://www.threads.com/share/x"));
+        assert!(is_meaningless_title("  threads  ", "https://threads.com/x"));
+        assert!(!is_meaningless_title(
+            "왕숙 아테라 공고문 - 자세히 보기",
+            "https://www.threads.com/share/x"
+        ));
+        assert!(!is_meaningless_title(
+            "클린 코드",
+            "https://ko.wikipedia.org/wiki/클린_코드"
+        ));
+    }
+
+    #[tokio::test]
+    async fn fetch_page_title_returns_none_on_bad_url() {
+        assert_eq!(fetch_page_title("not-a-url".into()).await, None);
+        assert_eq!(
+            fetch_page_title("https://127.0.0.1:1".into()).await,
+            None,
+            "연결이 안 되는 주소는 조용히 None"
+        );
+    }
+}
+
+#[cfg(test)]
+mod url_paste_live_probe {
+    // 네트워크 의존 — 기본 실행에서 제외.
+    // cargo test -p yamcha-app --lib url_paste_live_probe -- --ignored --nocapture
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn 실제_위키백과_제목을_뽑아내는지() {
+        let url = "https://ko.wikipedia.org/wiki/마크다운";
+        let client = super::quick_http_client();
+        let resp = client.get(url).send().await.unwrap();
+        eprintln!("status={}", resp.status());
+        let html = resp.text().await.unwrap();
+        eprintln!("html bytes={}", html.len());
+        let lower_bytes = html.to_lowercase().len();
+        eprintln!("lowercased bytes={lower_bytes}");
+        let title = super::extract_title(&html);
+        eprintln!("extract_title={title:?}");
+        assert!(title.is_some(), "제목을 못 뽑았다");
     }
 }
 

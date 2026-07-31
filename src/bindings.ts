@@ -388,6 +388,14 @@ async quickCapture(text: string) : Promise<Result<string, string>> {
 }
 },
 /**
+ * URL 붙여넣기용 — 페이지 제목만 가져온다. 실패·의미없는 제목이면 `Ok(None)`.
+ * (편집기가 "실패하면 원본 URL을 그대로 둔다"로 처리하므로 여기서는 실패를 에러로
+ * 올리지 않는다 — 에러 문구를 화면에 보여줄 자리가 없다)
+ */
+async fetchPageTitle(url: string) : Promise<string | null> {
+    return await TAURI_INVOKE("fetch_page_title", { url });
+},
+/**
  * 첨부 색인 현황 (색인된 수 · 스캔본 · 암호 · 실패)
  */
 async fileIndexStatus() : Promise<Result<FileIndexStatus, string>> {
