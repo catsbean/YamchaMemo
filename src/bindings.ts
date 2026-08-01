@@ -396,12 +396,21 @@ async fetchPageTitle(url: string) : Promise<string | null> {
     return await TAURI_INVOKE("fetch_page_title", { url });
 },
 /**
- * 7-3a 스파이크 — 숨은 창으로 JS 렌더링 후 본문을 가져올 수 있는지 확인한다.
- * (실험용. 검증되면 정식 모듈로 옮기고 이 커맨드는 지운다)
+ * 스크랩 팝업이 부르는 커맨드. 실패해도 에러로 올리지 않는다(`None`) —
+ * 화면은 그 자리에 "브라우저에서 복사해 붙여넣기" 칸을 보여 준다.
  */
-async spikeRenderPage(url: string) : Promise<Result<string, string>> {
+async scrapeArticle(url: string) : Promise<ScrapedArticle | null> {
+    return await TAURI_INVOKE("scrape_article", { url });
+},
+/**
+ * 스크랩 저장 — `info` 타입 노트로 만든다. 새 분류를 만들지 않는다:
+ * Info 타입에 이미 `source`·`clipped` 필드가 있다(0.3 버전부터, 이 기능을 염두에 두고
+ * 설계돼 있었다). `create_note`가 만드는 기본 템플릿 본문을 실제 스크랩 본문으로
+ * 갈아끼운다 — frontmatter는 create_note가 정규화해 둔 것을 그대로 유지한다.
+ */
+async saveScrap(title: string, url: string, body: string) : Promise<Result<string, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("spike_render_page", { url }) };
+    return { status: "ok", data: await TAURI_INVOKE("save_scrap", { title, url, body }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1179,6 +1188,11 @@ tags: string[];
  * 표지 rel 경로 (없으면 빈 문자열)
  */
 cover: string; kind_label: string; date: string; text: string }
+export type ScrapedArticle = { title: string; body_md: string; 
+/**
+ * 어느 갈래로 얻었는지 — 화면에 작게 보여 주면 "왜 짧지"를 사용자가 스스로 안다
+ */
+via: string }
 /**
  * 검색 결과를 좁히는 조건. 모두 비어 있으면 필터 없음(기존 동작).
  */

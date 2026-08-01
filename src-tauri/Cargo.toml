@@ -35,6 +35,11 @@ tauri-plugin-global-shortcut = "2.3.2"
 # tokio 런타임 자체는 tauri가 이미 돌리고 있으므로 sync·time만 있으면 된다.
 tokio = { version = "1", features = ["sync", "time"] }
 url = "2"
+# 웹 스크랩 본문 추출 (7-0에서 검증) — 갈래①(원본 HTML)·갈래②(숨은 창 렌더링) 둘 다
+# 같은 파이프라인을 쓴다. htmd가 HTML→마크다운을 맡는다.
+readability = "0.3"
+htmd = "0.5"
+chrono = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

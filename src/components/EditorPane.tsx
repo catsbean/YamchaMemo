@@ -4,7 +4,7 @@ import { commands } from "../bindings";
 import type { EditorView } from "@codemirror/view";
 import Editor from "../editor/Editor";
 import EditorToolbar from "./EditorToolbar";
-import { editorMenuItems } from "../editor/editorMenu";
+import { editorMenuItems, type UrlHit } from "../editor/editorMenu";
 import { useContextMenu } from "../lib/contextMenu";
 import { isImeEnter } from "../lib/ime";
 import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
@@ -17,6 +17,7 @@ import EntryList from "./EntryList";
 import TodoList from "./TodoList";
 import { DAILY_KINDS } from "../lib/callouts";
 import DailyDateNav from "./DailyDateNav";
+import ScrapModal from "./ScrapModal";
 import DeleteButton from "./DeleteButton";
 import ExportNoteButton from "./ExportNoteButton";
 import { notifyOtherWindows } from "../lib/windowSync";
@@ -64,6 +65,9 @@ export default function EditorPane() {
   const [rawEdit, setRawEdit] = useState(false);
   // 서식 툴바가 명령을 실행하려면 CodeMirror 뷰가 필요하다
   const [editorView, setEditorView] = useState<EditorView | null>(null);
+  // 우클릭 "스크랩하기"로 누른 자리 — 있으면 팝업이 뜬다. 저장되면 이 범위를
+  // [[스크랩 노트 제목]]으로 갈아끼운다(원래 URL/링크 자리를 vault 안 노트로 잇는다).
+  const [scrapHit, setScrapHit] = useState<UrlHit | null>(null);
 
   /** 입력 바 제출 — 기본 종류는 enum 경로, 사용자 정의는 임의 라벨 콜아웃으로 */
   async function submitDaily(kind: string, text: string) {
@@ -372,6 +376,7 @@ export default function EditorPane() {
                 editorMenuItems(view, isDaily ? DAILY_KINDS : [], {
                   event: e,
                   onNavigate: openByTitle,
+                  onScrap: setScrapHit,
                 }),
               )
             }
@@ -404,6 +409,23 @@ export default function EditorPane() {
       <BacklinksPanel relPath={current.rel_path} />
 
       {ctx.menu && <ContextMenu state={ctx.menu} onClose={ctx.close} />}
+      {scrapHit && (
+        <ScrapModal
+          url={scrapHit.url}
+          onClose={() => setScrapHit(null)}
+          onSaved={(stem) => {
+            // 원래 URL/링크 자리를 방금 만든 노트로 잇는다
+            editorView?.dispatch({
+              changes: {
+                from: scrapHit.from,
+                to: scrapHit.to,
+                insert: `[[${stem}]]`,
+              },
+            });
+            setScrapHit(null);
+          }}
+        />
+      )}
     </div>
   );
 }

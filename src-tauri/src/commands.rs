@@ -56,27 +56,65 @@ static ENRICH_CANCEL: AtomicBool = AtomicBool::new(false);
 
 // ---------- URL 붙여넣기: 제목만 가져오기 ----------
 
-/// 7-3a 스파이크 — 숨은 창으로 JS 렌더링 후 본문을 가져올 수 있는지 확인한다.
-/// (실험용. 검증되면 정식 모듈로 옮기고 이 커맨드는 지운다)
-#[tauri::command]
-#[specta::specta]
-pub async fn spike_render_page(app: tauri::AppHandle, url: String) -> Result<String, String> {
+// ---------- 웹 스크랩 (7-3) ----------
+//
+// 갈래①(원본 HTML을 그냥 받는다)과 갈래②(숨은 창으로 JS를 실행시켜 받는다)가
+// 똑같은 추출 파이프라인(readability + htmd)을 공유한다 — 둘 다 결국 "HTML 문자열"을
+// 만들어 주는 것뿐이고, 그 HTML에서 본문을 골라내는 일은 렌더링 방식과 무관하다.
+// 7-0에서 실측한 기준을 그대로 쓴다: 본문이 200자 미만이면 실패로 보고 갈래②를 시도한다.
+
+/// 본문이 이 글자 수 미만이면 실패로 본다 (7-0 스파이크 기준)
+const SCRAP_MIN_CHARS: usize = 200;
+
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone)]
+pub struct ScrapedArticle {
+    pub title: String,
+    pub body_md: String,
+    /// 어느 갈래로 얻었는지 — 화면에 작게 보여 주면 "왜 짧지"를 사용자가 스스로 안다
+    pub via: String,
+}
+
+/// HTML 문자열에서 본문을 골라 마크다운으로. 갈래①·②가 공유한다.
+fn extract_article_html(html: &str, base: &url::Url) -> Option<(String, String)> {
+    let mut cursor = std::io::Cursor::new(html.as_bytes());
+    let product = readability::extractor::extract(&mut cursor, base).ok()?;
+    let body_md = htmd::convert(&product.content).unwrap_or_default();
+    let title = product.title.trim().to_string();
+    if title.is_empty() && body_md.trim().is_empty() {
+        return None;
+    }
+    Some((title, body_md))
+}
+
+/// 갈래① — 그냥 받은 HTML
+async fn fetch_article(url: &url::Url) -> Option<(String, String)> {
+    let client = quick_http_client();
+    let resp = client.get(url.as_str()).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let html = resp.text().await.ok()?;
+    extract_article_html(&html, url)
+}
+
+/// 갈래② — 숨은 창으로 JS를 실행시켜 렌더링이 끝난 HTML을 받는다 (7-3a에서 검증).
+async fn render_article(app: &tauri::AppHandle, url: &url::Url) -> Option<(String, String)> {
     use std::sync::Arc;
     use tauri::webview::PageLoadEvent;
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-    let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
-    let label = format!("spike-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis());
-
+    let label = format!(
+        "scrap-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_millis()
+    );
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
     let tx_for_load = tx.clone();
 
-    // on_page_load는 빌더에만 있다 — 만들어진 창에는 없다
-    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url.clone()))
         .visible(false)
         .inner_size(1280.0, 2000.0) // 일부 사이트는 화면 크기로 렌더 여부를 가른다
         .on_page_load(move |w, payload| {
@@ -90,11 +128,7 @@ pub async fn spike_render_page(app: tauri::AppHandle, url: String) -> Result<Str
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(1500));
                 let _ = w2.eval_with_callback(
-                    r#"JSON.stringify({
-                        title: document.title,
-                        len: document.body.innerText.length,
-                        head: document.body.innerText.slice(0, 400)
-                    })"#,
+                    "JSON.stringify(document.documentElement.outerHTML)",
                     move |result| {
                         if let Some(sender) = tx2.lock().unwrap().take() {
                             let _ = sender.send(result);
@@ -104,14 +138,15 @@ pub async fn spike_render_page(app: tauri::AppHandle, url: String) -> Result<Str
             });
         })
         .build()
-        .map_err(|e| e.to_string())?;
+        .ok()?;
 
     let result = tokio::time::timeout(Duration::from_secs(15), rx)
         .await
-        .map_err(|_| "15초 안에 렌더링이 끝나지 않았습니다".to_string())?
-        .map_err(|_| "콜백 채널이 닫혔습니다".to_string())?;
+        .ok()?
+        .ok()?;
     let _ = window.close();
-    Ok(unwrap_eval_json(&result))
+    let html = unwrap_eval_json(&result);
+    extract_article_html(&html, url)
 }
 
 /// `eval_with_callback`이 문자열을 몇 겹으로 감싸 주는지가 페이지마다 다르게 보였다
@@ -126,6 +161,68 @@ fn unwrap_eval_json(raw: &str) -> String {
         }
     }
     cur
+}
+
+/// 스크랩 팝업이 부르는 커맨드. 실패해도 에러로 올리지 않는다(`None`) —
+/// 화면은 그 자리에 "브라우저에서 복사해 붙여넣기" 칸을 보여 준다.
+#[tauri::command]
+#[specta::specta]
+pub async fn scrape_article(app: tauri::AppHandle, url: String) -> Option<ScrapedArticle> {
+    let parsed = url::Url::parse(&url).ok()?;
+
+    let html_result = fetch_article(&parsed).await;
+    let html_len = html_result
+        .as_ref()
+        .map(|(_, b)| b.trim().chars().count())
+        .unwrap_or(0);
+
+    if html_len >= SCRAP_MIN_CHARS {
+        let (title, body_md) = html_result.unwrap();
+        return Some(ScrapedArticle { title, body_md, via: "html".into() });
+    }
+
+    // 짧거나 실패 — 갈래②를 시도하고, 그게 기준을 넘고 ①보다 길면 그걸 쓴다.
+    // (기준 미달이면 실패로 친다 — 안 그러면 ①이 아예 실패해 html_len이 0일 때,
+    //  "서버를 찾을 수 없습니다" 같은 브라우저 자체 오류 페이지까지 성공으로 둔갑한다.)
+    if let Some((title, body_md)) = render_article(&app, &parsed).await {
+        let render_len = body_md.trim().chars().count();
+        if render_len >= SCRAP_MIN_CHARS && render_len > html_len {
+            return Some(ScrapedArticle { title, body_md, via: "render".into() });
+        }
+    }
+    // ②도 안 되거나 안 나았으면, ①이 짧게라도 얻은 게 있으면 그거라도 준다
+    // (사용자가 편집·붙여넣기로 보완할 수 있게 — 아예 없는 것보다 낫다)
+    html_result.map(|(title, body_md)| ScrapedArticle { title, body_md, via: "html".into() })
+}
+
+/// 스크랩 저장 — `info` 타입 노트로 만든다. 새 분류를 만들지 않는다:
+/// Info 타입에 이미 `source`·`clipped` 필드가 있다(0.3 버전부터, 이 기능을 염두에 두고
+/// 설계돼 있었다). `create_note`가 만드는 기본 템플릿 본문을 실제 스크랩 본문으로
+/// 갈아끼운다 — frontmatter는 create_note가 정규화해 둔 것을 그대로 유지한다.
+#[tauri::command]
+#[specta::specta]
+pub fn save_scrap(
+    state: State<'_, AppState>,
+    title: String,
+    url: String,
+    body: String,
+) -> Result<String, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("제목이 비어 있습니다".into());
+    }
+    with_ctx_write(&state, |c| {
+        let clipped = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+        let rel = c.vault.create_note(
+            "info",
+            title,
+            serde_json::json!({ "source": url, "clipped": clipped }),
+        )?;
+        let note = c.vault.read_note(&rel)?;
+        c.vault.save_note(&rel, note.frontmatter, &body)?;
+        refresh_note(c, &rel)?;
+        Ok(rel)
+    })
 }
 
 /// 붙여넣기용 짧은 타임아웃 클라이언트. `http_client()`(15초)는 붙여넣는 순간에는 느리다 —
@@ -2913,6 +3010,58 @@ mod key_tests {
             kakao_docs("아무거나", "").await,
             Err(KakaoErr::NoKey)
         ));
+    }
+}
+
+#[cfg(test)]
+mod scrap_tests {
+    use super::*;
+
+    fn html_doc(title: &str, body: &str) -> String {
+        format!(
+            r#"<!doctype html><html><head><title>{title}</title></head>
+            <body><article><h1>{title}</h1>{body}</article></body></html>"#
+        )
+    }
+
+    #[test]
+    fn extracts_title_and_body_as_markdown() {
+        let base = url::Url::parse("https://example.com/post").unwrap();
+        let html = html_doc(
+            "글 제목",
+            "<p>첫 문단입니다.</p><p>둘째 문단, <a href=\"/x\">링크</a> 포함.</p>",
+        );
+        let (title, body_md) = extract_article_html(&html, &base).unwrap();
+        assert!(title.contains("글 제목"));
+        assert!(body_md.contains("첫 문단"));
+        assert!(body_md.contains("둘째 문단"));
+        // htmd가 링크를 마크다운으로 바꾼다 — 절대경로로 풀려야 한다(base URL 사용)
+        assert!(body_md.contains("example.com/x") || body_md.contains("](/x)"));
+    }
+
+    #[test]
+    fn threshold_matches_7_0_spike() {
+        // 실측(7-0)에서 정한 기준 — 200자 미만은 실패로 본다
+        assert_eq!(SCRAP_MIN_CHARS, 200);
+    }
+
+    #[test]
+    fn unwrap_eval_json_handles_zero_one_two_layers() {
+        // 0겹 — JSON이 아닌 그냥 문자열은 그대로 돌아온다
+        assert_eq!(unwrap_eval_json("plain"), "plain");
+        // 1겹
+        let once = serde_json::to_string("한 겹").unwrap();
+        assert_eq!(unwrap_eval_json(&once), "한 겹");
+        // 2겹 — eval_with_callback이 이미 JSON 문자열인 값을 또 감싼 실측 케이스
+        let twice = serde_json::to_string(&once).unwrap();
+        assert_eq!(unwrap_eval_json(&twice), "한 겹");
+    }
+
+    #[test]
+    fn empty_html_yields_none() {
+        let base = url::Url::parse("https://example.com/").unwrap();
+        assert!(extract_article_html("", &base).is_none());
+        assert!(extract_article_html("<html></html>", &base).is_none());
     }
 }
 

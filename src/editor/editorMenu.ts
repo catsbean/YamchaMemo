@@ -2,6 +2,7 @@
 // 라벨은 문법 이름(##, **) 대신 "제목 1", "굵게"처럼 결과로 부른다.
 
 import { redo, undo } from "@codemirror/commands";
+import { syntaxTree } from "@codemirror/language";
 import type { EditorView } from "@codemirror/view";
 import type { MenuItem } from "../lib/contextMenu";
 import type { CalloutKind } from "../lib/callouts";
@@ -102,9 +103,43 @@ export function unwrapCallout(view: EditorView) {
   view.focus();
 }
 
+/** 스크랩 대상 — 누른 자리의 http(s) 주소와, 저장 후 그 자리를 갈아끼울 수 있게
+ *  범위(from~to)도 함께 잡는다. `[글자](url)` 링크 전체(글자까지)든, 맨 URL이든. */
+export interface UrlHit {
+  url: string;
+  from: number;
+  to: number;
+}
+
+/** (7단계-3, 스크랩하기 트리거 — 사용자가 "링크와 맨 URL 둘 다"를 골랐다) */
+function urlAt(view: EditorView, pos: number): UrlHit | null {
+  const tree = syntaxTree(view.state);
+  let node = tree.resolveInner(pos, 0);
+  while (node.parent && node.name !== "Link") node = node.parent;
+  if (node.name === "Link") {
+    const urlNode = node.node.getChild("URL");
+    if (urlNode) {
+      const url = view.state.sliceDoc(urlNode.from, urlNode.to);
+      // 저장 후 [[제목]]으로 바꿔치기할 범위는 링크 전체(`[글자](url)`)다
+      if (/^https?:\/\//i.test(url)) return { url, from: node.from, to: node.to };
+    }
+  }
+  // 링크 문법이 아니면 그 줄 안에서 클릭 지점을 포함하는 맨 URL을 찾는다
+  const line = view.state.doc.lineAt(pos);
+  const re = /https?:\/\/\S+/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(line.text))) {
+    const from = line.from + m.index;
+    const to = from + m[0].length;
+    if (pos >= from && pos <= to) return { url: m[0], from, to };
+  }
+  return null;
+}
+
 /** 에디터 우클릭 메뉴 구성. `view`는 CodeMirror 인스턴스.
  *  `calloutKinds`를 주면 선택 영역을 그 종류의 콜아웃으로 감싸는 항목이 붙는다.
- *  `link`를 주면 오른쪽 클릭한 자리가 위키링크일 때 [링크로 이동]이 맨 위에 붙는다
+ *  `link`를 주면 오른쪽 클릭한 자리가 위키링크일 때 [링크로 이동]이,
+ *  http(s) 주소일 때 [스크랩하기]가 맨 위에 붙는다
  *  (Ctrl+클릭을 모르거나 키보드를 쓰기 어려운 경우를 위해). */
 export function editorMenuItems(
   view: EditorView,
@@ -112,6 +147,7 @@ export function editorMenuItems(
   link?: {
     event: { clientX: number; clientY: number };
     onNavigate: (target: string) => void;
+    onScrap?: (hit: UrlHit) => void;
   },
 ): MenuItem[] {
   const sel = view.state.selection.main;
@@ -123,14 +159,18 @@ export function editorMenuItems(
     view.focus();
   };
 
-  // 누른 자리가 위키링크인가 (선택 위치가 아니라 마우스 좌표로 판단한다)
+  // 누른 자리가 위키링크인가 / URL인가 (선택 위치가 아니라 마우스 좌표로 판단한다)
   let linkTarget: string | null = null;
+  let scrapHit: UrlHit | null = null;
   if (link) {
     const pos = view.posAtCoords({
       x: link.event.clientX,
       y: link.event.clientY,
     });
-    if (pos != null) linkTarget = wikiLinkTargetAt(view, pos);
+    if (pos != null) {
+      linkTarget = wikiLinkTargetAt(view, pos);
+      if (!linkTarget && link.onScrap) scrapHit = urlAt(view, pos);
+    }
   }
 
   return [
@@ -140,6 +180,15 @@ export function editorMenuItems(
             label: `🔗 ${ellipsis(linkTarget)}(으)로 이동`,
             hint: "Ctrl+클릭",
             onClick: () => link!.onNavigate(linkTarget!),
+          },
+          { separator: true },
+        ] as MenuItem[])
+      : []),
+    ...(scrapHit
+      ? ([
+          {
+            label: `📎 스크랩하기 — ${ellipsis(scrapHit.url, 28)}`,
+            onClick: () => link!.onScrap!(scrapHit!),
           },
           { separator: true },
         ] as MenuItem[])
