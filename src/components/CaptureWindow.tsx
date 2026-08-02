@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { commands } from "../bindings";
+import { commands, type TagSuggestion } from "../bindings";
 import { isImeEnter } from "../lib/ime";
 import { notifyOtherWindows } from "../lib/windowSync";
+import TagSuggestionRow from "./TagSuggestionRow";
+
+/** 이미 본문에 적힌 인라인 #태그 — 이미 쓴 것을 다시 제안하지 않는다 */
+function inlineTagsOf(text: string): string[] {
+  return Array.from(text.matchAll(/#([\p{L}\p{N}/_-]+)/gu)).map((m) => m[1]);
+}
 
 /** 전역 단축키로 뜨는 작은 담기 창.
  *
@@ -13,11 +19,40 @@ export default function CaptureWindow() {
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [suggestions, setSuggestions] = useState<TagSuggestion[]>([]);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     ref.current?.focus();
   }, []);
+
+  // 자동 태그 제안 — 창이 작으니 최대 3개, 타이핑이 멎고 500ms 뒤에만
+  useEffect(() => {
+    if (text.trim().length < 10) {
+      setSuggestions([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      commands
+        .suggestTagsForText({
+          title: "",
+          body: text,
+          note_type: "daily",
+          genre: null,
+          current_tags: inlineTagsOf(text),
+        })
+        .then((r) => {
+          if (r.status === "ok") setSuggestions(r.data.slice(0, 3));
+        });
+    }, 500);
+    return () => clearTimeout(t);
+  }, [text]);
+
+  /** 칩을 누르면 본문 끝에 인라인 태그로 붙는다 */
+  function addTag(tag: string) {
+    setText((t) => `${t.trimEnd()} #${tag}`);
+    ref.current?.focus();
+  }
 
   async function close() {
     await getCurrentWindow().destroy();
@@ -72,6 +107,15 @@ export default function CaptureWindow() {
       />
       {error && (
         <div className="px-4 pb-1 text-xs text-rose-600">{error}</div>
+      )}
+      {suggestions.length > 0 && (
+        <div className="px-4 pb-1">
+          <TagSuggestionRow
+            suggestions={suggestions}
+            onAdd={addTag}
+            className="flex flex-wrap gap-1"
+          />
+        </div>
       )}
       <div className="flex items-center gap-2 border-t border-neutral-200 px-3 py-1.5">
         <span className="text-2xs text-neutral-400">오늘 일지의 기록으로 들어갑니다</span>
