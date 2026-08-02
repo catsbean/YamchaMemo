@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { commands } from "../bindings";
+import { commands, type TagSuggestion } from "../bindings";
 import type { EditorView } from "@codemirror/view";
 import Editor from "../editor/Editor";
 import EditorToolbar from "./EditorToolbar";
@@ -64,6 +64,8 @@ export default function EditorPane() {
   const [rawEdit, setRawEdit] = useState(false);
   // 서식 툴바가 명령을 실행하려면 CodeMirror 뷰가 필요하다
   const [editorView, setEditorView] = useState<EditorView | null>(null);
+  // 자동 태그 제안 — 저장된 파일이 아니라 지금 편집 중인 초안을 본다
+  const [tagSuggestions, setTagSuggestions] = useState<TagSuggestion[]>([]);
 
   /** 입력 바 제출 — 기본 종류는 enum 경로, 사용자 정의는 임의 라벨 콜아웃으로 */
   async function submitDaily(kind: string, text: string) {
@@ -115,6 +117,35 @@ export default function EditorPane() {
     return () => clearTimeout(t);
   }, [dirty, externalChanged, current?.body, current?.frontmatter, saveCurrent]);
 
+  // 자동 태그 제안 — book은 BookView가 따로 다룬다. 타이핑이 멎고 500ms 뒤에만 묻는다.
+  useEffect(() => {
+    if (!current || current.note_type === "book") {
+      setTagSuggestions([]);
+      return;
+    }
+    const body = current.body;
+    const fmNow = fmObject(current);
+    const t = setTimeout(() => {
+      const tags = Array.isArray(fmNow.tags)
+        ? fmNow.tags.filter((v): v is string => typeof v === "string")
+        : [];
+      commands
+        .suggestTagsForText({
+          title: typeof fmNow.title === "string" ? fmNow.title : "",
+          body,
+          note_type: current.note_type,
+          genre: typeof fmNow.genre === "string" ? fmNow.genre : null,
+          current_tags: tags,
+        })
+        .then((r) => {
+          if (r.status === "ok") setTagSuggestions(r.data);
+        });
+    }, 500);
+    return () => clearTimeout(t);
+    // rel은 노트가 바뀌었는지 판단하는 용도로만 쓴다 (참조 안정성 문제 회피)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.rel_path, current?.body, current?.frontmatter]);
+
   if (!current) {
     return (
       <div className="flex h-full flex-1 items-center justify-center text-sm text-neutral-400">
@@ -144,6 +175,15 @@ export default function EditorPane() {
     // 직접 이름을 지었으니 자동 명명 대상에서 뺀다
     clearPendingTitle();
     if (t !== displayTitle) await renameCurrent(t);
+  }
+
+  /** 제안 칩을 누르면 tags에 더한다 — 파일 저장은 기존 저장 흐름 그대로 */
+  function addSuggestedTag(tag: string) {
+    const tags = Array.isArray(fm.tags)
+      ? fm.tags.filter((t): t is string => typeof t === "string")
+      : [];
+    if (tags.includes(tag)) return;
+    setFrontmatter({ ...fm, tags: [...tags, tag] });
   }
 
   /** image 필드 [찾아보기]: 파일 선택 → 첨부 복사 → 값 갱신 */
@@ -305,6 +345,8 @@ export default function EditorPane() {
         value={fm}
         onChange={setFrontmatter}
         onPickImage={pickImage}
+        tagSuggestions={tagSuggestions}
+        onAddTag={addSuggestedTag}
       />
 
       {/* 일지 보기 모드: 입력 → 기록 → 할 일. 원문 편집으로 넘어가면 통째로 감춘다 */}
