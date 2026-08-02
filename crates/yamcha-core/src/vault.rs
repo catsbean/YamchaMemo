@@ -441,17 +441,33 @@ impl Vault {
         Ok(self.root.join(rel))
     }
 
-    /// 원자적 쓰기: 같은 디렉토리에 임시 파일을 쓰고 rename
+    /// 원자적 쓰기: 같은 디렉토리에 임시 파일을 쓰고 rename.
+    ///
+    /// **원본을 미리 지우지 않는다.** `fs::rename`은 Windows에서도 대상 파일을 덮어쓴다
+    /// (MoveFileEx + MOVEFILE_REPLACE_EXISTING). 예전에는 rename 전에 `remove_file`을 했는데,
+    /// 그 두 줄 사이에 노트가 존재하지 않는 창이 생겼다 — 백신이나 클라우드 동기화가 갓 만들어진
+    /// `.md.tmp`를 잠그면 rename만 실패해서 **원본은 지워지고 내용은 tmp에만 남았다**. watcher가
+    /// `.md.tmp`를 무시하므로 앱은 그 파일을 영영 못 본다.
+    ///
+    /// rename 전에 `sync_all`로 내용을 디스크에 확정한다. 안 하면 정전 시 rename만 살아남아
+    /// 빈 파일이 남을 수 있다.
     pub(crate) fn atomic_write(&self, abs: &Path, content: &str) -> Result<(), CoreError> {
+        use std::io::Write;
+
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent)?;
         }
         let tmp = abs.with_extension("md.tmp");
-        fs::write(&tmp, content)?;
-        if abs.exists() {
-            fs::remove_file(abs)?;
+        {
+            let mut f = fs::File::create(&tmp)?;
+            f.write_all(content.as_bytes())?;
+            f.sync_all()?;
         }
-        fs::rename(&tmp, abs)?;
+        // 실패하면 tmp를 치우고 원본은 그대로 둔다 (반쯤 지워진 상태를 남기지 않는다)
+        if let Err(e) = fs::rename(&tmp, abs) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e.into());
+        }
         Ok(())
     }
 
@@ -1763,6 +1779,60 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let v = Vault::open(dir.path()).unwrap();
         (dir, v)
+    }
+
+    /// 저장 중에도 노트 파일은 **한 순간도 사라지지 않아야 한다.**
+    /// 예전 구현은 rename 전에 원본을 지웠고, 그 틈에 rename이 실패하면(백신·클라우드 동기화가
+    /// tmp를 잠그는 흔한 상황) 노트가 통째로 날아갔다. 읽는 쪽에서 파일이 없어 보이는 순간이
+    /// 있는지 직접 확인한다.
+    #[test]
+    fn 저장_중에도_파일이_사라지지_않는다() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "쓰는중", json!({})).unwrap();
+        let abs = v.abs(&rel).unwrap();
+
+        let done = Arc::new(AtomicBool::new(false));
+        let missing = Arc::new(AtomicBool::new(false));
+        let watcher = {
+            let (abs, done, missing) = (abs.clone(), done.clone(), missing.clone());
+            std::thread::spawn(move || {
+                while !done.load(Ordering::Relaxed) {
+                    if !abs.exists() {
+                        missing.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                }
+            })
+        };
+
+        for i in 0..300 {
+            v.atomic_write(&abs, &format!("---\ntype: free\n---\n\n{i}번째 저장"))
+                .unwrap();
+        }
+        done.store(true, Ordering::Relaxed);
+        watcher.join().unwrap();
+
+        assert!(
+            !missing.load(Ordering::Relaxed),
+            "저장 도중 노트 파일이 사라지는 순간이 있었다"
+        );
+        assert!(fs::read_to_string(&abs).unwrap().contains("299번째 저장"));
+    }
+
+    /// 성공한 쓰기는 임시파일을 남기지 않는다 (watcher가 `.md.tmp`를 무시하므로
+    /// 남으면 그대로 유령 파일이 된다)
+    #[test]
+    fn 저장_뒤_임시파일이_남지_않는다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "메모", json!({})).unwrap();
+        let abs = v.abs(&rel).unwrap();
+        v.atomic_write(&abs, "---\ntype: free\n---\n\n덮어쓴 내용").unwrap();
+
+        assert!(!abs.with_extension("md.tmp").exists(), "tmp가 남았다");
+        assert!(fs::read_to_string(&abs).unwrap().contains("덮어쓴 내용"));
     }
 
     #[test]
