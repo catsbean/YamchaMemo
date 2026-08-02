@@ -22,6 +22,8 @@ export default function App() {
     chooseVault,
     startAt,
     clearError,
+    startupNotice,
+    dismissStartupNotice,
   } = useVault();
 
   const [searchOpen, setSearchOpen] = useState(false);
@@ -169,6 +171,12 @@ export default function App() {
 
       {searchOpen && <SearchModal onClose={() => setSearchOpen(false)} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {startupNotice && (
+        <StartupNoticeBanner
+          message={startupNotice}
+          onDone={dismissStartupNotice}
+        />
+      )}
       {error && (
         <div className="fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-lg bg-rose-600 px-4 py-2 text-sm text-white shadow-lg">
           <span>{error}</span>
@@ -177,6 +185,39 @@ export default function App() {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** 지정한 시작 탭/글을 못 찾아 홈으로 대신 열었을 때의 안내 —
+ *  위에서 잠깐 나타났다가 스스로 사라진다. */
+function StartupNoticeBanner({
+  message,
+  onDone,
+}: {
+  message: string;
+  onDone: () => void;
+}) {
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setShow(true));
+    const hide = setTimeout(() => setShow(false), 3000);
+    const remove = setTimeout(onDone, 3300);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(hide);
+      clearTimeout(remove);
+    };
+  }, [onDone]);
+
+  return (
+    <div
+      className={`fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-lg bg-neutral-800 px-4 py-2 text-sm text-white shadow-lg transition-all duration-300 ${
+        show ? "translate-y-0 opacity-100" : "-translate-y-3 opacity-0"
+      }`}
+    >
+      {message}
     </div>
   );
 }

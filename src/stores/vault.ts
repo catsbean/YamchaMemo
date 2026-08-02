@@ -42,6 +42,10 @@ export type LayoutMode = "replace" | "three" | "vertical";
 /** 화면 밝기 — 기본은 라이트. system은 OS 설정을 따른다. */
 export type ThemeMode = "light" | "dark" | "system";
 
+/** 앱 시작시 열 화면. home=항상 홈, last=종료 시 보던 화면,
+ *  tab=지정한 메뉴, note=지정한 글. */
+export type StartupMode = "home" | "last" | "tab" | "note";
+
 /** 고른 모드를 실제 화면에 입힌다 (다크일 때만 <html>에 .dark를 붙인다) */
 export function applyTheme(mode: ThemeMode) {
   const dark =
@@ -104,6 +108,18 @@ interface VaultStore {
   /** 화면 밝기 (기본 라이트) */
   theme: ThemeMode;
   setTheme(mode: ThemeMode): Promise<void>;
+  /** 앱 시작시 열 화면 (기본은 마지막 화면 — 기존 동작 유지) */
+  startupMode: StartupMode;
+  setStartupMode(mode: StartupMode): Promise<void>;
+  /** startupMode가 "tab"일 때 열 메뉴 id */
+  startupTabId: string | null;
+  setStartupTabId(id: string): Promise<void>;
+  /** startupMode가 "note"일 때 열 노트의 rel_path */
+  startupNoteRel: string | null;
+  setStartupNoteRel(rel: string): Promise<void>;
+  /** 지정한 시작 탭/글을 못 찾아 대신 홈을 연 이유 — 잠깐 보여주고 지운다 */
+  startupNotice: string | null;
+  dismissStartupNotice(): void;
   /** 꺼 둔 단축키 id 목록 (기본은 전부 켬) */
   shortcutsOff: string[];
   toggleShortcut(id: string): Promise<void>;
@@ -350,6 +366,28 @@ export const useVault = create<VaultStore>((set, get) => {
       const store = await settings();
       await store.set("theme", mode);
     },
+    startupMode: "last",
+    async setStartupMode(mode) {
+      set({ startupMode: mode });
+      const store = await settings();
+      await store.set("startupMode", mode);
+    },
+    startupTabId: null,
+    async setStartupTabId(id) {
+      set({ startupTabId: id });
+      const store = await settings();
+      await store.set("startupTabId", id);
+    },
+    startupNoteRel: null,
+    async setStartupNoteRel(rel) {
+      set({ startupNoteRel: rel });
+      const store = await settings();
+      await store.set("startupNoteRel", rel);
+    },
+    startupNotice: null,
+    dismissStartupNotice() {
+      set({ startupNotice: null });
+    },
     shortcutsOff: [],
     async toggleShortcut(id) {
       const off = get().shortcutsOff;
@@ -431,8 +469,17 @@ export const useVault = create<VaultStore>((set, get) => {
         const shortcutsOff = (await store.get<string[]>("shortcutsOff")) ?? [];
         const theme = (await store.get<ThemeMode>("theme")) ?? "light";
         applyTheme(theme);
+        const startupMode =
+          (await store.get<StartupMode>("startupMode")) ?? "last";
+        const startupTabId =
+          (await store.get<string>("startupTabId")) ?? null;
+        const startupNoteRel =
+          (await store.get<string>("startupNoteRel")) ?? null;
         set({
           theme,
+          startupMode,
+          startupTabId,
+          startupNoteRel,
           shortcutsOff,
           deleteConfirm,
           bookPickerView,
@@ -471,17 +518,42 @@ export const useVault = create<VaultStore>((set, get) => {
           if (searchInFiles) {
             commands.buildFileIndex().catch(() => {});
           }
-          // 마지막 메뉴·노트 복원 (실패는 조용히 무시, 기본 home)
+          // 시작 화면 적용 (실패는 조용히 무시, 기본 home).
+          // 지정한 탭/글이 사라졌으면(분류 삭제·노트 삭제·제목변경 등) 홈을 열고 이유를 안내한다.
           try {
-            const lastNav = await store.get<string>("lastNav");
-            if (lastNav) set({ nav: lastNav });
-            const lastNoteRel = await store.get<string>("lastNoteRel");
-            if (
-              lastNoteRel &&
-              get().notes.some((n) => n.rel_path === lastNoteRel)
-            ) {
-              await get().openNote(lastNoteRel);
+            if (startupMode === "last") {
+              const lastNav = await store.get<string>("lastNav");
+              if (lastNav) set({ nav: lastNav });
+              const lastNoteRel = await store.get<string>("lastNoteRel");
+              if (
+                lastNoteRel &&
+                get().notes.some((n) => n.rel_path === lastNoteRel)
+              ) {
+                await get().openNote(lastNoteRel);
+              }
+            } else if (startupMode === "tab") {
+              const validIds = new Set([
+                "home",
+                "reading",
+                "tags",
+                ...get().schemas.map((s) => s.id),
+              ]);
+              if (startupTabId && validIds.has(startupTabId)) {
+                set({ nav: startupTabId });
+              } else {
+                set({ startupNotice: "지정한 시작 탭이 없어 홈을 열었습니다" });
+              }
+            } else if (startupMode === "note") {
+              const found =
+                !!startupNoteRel &&
+                get().notes.some((n) => n.rel_path === startupNoteRel);
+              if (found) {
+                await get().openNote(startupNoteRel as string);
+              } else {
+                set({ startupNotice: "지정한 글을 찾을 수 없어 홈을 열었습니다" });
+              }
             }
+            // startupMode === "home"이면 기본값(nav="home")을 그대로 둔다
           } catch {
             // 무시
           }
