@@ -424,6 +424,92 @@ impl Indexer {
         collect_refs(rows)
     }
 
+    /// vault가 이미 아는 고유명사 사전 (자동 태그 제안의 유일한 후보 출처).
+    ///
+    /// 사용자가 "이건 이름이다"라고 이미 표시해 둔 것만 모은다 — 기존 태그,
+    /// 다른 노트의 제목, 책의 저자·출판사. 추측은 하지 않는다.
+    ///
+    /// 데일리노트 제목은 날짜라서 뺀다. 한 글자 제목도 뺀다(너무 광범위하다).
+    pub fn proper_noun_dict(&self) -> Result<Vec<crate::autotag::DictEntry>, CoreError> {
+        use crate::autotag::{DictEntry, DictSource};
+
+        let mut out: Vec<DictEntry> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // ① 이미 쓰는 태그 — 사용자가 태그로 삼겠다고 이미 정한 이름이다
+        for t in self.all_tags()? {
+            if seen.insert(t.tag.clone()) {
+                out.push(DictEntry::new(t.tag, DictSource::Tag));
+            }
+        }
+
+        // ② 노트 제목과 책 메타 (+ 그 노트의 분야를 범주로 물려준다)
+        let mut stmt = self
+            .conn
+            .prepare("SELECT type, title, frontmatter FROM notes")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (note_type, title, fm_json) = row?;
+            if note_type == "daily" {
+                continue; // 제목이 날짜다
+            }
+            let fm: serde_json::Value =
+                serde_json::from_str(&fm_json).unwrap_or(serde_json::Value::Null);
+            let field = |k: &str| {
+                fm.get(k)
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            };
+            let categories: Vec<String> = field("genre").into_iter().collect();
+
+            let title = title.trim();
+            if title.chars().count() >= 2 && seen.insert(title.to_string()) {
+                out.push(
+                    DictEntry::new(title, DictSource::NoteTitle)
+                        .with_categories(categories.clone()),
+                );
+            }
+            // 저자는 "A, B"처럼 여럿일 수 있다
+            if let Some(authors) = field("author") {
+                for a in authors.split(',').map(str::trim).filter(|s| s.len() > 1) {
+                    if seen.insert(a.to_string()) {
+                        out.push(
+                            DictEntry::new(a, DictSource::Author)
+                                .with_categories(categories.clone()),
+                        );
+                    }
+                }
+            }
+            if let Some(pubr) = field("publisher") {
+                if pubr.chars().count() >= 2 && seen.insert(pubr.clone()) {
+                    out.push(DictEntry::new(pubr, DictSource::Publisher));
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// 태그가 하나도 없는 노트들 (자동 태그 일괄 정리 화면용)
+    pub fn untagged_notes(&self) -> Result<Vec<NoteRef>, CoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT n.path, n.type, n.title, n.date
+             FROM notes n LEFT JOIN tags t ON n.path = t.path
+             WHERE t.path IS NULL ORDER BY n.date DESC",
+        )?;
+        let rows = stmt.query_map([], Self::note_ref_row)?;
+        collect_refs(rows)
+    }
+
     fn note_ref_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<NoteRef> {
         Ok(NoteRef {
             rel_path: r.get(0)?,
@@ -535,6 +621,108 @@ mod tests {
         let notes = idx.notes_by_tag("프로젝트").unwrap();
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].rel_path, rel);
+    }
+
+    #[test]
+    fn proper_noun_dict_collects_names_and_categories() {
+        use crate::autotag::DictSource;
+        let (_d, v, mut idx) = setup();
+        let book = v
+            .create_note(
+                "book",
+                "클린 코드",
+                json!({"author": "로버트 마틴", "publisher": "인사이트", "genre": "컴퓨터/IT"}),
+            )
+            .unwrap();
+        let free = v.create_note("free", "메모", json!({})).unwrap();
+        v.save_note(&free, json!({"tags": ["독서"]}), "본문").unwrap();
+        // 데일리는 제목이 날짜라 사전에 들어가면 안 된다
+        let daily = v.open_daily("2026-08-01").unwrap();
+
+        for rel in [&book, &free, &daily] {
+            idx.upsert(&v.parse_full(rel).unwrap()).unwrap();
+        }
+
+        let dict = idx.proper_noun_dict().unwrap();
+        let find = |n: &str| dict.iter().find(|e| e.name == n);
+
+        // 책 제목은 자기 분야를 범주로 물려받는다
+        let title = find("클린 코드").expect("책 제목이 사전에 있어야 한다");
+        assert_eq!(title.source, DictSource::NoteTitle);
+        assert_eq!(title.categories, vec!["컴퓨터/IT".to_string()]);
+
+        assert_eq!(find("로버트 마틴").unwrap().source, DictSource::Author);
+        assert_eq!(find("인사이트").unwrap().source, DictSource::Publisher);
+        assert_eq!(find("독서").unwrap().source, DictSource::Tag);
+        // 날짜 제목은 없다
+        assert!(find("2026-08-01").is_none());
+    }
+
+    /// vault → 색인 → 사전 → 제안까지 실제 흐름 그대로 확인한다.
+    /// 단위 테스트의 손으로 만든 사전이 아니라, 진짜 노트에서 뽑은 사전으로 돈다.
+    #[test]
+    fn autotag_end_to_end_suggests_only_known_names() {
+        let (_d, v, mut idx) = setup();
+        // 서재에 책 한 권 — 제목·저자·출판사·분야가 전부 사전 재료가 된다
+        let book = v
+            .create_note(
+                "book",
+                "클린 코드",
+                json!({"author": "로버트 마틴", "publisher": "인사이트", "genre": "컴퓨터/IT"}),
+            )
+            .unwrap();
+        // 태그를 하나 쓰고 있는 노트
+        let memo = v.create_note("free", "메모", json!({})).unwrap();
+        v.save_note(&memo, json!({"tags": ["독서"]}), "본문").unwrap();
+
+        for rel in [&book, &memo] {
+            idx.upsert(&v.parse_full(rel).unwrap()).unwrap();
+        }
+        let dict = idx.proper_noun_dict().unwrap();
+
+        // 일지에 그 책 이야기를 적었다 — 필러 부사도 잔뜩 섞어 둔다
+        let input = crate::autotag::TagInput {
+            title: String::new(),
+            body: "오늘 로버트 마틴의 클린 코드를 읽었다. 실제로 사실은 정말 좋았고 \
+                   독서를 계속해야겠다고 생각했다. Rust로 예제도 따라 쳤다."
+                .into(),
+            note_type: "daily".into(),
+            genre: None,
+            current_tags: vec![],
+        };
+        let r = crate::autotag::suggest_tags(&input, &dict, 10);
+        let names: Vec<&str> = r.iter().map(|s| s.tag.as_str()).collect();
+
+        // 사전에 있는 고유명사는 잡는다
+        assert!(names.contains(&"클린 코드"), "책 제목: {names:?}");
+        assert!(names.contains(&"로버트 마틴"), "저자: {names:?}");
+        assert!(names.contains(&"독서"), "기존 태그: {names:?}");
+        assert!(names.contains(&"Rust"), "영문 고유명사: {names:?}");
+        // 책 제목을 따라 분야가 범주로 붙는다
+        let cat = r.iter().find(|s| s.tag == "컴퓨터/IT").expect("범주");
+        assert!(cat.category);
+        // 필러 부사는 아무리 나와도 제안되지 않는다
+        for junk in ["실제로", "사실은", "사실", "정말", "생각"] {
+            assert!(!names.contains(&junk), "{junk}가 샜다: {names:?}");
+        }
+    }
+
+    #[test]
+    fn untagged_notes_excludes_tagged() {
+        let (_d, v, mut idx) = setup();
+        let tagged = v.create_note("free", "태그있음", json!({})).unwrap();
+        v.save_note(&tagged, json!({"tags": ["독서"]}), "본문").unwrap();
+        let bare = v.create_note("free", "태그없음", json!({})).unwrap();
+        v.save_note(&bare, json!({}), "그냥 본문").unwrap();
+
+        for rel in [&tagged, &bare] {
+            idx.upsert(&v.parse_full(rel).unwrap()).unwrap();
+        }
+
+        let untagged = idx.untagged_notes().unwrap();
+        let paths: Vec<_> = untagged.iter().map(|r| r.rel_path.as_str()).collect();
+        assert!(paths.contains(&bare.as_str()));
+        assert!(!paths.contains(&tagged.as_str()));
     }
 
     #[test]

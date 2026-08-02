@@ -4,6 +4,7 @@
 //! 이 크레이트는 `tauri`에 의존하지 않는다 (모바일 확장 시 그대로 재사용).
 
 pub mod audit;
+pub mod autotag;
 pub mod enrich;
 pub mod error;
 pub mod extract;
@@ -20,6 +21,7 @@ pub mod template;
 pub mod vault;
 
 pub use audit::{IssueKind, NoteIssue};
+pub use autotag::{suggest_tags, DictEntry, DictSource, TagInput, TagSuggestion};
 pub use enrich::suggest_genre;
 pub use error::CoreError;
 pub use history::{HistoryItem, HistoryPolicy};
