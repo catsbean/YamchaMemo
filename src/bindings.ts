@@ -363,6 +363,40 @@ async notesByTag(tag: string) : Promise<Result<NoteRef[], string>> {
 }
 },
 /**
+ * 자동 태그 제안 — 저장 전 초안(에디터·담기 창)용. 파일을 읽지 않고 넘어온 내용만 본다.
+ */
+async suggestTagsForText(input: TagInput) : Promise<Result<TagSuggestion[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("suggest_tags_for_text", { input }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 자동 태그 제안 — 여러 노트를 한 번에 (태그 없는 노트 일괄 정리 화면용).
+ * vocab을 한 번만 읽고 IPC도 한 번으로 끝낸다.
+ */
+async suggestTagsBatch(relPaths: string[]) : Promise<Result<([string, TagSuggestion[]])[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("suggest_tags_batch", { relPaths }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 태그가 하나도 없는 노트들 (자동 태그 일괄 정리 화면용)
+ */
+async untaggedNotes() : Promise<Result<NoteRef[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("untagged_notes") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 전체 재색인 (인덱스 손상 대비 수동 명령)
  */
 async reindex() : Promise<Result<number, string>> {
@@ -1214,6 +1248,39 @@ export type SearchScope =
  */
 export type StorageDir = { label: string; path: string }
 export type TagCount = { tag: string; count: number }
+/**
+ * 추천에 필요한 노트 정보. 저장된 파일이 아니라 **지금 편집 중인 내용**을 받아야
+ * 타이핑 중인 초안이 제안에 반영된다.
+ */
+export type TagInput = { title: string; body: string; note_type: string; 
+/**
+ * book의 분야(genre) — 있으면 범주 태그 후보가 된다
+ */
+genre: string | null; 
+/**
+ * 이미 달린 태그 — 후보에서 제외한다
+ */
+current_tags: string[] }
+/**
+ * 태그 후보 하나
+ */
+export type TagSuggestion = { tag: string; 
+/**
+ * 0.0~1.0. 화면은 이 순서로 보여준다
+ */
+score: number; 
+/**
+ * 화면 툴팁에 보여줄 근거 ("저자" 등)
+ */
+reason: string; 
+/**
+ * vault에 이미 있는 태그인가 (화면에서 색을 달리한다)
+ */
+existing: boolean; 
+/**
+ * 범주 태그인가 (고유명사 칩과 색을 달리한다)
+ */
+category: boolean }
 /**
  * 어느 노트에 있는 미완 할 일 한 줄
  */
