@@ -28,6 +28,8 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
   const [note, setNote] = useState<NoteContent | null>(null);
   const [body, setBody] = useState("");
   const [dirty, setDirty] = useState(false);
+  // 내가 편집하는 사이에 파일이 밖에서 바뀌었다 — 자동저장을 멈추고 사용자에게 묻는다
+  const [externalChanged, setExternalChanged] = useState(false);
   const [error, setError] = useState("");
   const [schemas, setSchemas] = useState<TypeDef[]>([]);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
@@ -109,12 +111,19 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
   }, [relPath]);
 
   // 다른 창·외부 편집으로 파일이 바뀌면 따라간다.
-  // 내가 편집 중(dirty)이면 건드리지 않는다 — 덮어쓰면 입력 중인 내용이 날아간다.
+  //
+  // 내가 편집 중(dirty)이면 화면을 갈아끼우지 않는다 — 덮어쓰면 입력 중인 내용이 날아간다.
+  // 대신 **경고를 띄우고 자동저장을 멈춘다.** 예전에는 그냥 무시하고 넘어갔는데, 그러면
+  // 3초 뒤 자동저장이 남의 저장을 조용히 덮었다. 메인 창에는 있던 장치가 여기만 없었다.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     listen<string[]>("vault-external-change", async (e) => {
-      if (!e.payload.includes(relPath) || dirtyRef.current) return;
+      if (!e.payload.includes(relPath)) return;
+      if (dirtyRef.current) {
+        setExternalChanged(true);
+        return;
+      }
       const r = await commands.readNote(relPath);
       if (r.status !== "ok") return;
       const next =
@@ -194,12 +203,30 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
     [note, save, relPath],
   );
 
-  // 자동 저장 (3초 유휴) — 메인 창과 같은 감각으로
+  /** 밖에서 바뀐 내용을 가져온다 (내 편집분은 버린다) */
+  const reload = useCallback(async () => {
+    const r = await commands.readNote(relPath);
+    if (r.status !== "ok") {
+      setError(r.error);
+      return;
+    }
+    setNote(r.data);
+    setBody(
+      r.data.note_type === "book"
+        ? splitBookBody(r.data.body).records
+        : r.data.body,
+    );
+    setDirty(false);
+    setExternalChanged(false);
+  }, [relPath]);
+
+  // 자동 저장 (3초 유휴) — 메인 창과 같은 감각으로.
+  // 밖에서 바뀐 걸 아직 못 본 상태면 멈춘다 (남의 저장을 덮지 않는다)
   useEffect(() => {
-    if (!dirty) return;
+    if (!dirty || externalChanged) return;
     const t = setTimeout(save, 3000);
     return () => clearTimeout(t);
-  }, [dirty, body, save]);
+  }, [dirty, externalChanged, body, save]);
 
   useShortcut("save", save);
 
@@ -296,6 +323,29 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
           </button>
         </div>
       </header>
+
+      {externalChanged && (
+        <div className="flex items-center justify-between bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          <span>
+            ⚠️ 이 노트가 다른 창이나 외부 앱에서 수정되었습니다. 지금 저장하면 그
+            수정이 덮어써집니다.
+          </span>
+          <span className="flex shrink-0 gap-2">
+            <button
+              className="rounded bg-amber-600 px-2.5 py-1 text-xs text-white hover:bg-amber-500"
+              onClick={reload}
+            >
+              다시 불러오기
+            </button>
+            <button
+              className="rounded px-2 py-1 text-xs text-amber-600 hover:bg-amber-100"
+              onClick={() => setExternalChanged(false)}
+            >
+              내 편집 유지
+            </button>
+          </span>
+        </div>
+      )}
 
       {!isBook && (
         <FrontmatterForm
