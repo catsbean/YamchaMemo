@@ -1,7 +1,9 @@
 //! Vault: 마크다운 파일 저장소. 파일 IO, 파일명 규칙, 노트 CRUD, 타입 관리, 첨부파일.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use chrono::Local;
 use serde::{Deserialize, Serialize};
@@ -119,6 +121,16 @@ pub struct Vault {
     root: PathBuf,
     types: Vec<TypeDef>,
     history: crate::history::HistoryPolicy,
+    /// `_index.md`를 다시 만들어야 하는 타입들.
+    ///
+    /// 예전에는 노트를 저장할 때마다 그 자리에서 목록 파일을 다시 만들었다. 그런데 그
+    /// 작업은 **vault 전체를 읽어 파싱**한다(실측: 2,000편에서 저장 한 번에 345ms,
+    /// 태그 일괄변경은 O(n²)라 771초). 자동저장이 3초마다 도는 앱에서 감당할 수 없다.
+    ///
+    /// 이제 저장은 "낡았다"고 표시만 하고 즉시 끝난다. 실제 재생성은 손을 멈췄을 때
+    /// `flush_index_files`가 한 번에 한다. `_index.md`는 다른 편집기에서 훑어보라고
+    /// 만들어 두는 파일이라 몇 초 늦어도 문제가 없다.
+    index_stale: Mutex<HashSet<String>>,
 }
 
 impl Vault {
@@ -142,6 +154,7 @@ impl Vault {
             root,
             types,
             history: crate::history::HistoryPolicy::default(),
+            index_stale: Mutex::new(HashSet::new()),
         };
         vault.ensure_layout()?;
         // 옛 독서기록 파일을 책 파일로 통합 (있을 때만, 실패해도 vault 열기는 계속)
@@ -151,6 +164,37 @@ impl Vault {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// 이 타입의 `_index.md`가 낡았다고 표시한다 (실제 재생성은 `flush_index_files`가 한다)
+    pub(crate) fn mark_index_stale(&self, type_id: &str) {
+        if let Ok(mut set) = self.index_stale.lock() {
+            set.insert(type_id.to_string());
+        }
+    }
+
+    /// 낡은 `_index.md`를 모두 다시 만든다 → 다시 만든 타입 수.
+    ///
+    /// 손을 멈췄을 때 한 번만 부르면 된다. 여러 번 저장했어도 타입당 한 번만 돈다.
+    pub fn flush_index_files(&self) -> Result<usize, CoreError> {
+        let stale: Vec<String> = match self.index_stale.lock() {
+            Ok(mut set) => set.drain().collect(),
+            Err(_) => return Ok(0),
+        };
+        let mut done = 0;
+        for type_id in &stale {
+            crate::index_file::update_index(self, type_id)?;
+            done += 1;
+        }
+        Ok(done)
+    }
+
+    /// 아직 반영되지 않은 목록 파일이 있는가 (창을 닫기 전 확인용)
+    pub fn has_stale_index(&self) -> bool {
+        self.index_stale
+            .lock()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
     }
 
     pub fn history_policy(&self) -> crate::history::HistoryPolicy {
@@ -298,7 +342,8 @@ impl Vault {
 
         self.types.retain(|t| t.builtin || t.id != id);
         self.save_custom_types()?;
-        crate::index_file::update_index(self, Builtin::Free.id())
+        self.mark_index_stale(Builtin::Free.id());
+        Ok(())
     }
 
     // ---------- 제목 변경 ----------
@@ -552,6 +597,20 @@ impl Vault {
         Ok(out)
     }
 
+    /// 한 타입의 노트만 (`_index.md` 생성처럼 한 폴더만 필요할 때).
+    ///
+    /// `list_notes()`로 전부 읽고 걸러내면 나머지 폴더까지 파싱하는 값을 치른다 —
+    /// 목록 파일 하나 만들려고 vault 전체를 읽을 이유가 없다.
+    pub fn list_notes_of_type(&self, type_id: &str) -> Result<Vec<NoteSummary>, CoreError> {
+        let Some(def) = self.def_by_id(type_id) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        self.collect_notes(&self.root.join(&def.folder), type_id, &mut out)?;
+        out.sort_by(|a, b| b.date.cmp(&a.date).then(a.title.cmp(&b.title)));
+        Ok(out)
+    }
+
     fn collect_notes(
         &self,
         dir: &Path,
@@ -680,7 +739,8 @@ impl Vault {
         let content = parse::compose(&fm, body)?;
         self.snapshot_before(rel, Some(&content));
         self.atomic_write(&abs, &content)?;
-        crate::index_file::update_index(self, &t)
+        self.mark_index_stale(&t);
+        Ok(())
     }
 
     /// frontmatter 일부 필드만 갱신 (본문 유지) — 목록 뷰 인라인 편집용
@@ -713,7 +773,8 @@ impl Vault {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "note.md".into());
         fs::rename(&abs, trash.join(format!("{stamp}_{name}")))?;
-        crate::index_file::update_index(self, &t)
+        self.mark_index_stale(&t);
+        Ok(())
     }
 
     /// 휴지통(.yamcha/trash) 목록 — 최근 삭제가 위로.
@@ -781,7 +842,7 @@ impl Vault {
         let dest = self.unique_path(&dir, stem);
         fs::rename(&src, &dest)?;
         let rel = self.rel_of(&dest);
-        crate::index_file::update_index(self, &resolved_type)?;
+        self.mark_index_stale(&resolved_type);
         Ok(rel)
     }
 
@@ -1038,7 +1099,7 @@ impl Vault {
 
         let content = parse::compose(&fm, &body)?;
         self.atomic_write(&abs, &content)?;
-        crate::index_file::update_index(self, type_id)?;
+        self.mark_index_stale(type_id);
         Ok(self.rel_of(&abs))
     }
 
@@ -1055,7 +1116,7 @@ impl Vault {
             let body = template::render_template(&tmpl, date, date);
             let content = parse::compose(&fm, &body)?;
             self.atomic_write(&abs, &content)?;
-            crate::index_file::update_index(self, Builtin::Daily.id())?;
+            self.mark_index_stale(Builtin::Daily.id());
         }
         Ok(self.rel_of(&abs))
     }

@@ -925,6 +925,20 @@ async mirrorResolve(target: string, relPath: string, pull: boolean) : Promise<Re
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * 낡은 `_index.md`를 지금 다시 만든다 → 다시 만든 타입 수.
+ * 
+ * 저장할 때마다 만들면 vault 전체를 다시 읽게 되어(실측 2,000편에 345ms) 자동저장이
+ * 도는 내내 앱이 멈춘다. 그래서 저장은 표시만 하고, 손을 멈췄을 때 프론트가 이걸 부른다.
+ */
+async flushIndexFiles() : Promise<Result<number, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("flush_index_files") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 

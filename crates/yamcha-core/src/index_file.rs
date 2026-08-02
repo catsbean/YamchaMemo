@@ -15,11 +15,8 @@ pub fn update_index(vault: &Vault, type_id: &str) -> Result<(), CoreError> {
     };
     let label = def.label.clone();
     let folder = def.folder.clone();
-    let notes: Vec<NoteSummary> = vault
-        .list_notes()?
-        .into_iter()
-        .filter(|n| n.note_type == type_id)
-        .collect();
+    // 이 타입의 폴더만 읽는다 — 전체를 읽고 걸러내면 나머지 폴더까지 파싱하는 값을 치른다
+    let notes: Vec<NoteSummary> = vault.list_notes_of_type(type_id)?;
     let content = render(type_id, &label, &notes);
     let path = vault.root().join(&folder).join("_index.md");
     if let Ok(existing) = fs::read_to_string(&path) {
@@ -137,6 +134,68 @@ fn render_date_list(out: &mut String, notes: &[NoteSummary]) {
         }
     }
     out.push('\n');
+}
+
+#[cfg(test)]
+mod deferred_tests {
+    use crate::Vault;
+    use serde_json::json;
+
+    /// 저장은 목록 파일을 만들지 않고 표시만 한다 — 그래야 저장이 O(1)로 끝난다.
+    /// 대신 flush를 부르면 반드시 반영돼야 한다. 이 계약이 깨지면 `_index.md`가
+    /// 영원히 낡은 채로 남는다.
+    #[test]
+    fn 저장은_표시만_하고_flush가_반영한다() {
+        let d = tempfile::tempdir().unwrap();
+        let v = Vault::open(d.path()).unwrap();
+        let index = d.path().join("Free").join("_index.md");
+
+        let rel = v.create_note("free", "첫 노트", json!({})).unwrap();
+        v.save_note(&rel, json!({}), "본문").unwrap();
+
+        // 아직 만들어지지 않았다 (만들어졌다면 저장 경로가 vault를 다 읽고 있다는 뜻)
+        assert!(v.has_stale_index(), "낡음 표시가 없다");
+
+        assert_eq!(v.flush_index_files().unwrap(), 1);
+        assert!(!v.has_stale_index(), "flush 뒤에도 표시가 남았다");
+        let text = std::fs::read_to_string(&index).unwrap();
+        assert!(text.contains("첫 노트"), "목록에 노트가 없다: {text}");
+
+        // 두 번째 flush는 할 일이 없다 (같은 일을 반복하지 않는다)
+        assert_eq!(v.flush_index_files().unwrap(), 0);
+    }
+
+    /// 여러 번 저장해도 flush 한 번이면 된다 — 자동저장이 3초마다 도는 앱이라
+    /// 여기서 쌓이면 그대로 비용이 된다.
+    #[test]
+    fn 여러_번_저장해도_한_번만_만든다() {
+        let d = tempfile::tempdir().unwrap();
+        let v = Vault::open(d.path()).unwrap();
+        let rel = v.create_note("free", "노트", json!({})).unwrap();
+        for i in 0..20 {
+            v.save_note(&rel, json!({}), &format!("{i}번째")).unwrap();
+        }
+        // free 타입 하나뿐 — 20번 저장했어도 만들 목록은 하나다
+        assert_eq!(v.flush_index_files().unwrap(), 1);
+    }
+
+    /// 삭제도 목록에 반영돼야 한다 (표시 대상이 지운 노트의 타입이어야 한다)
+    #[test]
+    fn 삭제도_반영된다() {
+        let d = tempfile::tempdir().unwrap();
+        let v = Vault::open(d.path()).unwrap();
+        let rel = v.create_note("free", "지울 노트", json!({})).unwrap();
+        v.flush_index_files().unwrap();
+        assert!(std::fs::read_to_string(d.path().join("Free/_index.md"))
+            .unwrap()
+            .contains("지울 노트"));
+
+        v.delete_note(&rel).unwrap();
+        v.flush_index_files().unwrap();
+        assert!(!std::fs::read_to_string(d.path().join("Free/_index.md"))
+            .unwrap()
+            .contains("지울 노트"));
+    }
 }
 
 #[cfg(test)]

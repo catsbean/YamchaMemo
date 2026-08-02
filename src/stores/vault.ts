@@ -185,7 +185,8 @@ interface VaultStore {
   addMirror(): Promise<void>;
   removeMirror(path: string): Promise<void>;
   syncMirrors(): Promise<void>;
-  /** 대기 중인 미러 복제가 있으면 지금 끝낸다 (창 닫기 직전). 없으면 아무 일도 안 한다 */
+  /** 밀려 있는 목록 파일 재생성과 미러 복제를 지금 끝낸다 (창 닫기 직전).
+   *  밀린 게 없으면 아무 일도 안 한다 */
   flushMirrors(): Promise<void>;
   resolveMirrorConflict(target: string, rel: string, pull: boolean): Promise<void>;
   reloadCurrent(): Promise<void>;
@@ -209,6 +210,10 @@ let resaveRequested = false;
 let mirrorTimer: ReturnType<typeof setTimeout> | null = null;
 /** 마지막 변경 뒤 이만큼 잠잠하면 미러로 복제한다 */
 const MIRROR_IDLE_MS = 60_000;
+// `_index.md` 재생성 디바운스 타이머
+let indexTimer: ReturnType<typeof setTimeout> | null = null;
+/** 마지막 변경 뒤 이만큼 잠잠하면 목록 파일을 다시 만든다 */
+const INDEX_IDLE_MS = 5_000;
 
 export const useVault = create<VaultStore>((set, get) => {
   async function guard<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -218,6 +223,19 @@ export const useVault = create<VaultStore>((set, get) => {
       set({ error: e instanceof Error ? e.message : String(e) });
       return undefined;
     }
+  }
+
+  /** 손을 멈추면 타입별 `_index.md`를 다시 만든다.
+   *
+   *  이 파일은 다른 편집기(옵시디언 등)에서 훑어보라고 만들어 두는 자동 생성 목록이다.
+   *  만드는 데 그 폴더를 전부 읽어야 해서, 저장할 때마다 하면 타이핑하는 내내 앱이 멈춘다.
+   *  몇 초 늦게 반영돼도 아무 문제가 없는 파일이라 한가할 때 몰아서 만든다. */
+  function scheduleIndexFiles() {
+    if (indexTimer) clearTimeout(indexTimer);
+    indexTimer = setTimeout(() => {
+      indexTimer = null;
+      commands.flushIndexFiles().catch(() => {});
+    }, INDEX_IDLE_MS);
   }
 
   /** 실제 저장 한 바퀴. 도는 사이에 저장 요청이 또 들어왔으면 최신 내용으로 한 번 더 돈다. */
@@ -242,7 +260,7 @@ export const useVault = create<VaultStore>((set, get) => {
         await get().refresh();
         // 같은 노트를 띄운 다른 창이 따라오도록 알린다
         await notifyOtherWindows([cur.rel_path]);
-        scheduleMirror();
+        afterWrite();
       });
     } while (resaveRequested);
   }
@@ -252,7 +270,8 @@ export const useVault = create<VaultStore>((set, get) => {
    *  예전엔 2초였다. 자동저장이 3초마다 도니까 타이머가 저장 사이사이에 끼어들어,
    *  타이핑하는 내내 몇 초에 한 번씩 vault 전체를 훑었다. 미러는 백업이지 실시간
    *  동기화가 아니므로 한참 쉬었을 때만 돌면 된다. 창을 닫을 때도 따로 한 번 돈다. */
-  function scheduleMirror() {
+  function afterWrite() {
+    scheduleIndexFiles();
     if (get().mirrors.length === 0) return;
     if (mirrorTimer) clearTimeout(mirrorTimer);
     mirrorTimer = setTimeout(() => {
@@ -723,7 +742,7 @@ export const useVault = create<VaultStore>((set, get) => {
         const rel = unwrap(await commands.createNote(t, title, fields));
         await get().refresh();
         await get().openNote(rel);
-        scheduleMirror();
+        afterWrite();
       });
     },
 
@@ -738,7 +757,7 @@ export const useVault = create<VaultStore>((set, get) => {
         await get().refresh();
         await get().openNote(rel);
         set({ pendingTitleRel: rel });
-        scheduleMirror();
+        afterWrite();
       });
     },
 
@@ -765,7 +784,7 @@ export const useVault = create<VaultStore>((set, get) => {
         unwrap(await commands.deleteNote(cur.rel_path));
         set({ current: null, dirty: false });
         await get().refresh();
-        scheduleMirror();
+        afterWrite();
       });
     },
 
@@ -779,7 +798,7 @@ export const useVault = create<VaultStore>((set, get) => {
         );
         set({ current: updated, dirty: false });
         await notifyOtherWindows([cur.rel_path]);
-        scheduleMirror();
+        afterWrite();
       });
     },
 
@@ -794,7 +813,7 @@ export const useVault = create<VaultStore>((set, get) => {
         set({ current: updated, dirty: false });
         await get().refresh();
         await notifyOtherWindows([cur.rel_path]);
-        scheduleMirror();
+        afterWrite();
       });
     },
 
@@ -809,7 +828,7 @@ export const useVault = create<VaultStore>((set, get) => {
         set({ current: updated, dirty: false });
         await get().refresh();
         await notifyOtherWindows([cur.rel_path]);
-        scheduleMirror();
+        afterWrite();
       });
     },
 
@@ -862,7 +881,7 @@ export const useVault = create<VaultStore>((set, get) => {
       await guard(async () => {
         unwrap(await commands.updateFrontmatter(relPath, patch));
         await get().refresh();
-        scheduleMirror();
+        afterWrite();
       });
     },
 
@@ -898,6 +917,12 @@ export const useVault = create<VaultStore>((set, get) => {
     },
 
     async flushMirrors() {
+      // 목록 파일이 밀려 있으면 먼저 만든다 — 미러가 그걸 실어 가야 한다
+      if (indexTimer) {
+        clearTimeout(indexTimer);
+        indexTimer = null;
+        await commands.flushIndexFiles().catch(() => {});
+      }
       if (!mirrorTimer) return; // 마지막 복제 뒤로 바뀐 게 없다
       clearTimeout(mirrorTimer);
       mirrorTimer = null;

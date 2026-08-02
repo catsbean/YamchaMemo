@@ -95,6 +95,7 @@ pub fn run() {
         commands::set_note_template,
         commands::mirror_sync,
         commands::mirror_resolve,
+        commands::flush_index_files,
     ]);
 
     #[cfg(debug_assertions)]
