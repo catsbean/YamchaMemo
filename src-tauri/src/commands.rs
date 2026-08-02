@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -360,6 +361,68 @@ pub fn core_version() -> String {
     yamcha_core::version()
 }
 
+/// 경로를 폴더 이름으로 쓸 수 있는 짧은 값으로 (사람이 알아볼 힌트 + 충돌 없는 지문).
+///
+/// FNV-1a를 직접 쓴다. `DefaultHasher`는 릴리스마다 결과가 달라도 된다고 문서에
+/// 못박혀 있어서, 앱을 새로 빌드할 때마다 색인 폴더가 갈릴 수 있다.
+fn vault_key(vault_root: &Path) -> String {
+    let raw = vault_root.to_string_lossy();
+    // Windows는 대소문자를 가리지 않으므로 같은 폴더가 두 벌로 갈리지 않게 맞춘다
+    let normalized = if cfg!(windows) {
+        raw.to_lowercase()
+    } else {
+        raw.to_string()
+    };
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in normalized.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    // 힌트도 소문자로 맞춘다 — 지문이 같은데 힌트만 달라 폴더가 갈리면
+    // 같은 vault를 열 때마다 색인을 처음부터 다시 만든다
+    let hint: String = vault_root
+        .file_name()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .take(24)
+        .collect();
+    if hint.is_empty() {
+        format!("vault-{hash:016x}")
+    } else {
+        format!("{hint}-{hash:016x}")
+    }
+}
+
+/// 색인을 둘 곳 — **vault 밖**이다.
+///
+/// vault는 클라우드 동기화 폴더에 두라고 권하는 자리다(README). 그런데 색인은
+/// SQLite와 tantivy로, 동기화 에이전트가 실시간으로 건드리면 깨지기 쉬운 파일이다.
+/// 게다가 파일에서 언제든 다시 만들 수 있는 파생 데이터라 기기 사이로 옮길 이유가 없다.
+/// vault마다 폴더를 나눠 여러 vault를 오가도 섞이지 않게 한다.
+fn index_dir_for(app: &tauri::AppHandle, vault_root: &Path) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("앱 데이터 폴더를 찾지 못했습니다: {e}"))?;
+    Ok(base.join("index").join(vault_key(vault_root)))
+}
+
+/// 예전 버전이 vault 안에 만들어 둔 색인을 치운다.
+///
+/// 순수 파생 데이터라 지워도 바로 뒤 `reindex_all`이 새 자리에 다시 만든다. 그냥 두면
+/// 클라우드 동기화가 계속 그 파일들을 실어 나른다. **휴지통과 히스토리는 사용자 데이터라
+/// 절대 건드리지 않는다** — 지우는 대상을 index.db 계열과 search 폴더로 못박는다.
+fn remove_legacy_index(vault_root: &Path) {
+    let dot = vault_root.join(".yamcha");
+    let _ = std::fs::remove_dir_all(dot.join("search"));
+    // SQLite는 -wal·-shm 형제 파일을 남긴다
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let _ = std::fs::remove_file(dot.join(format!("index.db{suffix}")));
+    }
+}
+
 /// vault 폴더를 열고 (없으면 폴더 구조 생성) 전체 재색인
 #[tauri::command]
 #[specta::specta]
@@ -382,10 +445,11 @@ pub fn set_vault(
     }
     *guard = None;
     let vault = Vault::open(&path).map_err(|e| e.to_string())?;
-    let mut indexer =
-        Indexer::open(&vault.root().join(".yamcha/index.db")).map_err(|e| e.to_string())?;
-    let mut search =
-        SearchEngine::open(&vault.root().join(".yamcha/search")).map_err(|e| e.to_string())?;
+    let index_dir = index_dir_for(&app, vault.root())?;
+    std::fs::create_dir_all(&index_dir).map_err(|e| e.to_string())?;
+    let mut indexer = Indexer::open(&index_dir.join("index.db")).map_err(|e| e.to_string())?;
+    let mut search = SearchEngine::open(&index_dir.join("search")).map_err(|e| e.to_string())?;
+    remove_legacy_index(vault.root());
     yamcha_core::reindex_all(&vault, &mut indexer, &mut search).map_err(|e| e.to_string())?;
     let root = vault.root().to_path_buf();
     *guard = Some(Ctx {
@@ -3033,6 +3097,66 @@ pub fn auto_title_note(state: State<'_, AppState>, rel_path: String) -> Result<S
         refresh_note(c, &new_rel)?;
         Ok(new_rel)
     })
+}
+
+#[cfg(test)]
+mod index_location_tests {
+    use super::*;
+
+    #[test]
+    fn 같은_vault는_늘_같은_폴더_다른_vault는_다른_폴더() {
+        let a = Path::new("E:/Projects/YamchaMemo/testvault");
+        let b = Path::new("E:/Projects/YamchaMemo/다른창고");
+        assert_eq!(vault_key(a), vault_key(a), "같은 경로가 두 값을 냈다");
+        assert_ne!(vault_key(a), vault_key(b));
+        // 사람이 알아볼 힌트가 앞에 붙는다
+        assert!(vault_key(a).starts_with("testvault-"), "{}", vault_key(a));
+    }
+
+    /// Windows에서 대소문자만 다른 경로는 같은 폴더다 — 두 벌로 갈리면
+    /// 같은 vault를 열 때마다 색인을 처음부터 다시 만든다.
+    #[test]
+    #[cfg(windows)]
+    fn 윈도우에서는_대소문자를_가리지_않는다() {
+        assert_eq!(
+            vault_key(Path::new("E:/Projects/Vault")),
+            vault_key(Path::new("e:/projects/vault"))
+        );
+    }
+
+    /// 옛 색인을 치울 때 **사용자 데이터는 건드리지 않는다**.
+    #[test]
+    fn 옛_색인만_치우고_휴지통과_히스토리는_남긴다() {
+        let d = tempfile::tempdir().unwrap();
+        let dot = d.path().join(".yamcha");
+        std::fs::create_dir_all(dot.join("search")).unwrap();
+        std::fs::create_dir_all(dot.join("trash")).unwrap();
+        std::fs::create_dir_all(dot.join("history").join("Free__메모.md")).unwrap();
+        std::fs::write(dot.join("search").join("meta.json"), "{}").unwrap();
+        std::fs::write(dot.join("index.db"), "sqlite").unwrap();
+        std::fs::write(dot.join("index.db-wal"), "wal").unwrap();
+        std::fs::write(dot.join("trash").join("20260101-000000_지운것.md"), "본문").unwrap();
+        std::fs::write(
+            dot.join("history").join("Free__메모.md").join("20260101-000000-000.md"),
+            "예전 판",
+        )
+        .unwrap();
+
+        remove_legacy_index(d.path());
+
+        assert!(!dot.join("search").exists(), "search가 남았다");
+        assert!(!dot.join("index.db").exists(), "index.db가 남았다");
+        assert!(!dot.join("index.db-wal").exists(), "wal이 남았다");
+        // 여기부터가 진짜 확인하고 싶은 것
+        assert!(
+            dot.join("trash").join("20260101-000000_지운것.md").exists(),
+            "휴지통을 지웠다"
+        );
+        assert!(
+            dot.join("history").join("Free__메모.md").join("20260101-000000-000.md").exists(),
+            "히스토리를 지웠다"
+        );
+    }
 }
 
 #[cfg(test)]

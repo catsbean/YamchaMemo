@@ -6958,6 +6958,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-store",
  "tauri-specta",
+ "tempfile",
  "tokio",
  "url",
  "yamcha-core",
