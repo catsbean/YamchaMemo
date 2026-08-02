@@ -84,8 +84,10 @@ mod bench {
             n.skipped
         );
 
-        // ①-c 한 편만 고치고 다시 켠 상황
-        let one = v.list_notes().unwrap()[0].rel_path.clone();
+        // ①-c 한 편만 고치고 다시 켠 상황.
+        // (경로는 list_note_files로 얻는다 — list_notes를 부르면 요약 캐시가 데워져서
+        //  바로 아래 ②의 "첫 호출"이 첫 호출이 아니게 된다)
+        let one = v.list_note_files().unwrap()[0].rel_path.clone();
         std::thread::sleep(std::time::Duration::from_millis(15));
         v.save_note(&one, json!({}), "한 편만 고쳤다").unwrap();
         let t = Instant::now();
@@ -96,10 +98,30 @@ mod bench {
             n.indexed
         );
 
-        // ② 노트 목록 (화면 갱신마다)
+        // ② 노트 목록 — 첫 호출 (캐시가 비어 있다)
         let t = Instant::now();
         let notes = v.list_notes().unwrap();
-        println!("② list_notes (갱신마다): {}ms, {}편", t.elapsed().as_millis(), notes.len());
+        println!("② list_notes 첫 호출: {}ms, {}편", t.elapsed().as_millis(), notes.len());
+
+        // ②-b 저장 뒤 화면 갱신 — 자동저장마다 치르는 실제 값
+        let one = notes[0].rel_path.clone();
+        v.save_note(&one, json!({}), "한 편만 고쳤다 2").unwrap();
+        let t = Instant::now();
+        let again = v.list_notes().unwrap();
+        println!(
+            "②-b 저장 뒤 갱신 (한 편만 바뀜): {}ms, {}편",
+            t.elapsed().as_millis(),
+            again.len()
+        );
+
+        // ②-c 갱신 비용의 바닥 — 파일 훑기(stat)만. 나머지는 요약 복제 값이다.
+        let t = Instant::now();
+        let files = v.list_note_files().unwrap();
+        println!(
+            "②-c list_note_files만 (stat): {}ms, {}개",
+            t.elapsed().as_millis(),
+            files.len()
+        );
 
         // ③ 점검 (감사 화면)
         let t = Instant::now();

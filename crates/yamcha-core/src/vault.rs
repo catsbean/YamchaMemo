@@ -1,6 +1,6 @@
 //! Vault: 마크다운 파일 저장소. 파일 IO, 파일명 규칙, 노트 CRUD, 타입 관리, 첨부파일.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -141,6 +141,13 @@ pub struct Vault {
     /// `flush_index_files`가 한 번에 한다. `_index.md`는 다른 편집기에서 훑어보라고
     /// 만들어 두는 파일이라 몇 초 늦어도 문제가 없다.
     index_stale: Mutex<HashSet<String>>,
+    /// 노트 요약 캐시 — 경로 → (수정시각, 크기, 요약).
+    ///
+    /// 목록을 그릴 때마다 편마다 파일을 열어 파싱했다(실측: 2,000편에 356ms).
+    /// 저장할 때마다 화면을 갱신하니 자동저장이 도는 내내 그 값을 치렀다.
+    /// 파일이 그대로면 지난번 요약을 그대로 쓴다 — 진실원본은 여전히 파일이고,
+    /// 캐시는 (수정시각, 크기)가 어긋나는 순간 버려진다.
+    summaries: Mutex<HashMap<String, (i64, i64, NoteSummary)>>,
 }
 
 impl Vault {
@@ -165,6 +172,7 @@ impl Vault {
             types,
             history: crate::history::HistoryPolicy::default(),
             index_stale: Mutex::new(HashSet::new()),
+            summaries: Mutex::new(HashMap::new()),
         };
         vault.ensure_layout()?;
         // 옛 독서기록 파일을 책 파일로 통합 (있을 때만, 실패해도 vault 열기는 계속)
@@ -597,12 +605,47 @@ impl Vault {
         Ok(changed)
     }
 
-    pub fn list_notes(&self) -> Result<Vec<NoteSummary>, CoreError> {
-        let mut out = Vec::new();
-        for t in &self.types {
-            let dir = self.root.join(&t.folder);
-            self.collect_notes(&dir, &t.id, &mut out)?;
+    /// 요약 하나 — 파일이 그대로면 캐시에서, 아니면 열어서 만들고 캐시에 넣는다.
+    ///
+    /// 판단 잣대는 (수정시각, 크기)로 증분 색인과 같다. 수정시각은 나노초까지 본다 —
+    /// 밀리초로 자르면 같은 밀리초 안에 크기가 같게 다시 저장된 편을 놓칠 수 있다.
+    fn summary_of(&self, file: &NoteFile) -> Option<NoteSummary> {
+        if let Ok(cache) = self.summaries.lock() {
+            if let Some((mtime, size, cached)) = cache.get(&file.rel_path) {
+                if *mtime == file.mtime && *size == file.size {
+                    return Some(cached.clone());
+                }
+            }
         }
+        let fresh = self
+            .summarize(&self.root.join(&file.rel_path), &file.note_type)
+            .ok()?;
+        if let Ok(mut cache) = self.summaries.lock() {
+            cache.insert(
+                file.rel_path.clone(),
+                (file.mtime, file.size, fresh.clone()),
+            );
+        }
+        Some(fresh)
+    }
+
+    /// 사라진 파일의 요약은 버린다 (안 버리면 캐시가 계속 자란다)
+    fn prune_summaries(&self, live: &[NoteFile]) {
+        let Ok(mut cache) = self.summaries.lock() else {
+            return;
+        };
+        if cache.len() <= live.len() {
+            return;
+        }
+        let alive: HashSet<&str> = live.iter().map(|f| f.rel_path.as_str()).collect();
+        cache.retain(|rel, _| alive.contains(rel.as_str()));
+    }
+
+    pub fn list_notes(&self) -> Result<Vec<NoteSummary>, CoreError> {
+        let files = self.list_note_files()?;
+        let mut out: Vec<NoteSummary> =
+            files.iter().filter_map(|f| self.summary_of(f)).collect();
+        self.prune_summaries(&files);
         out.sort_by(|a, b| b.date.cmp(&a.date).then(a.title.cmp(&b.title)));
         Ok(out)
     }
@@ -635,7 +678,7 @@ impl Vault {
                         .modified()
                         .ok()
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_millis() as i64)
+                        .map(|d| d.as_nanos() as i64)
                         .unwrap_or(0);
                     let Ok(rel) = path.strip_prefix(root) else {
                         continue;
@@ -663,37 +706,14 @@ impl Vault {
     /// `list_notes()`로 전부 읽고 걸러내면 나머지 폴더까지 파싱하는 값을 치른다 —
     /// 목록 파일 하나 만들려고 vault 전체를 읽을 이유가 없다.
     pub fn list_notes_of_type(&self, type_id: &str) -> Result<Vec<NoteSummary>, CoreError> {
-        let Some(def) = self.def_by_id(type_id) else {
-            return Ok(Vec::new());
-        };
-        let mut out = Vec::new();
-        self.collect_notes(&self.root.join(&def.folder), type_id, &mut out)?;
+        let mut out: Vec<NoteSummary> = self
+            .list_note_files()?
+            .iter()
+            .filter(|f| f.note_type == type_id)
+            .filter_map(|f| self.summary_of(f))
+            .collect();
         out.sort_by(|a, b| b.date.cmp(&a.date).then(a.title.cmp(&b.title)));
         Ok(out)
-    }
-
-    fn collect_notes(
-        &self,
-        dir: &Path,
-        type_id: &str,
-        out: &mut Vec<NoteSummary>,
-    ) -> Result<(), CoreError> {
-        if !dir.exists() {
-            return Ok(());
-        }
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-            if path.is_dir() {
-                self.collect_notes(&path, type_id, out)?;
-            } else if name.ends_with(".md") && !name.starts_with('_') {
-                if let Ok(summary) = self.summarize(&path, type_id) {
-                    out.push(summary);
-                }
-            }
-        }
-        Ok(())
     }
 
     fn summarize(&self, abs: &Path, type_id: &str) -> Result<NoteSummary, CoreError> {
@@ -1901,6 +1921,53 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let v = Vault::open(dir.path()).unwrap();
         (dir, v)
+    }
+
+    /// 목록 요약은 캐시에서 오지만, **파일이 바뀌면 반드시 새 값이 나와야 한다.**
+    /// 여기가 어긋나면 고친 제목이 목록에 영영 안 뜬다.
+    #[test]
+    fn 목록_캐시는_파일이_바뀌면_따라온다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "처음 제목", json!({})).unwrap();
+
+        let before = v.list_notes().unwrap();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].title, "처음 제목");
+
+        // 제목을 바꾼다 (frontmatter만 바뀌므로 크기가 비슷하다 — 캐시가 속기 쉬운 자리)
+        v.save_note(&rel, json!({ "title": "고친 제목" }), "본문").unwrap();
+
+        let after = v.list_notes().unwrap();
+        assert_eq!(after[0].title, "고친 제목", "낡은 요약이 나왔다");
+    }
+
+    /// 앱 밖에서 지운 파일은 목록에서도 빠져야 한다 (캐시에 유령이 남으면 안 된다)
+    #[test]
+    fn 목록_캐시에_유령이_남지_않는다() {
+        let (_d, v) = vault();
+        let a = v.create_note("free", "남을 노트", json!({})).unwrap();
+        let b = v.create_note("free", "사라질 노트", json!({})).unwrap();
+        assert_eq!(v.list_notes().unwrap().len(), 2);
+
+        fs::remove_file(v.abs(&b).unwrap()).unwrap();
+
+        let after = v.list_notes().unwrap();
+        assert_eq!(after.len(), 1, "지운 노트가 목록에 남았다");
+        assert_eq!(after[0].rel_path, a);
+    }
+
+    /// 본문만 고쳐도 글자 수는 따라와야 한다 (글쓰기 화면이 이 값으로 진행을 보여준다)
+    #[test]
+    fn 본문을_고치면_글자수가_따라온다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("writing", "글", json!({})).unwrap();
+        v.save_note(&rel, json!({}), "짧다").unwrap();
+        let before = v.list_notes().unwrap()[0].char_count;
+
+        v.save_note(&rel, json!({}), &"길게 쓴 문장이다 ".repeat(20)).unwrap();
+        let after = v.list_notes().unwrap()[0].char_count;
+
+        assert!(after > before, "글자 수가 그대로다 ({before} → {after})");
     }
 
     /// 저장 중에도 노트 파일은 **한 순간도 사라지지 않아야 한다.**
