@@ -239,7 +239,6 @@ fn builtin_fields(b: Builtin) -> Vec<FieldDef> {
         Builtin::Daily => {}
         Builtin::Info => {
             f.push(FieldDef::new("source", "출처", FieldKind::Url, false));
-            f.push(FieldDef::new("clipped", "클리핑 시각", FieldKind::Text, false));
         }
         Builtin::Free => {
             f.push(FieldDef::new("title", "제목", FieldKind::Text, false));

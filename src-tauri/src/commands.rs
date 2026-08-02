@@ -196,7 +196,7 @@ pub async fn scrape_article(app: tauri::AppHandle, url: String) -> Option<Scrape
 }
 
 /// 스크랩 저장 — `info` 타입 노트로 만든다. 새 분류를 만들지 않는다:
-/// Info 타입에 이미 `source`·`clipped` 필드가 있다(0.3 버전부터, 이 기능을 염두에 두고
+/// Info 타입에 이미 `source` 필드가 있다(0.3 버전부터, 이 기능을 염두에 두고
 /// 설계돼 있었다). `create_note`가 만드는 기본 템플릿 본문을 실제 스크랩 본문으로
 /// 갈아끼운다 — frontmatter는 create_note가 정규화해 둔 것을 그대로 유지한다.
 #[tauri::command]
@@ -212,12 +212,7 @@ pub fn save_scrap(
         return Err("제목이 비어 있습니다".into());
     }
     with_ctx_write(&state, |c| {
-        let clipped = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
-        let rel = c.vault.create_note(
-            "info",
-            title,
-            serde_json::json!({ "source": url, "clipped": clipped }),
-        )?;
+        let rel = c.vault.create_note("info", title, serde_json::json!({ "source": url }))?;
         let note = c.vault.read_note(&rel)?;
         c.vault.save_note(&rel, note.frontmatter, &body)?;
         refresh_note(c, &rel)?;
