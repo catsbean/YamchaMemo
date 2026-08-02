@@ -664,16 +664,20 @@ pub fn mirror_sync(
     state: State<'_, AppState>,
     targets: Vec<String>,
 ) -> Result<Vec<yamcha_core::mirror::MirrorReport>, String> {
-    with_ctx(&state, |c| {
-        let mut reports = Vec::new();
-        for t in &targets {
-            reports.push(yamcha_core::mirror::sync_to(
-                &c.vault,
-                std::path::Path::new(t),
-            )?);
-        }
-        Ok(reports)
-    })
+    // vault 전체를 훑는 느린 IO다. 필요한 정보만 뽑고 **잠금을 놓은 뒤** 복사한다 —
+    // 쥔 채로 돌면 그동안 저장·검색을 포함한 모든 커맨드가 뒤에 줄을 선다.
+    let source = with_ctx(&state, |c| {
+        Ok(yamcha_core::mirror::MirrorSource::of(&c.vault))
+    })?;
+
+    let mut reports = Vec::new();
+    for t in &targets {
+        reports.push(
+            yamcha_core::mirror::sync_to(&source, std::path::Path::new(t))
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    Ok(reports)
 }
 
 /// 미러 충돌 해결: pull=true면 미러 내용을 vault로 가져오고 재색인

@@ -185,6 +185,8 @@ interface VaultStore {
   addMirror(): Promise<void>;
   removeMirror(path: string): Promise<void>;
   syncMirrors(): Promise<void>;
+  /** 대기 중인 미러 복제가 있으면 지금 끝낸다 (창 닫기 직전). 없으면 아무 일도 안 한다 */
+  flushMirrors(): Promise<void>;
   resolveMirrorConflict(target: string, rel: string, pull: boolean): Promise<void>;
   reloadCurrent(): Promise<void>;
   dismissExternalChange(): void;
@@ -205,6 +207,8 @@ let saving: Promise<void> | null = null;
 let resaveRequested = false;
 // 미러 동기화 디바운스 타이머
 let mirrorTimer: ReturnType<typeof setTimeout> | null = null;
+/** 마지막 변경 뒤 이만큼 잠잠하면 미러로 복제한다 */
+const MIRROR_IDLE_MS = 60_000;
 
 export const useVault = create<VaultStore>((set, get) => {
   async function guard<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -243,11 +247,18 @@ export const useVault = create<VaultStore>((set, get) => {
     } while (resaveRequested);
   }
 
-  /** 변경 2초 뒤 미러로 복제 (변경이 잦으면 마지막 것만) */
+  /** 손을 멈춘 지 한참 지나면 미러로 복제 (변경이 잦으면 마지막 것만).
+   *
+   *  예전엔 2초였다. 자동저장이 3초마다 도니까 타이머가 저장 사이사이에 끼어들어,
+   *  타이핑하는 내내 몇 초에 한 번씩 vault 전체를 훑었다. 미러는 백업이지 실시간
+   *  동기화가 아니므로 한참 쉬었을 때만 돌면 된다. 창을 닫을 때도 따로 한 번 돈다. */
   function scheduleMirror() {
     if (get().mirrors.length === 0) return;
     if (mirrorTimer) clearTimeout(mirrorTimer);
-    mirrorTimer = setTimeout(() => get().syncMirrors(), 2000);
+    mirrorTimer = setTimeout(() => {
+      mirrorTimer = null;
+      get().syncMirrors();
+    }, MIRROR_IDLE_MS);
   }
 
   /** 제목을 정하지 않고 떠나는 노트에 `{날짜} {본문 첫머리}`로 이름을 붙인다.
@@ -884,6 +895,13 @@ export const useVault = create<VaultStore>((set, get) => {
         const reports = unwrap(await commands.mirrorSync(mirrors));
         set({ mirrorReports: reports });
       });
+    },
+
+    async flushMirrors() {
+      if (!mirrorTimer) return; // 마지막 복제 뒤로 바뀐 게 없다
+      clearTimeout(mirrorTimer);
+      mirrorTimer = null;
+      await get().syncMirrors();
     },
 
     async resolveMirrorConflict(target, rel, pull) {

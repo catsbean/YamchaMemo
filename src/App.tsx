@@ -56,14 +56,16 @@ export default function App() {
     let disposed = false;
     getCurrentWindow()
       .onCloseRequested(async (e) => {
-        const s = useVault.getState();
-        if (!s.dirty && !s.pendingTitleRel) return;
         e.preventDefault();
         try {
-          if (s.dirty) await useVault.getState().saveCurrent();
+          if (useVault.getState().dirty) {
+            await useVault.getState().saveCurrent();
+          }
           // 제목 없이 닫는 노트에 이름을 붙여 준다
           const rel = useVault.getState().pendingTitleRel;
           if (rel) await commands.autoTitleNote(rel);
+          // 미러는 한참 쉬었을 때만 도므로, 닫기 전에 밀린 복제를 끝낸다
+          await useVault.getState().flushMirrors();
         } finally {
           await getCurrentWindow().destroy();
         }
