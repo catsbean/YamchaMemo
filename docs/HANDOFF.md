@@ -43,6 +43,7 @@
 - `src-tauri/src/watcher.rs` — vault 파일 감시, 자기쓰기 억제(전역 타임스탬프 2.5초)
 - `crates/yamcha-core/src/vault.rs` — 파일 CRUD, 휴지통(`.yamcha/trash`), 템플릿, 미러
 - `crates/yamcha-core/src/korean.rs` — 자모 분해·초성·오타 예산 (의존성 0, 퍼지 검색의 토대)
+- `crates/yamcha-core/src/autotag.rs` — 자동 태그 추천(제안만, 파일을 고치지 않음). **고유명사만** 제안하며 후보는 vault 사전(`Indexer::proper_noun_dict` — 기존 태그·노트 제목·책 저자/출판사)뿐이다. 일반 키워드 추출은 하지 않는다. `korean::is_near`로 표기 흔들림 흡수
 - `crates/yamcha-core/src/extract.rs` — 첨부 문서 평문 추출 (hwp는 자체 파서, §9 참고)
 - `crates/yamcha-core/src/file_index.rs` — 첨부 색인 켜기/끄기, 추출 캐시(`doc_text`)
 

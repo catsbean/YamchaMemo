@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
-import type { NoteContent, NoteSummary } from "../bindings";
+import { useEffect, useMemo, useState } from "react";
+import { commands, type NoteContent, type NoteSummary, type TagSuggestion } from "../bindings";
+import TagSuggestionRow from "./TagSuggestionRow";
 import { fmObject, useVault } from "../stores/vault";
 import { splitBookBody } from "../lib/book";
 import {
@@ -67,6 +68,31 @@ export default function BookView({ note }: { note: NoteContent }) {
   const tags = note.frontmatter && typeof note.frontmatter === "object" && !Array.isArray(note.frontmatter)
     ? ((note.frontmatter as Record<string, unknown>).tags as string[] | undefined) ?? []
     : [];
+  const [tagSuggestions, setTagSuggestions] = useState<TagSuggestion[]>([]);
+
+  // 자동 태그 제안 — book은 분야(genre)가 있어 1순위 후보가 된다
+  useEffect(() => {
+    const t = setTimeout(() => {
+      commands
+        .suggestTagsForText({
+          title: title ?? "",
+          body: note.body,
+          note_type: "book",
+          genre: genre || null,
+          current_tags: tags,
+        })
+        .then((r) => {
+          if (r.status === "ok") setTagSuggestions(r.data);
+        });
+    }, 500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note.rel_path, note.body, genre, tags.join(",")]);
+
+  function addSuggestedTag(tag: string) {
+    if (tags.includes(tag)) return;
+    patchInfo({ tags: [...tags, tag] });
+  }
 
   function onRecordsChange(newRecords: string) {
     const { intro: curIntro } = splitBookBody(note.body);
@@ -208,6 +234,11 @@ export default function BookView({ note }: { note: NoteContent }) {
           <TagEditor
             tags={tags}
             onCommit={(next) => patchInfo({ tags: next })}
+          />
+          <TagSuggestionRow
+            suggestions={tagSuggestions.filter((s) => !tags.includes(s.tag))}
+            onAdd={addSuggestedTag}
+            className="mt-1 flex flex-wrap gap-1"
           />
         </div>
       </div>

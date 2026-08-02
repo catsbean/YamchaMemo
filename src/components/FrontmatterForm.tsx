@@ -1,4 +1,5 @@
-import type { FieldDef, JsonValue, TypeDef } from "../bindings";
+import type { FieldDef, JsonValue, TagSuggestion, TypeDef } from "../bindings";
+import TagSuggestionRow from "./TagSuggestionRow";
 
 type FmObject = { [key: string]: JsonValue | undefined };
 
@@ -8,6 +9,9 @@ interface Props {
   onChange: (fm: FmObject) => void;
   /** image 필드의 [찾아보기] — 파일을 첨부하고 값 갱신까지 담당 */
   onPickImage?: (fieldName: string) => void;
+  /** 자동 태그 제안 — tags 필드 옆에 칩으로 보여준다 */
+  tagSuggestions?: TagSuggestion[];
+  onAddTag?: (tag: string) => void;
 }
 
 /** frontmatter를 raw YAML 대신 스키마 기반 폼으로 표시·수정 */
@@ -16,6 +20,8 @@ export default function FrontmatterForm({
   value,
   onChange,
   onPickImage,
+  tagSuggestions,
+  onAddTag,
 }: Props) {
   if (!schema) return null;
 
@@ -32,6 +38,8 @@ export default function FrontmatterForm({
           value={value[f.name]}
           onChange={(v) => setField(f.name, v)}
           onPickImage={onPickImage}
+          tagSuggestions={f.kind === "tags" ? tagSuggestions : undefined}
+          onAddTag={f.kind === "tags" ? onAddTag : undefined}
         />
       ))}
     </div>
@@ -43,11 +51,15 @@ function Field({
   value,
   onChange,
   onPickImage,
+  tagSuggestions,
+  onAddTag,
 }: {
   def: FieldDef;
   value: JsonValue | undefined;
   onChange: (v: JsonValue) => void;
   onPickImage?: (fieldName: string) => void;
+  tagSuggestions?: TagSuggestion[];
+  onAddTag?: (tag: string) => void;
 }) {
   const label = (
     <span className="text-xs font-medium text-neutral-500">
@@ -109,6 +121,9 @@ function Field({
       const tags = Array.isArray(value)
         ? value.filter((t): t is string => typeof t === "string")
         : [];
+      const suggestions = (tagSuggestions ?? []).filter(
+        (s) => !tags.includes(s.tag),
+      );
       return (
         <label className="flex flex-col gap-0.5">
           {label}
@@ -125,6 +140,9 @@ function Field({
               )
             }
           />
+          {onAddTag && (
+            <TagSuggestionRow suggestions={suggestions} onAdd={onAddTag} />
+          )}
         </label>
       );
     }
