@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
-import { commands, type NoteRef, type TagCount } from "../bindings";
+import { commands, type NoteRef, type TagCount, type TagSuggestion } from "../bindings";
 import { useImeInput } from "../lib/ime";
 import { typeLabel, useVault } from "../stores/vault";
+import TagSuggestionRow from "./TagSuggestionRow";
+
+/** 한 번에 계산·표시할 태그 없는 노트 개수 */
+const UNTAGGED_PAGE = 20;
 
 /** 태그 대시보드: 전체 태그 열람 → 태그 클릭 → 해당 노트 목록 */
 export default function TagBrowser() {
-  const { notes, schemas, openNote } = useVault();
+  const { notes, schemas, openNote, updateFrontmatter } = useVault();
   const [tags, setTags] = useState<TagCount[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [tagNotes, setTagNotes] = useState<NoteRef[]>([]);
@@ -15,6 +19,17 @@ export default function TagBrowser() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
+
+  // 태그 없는 노트 일괄 정리
+  const [untaggedOpen, setUntaggedOpen] = useState(false);
+  const [untagged, setUntagged] = useState<NoteRef[]>([]);
+  const [untaggedShown, setUntaggedShown] = useState(UNTAGGED_PAGE);
+  const [untaggedSugg, setUntaggedSugg] = useState<
+    Record<string, TagSuggestion[]>
+  >({});
+  const [untaggedSkipped, setUntaggedSkipped] = useState<Set<string>>(
+    new Set(),
+  );
 
   // notes가 바뀔 때마다(저장·생성·삭제 후) 태그 목록 갱신
   useEffect(() => {
@@ -47,6 +62,52 @@ export default function TagBrowser() {
       alive = false;
     };
   }, [selected, notes]);
+
+  // 태그 없는 노트 목록은 접혀 있어도 개수를 보여줘야 하므로 항상 갱신한다
+  useEffect(() => {
+    let alive = true;
+    commands.untaggedNotes().then((r) => {
+      if (alive && r.status === "ok") setUntagged(r.data);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [notes]);
+
+  // 펼쳐진 뒤 화면에 보이는 만큼만 한 번에 제안을 받는다 (낱개 호출 20번 금지)
+  useEffect(() => {
+    if (!untaggedOpen) return;
+    const visible = untagged.filter((n) => !untaggedSkipped.has(n.rel_path));
+    const slice = visible.slice(0, untaggedShown);
+    const toFetch = slice
+      .filter((n) => !(n.rel_path in untaggedSugg))
+      .map((n) => n.rel_path);
+    if (toFetch.length === 0) return;
+    let alive = true;
+    commands.suggestTagsBatch(toFetch).then((r) => {
+      if (!alive || r.status !== "ok") return;
+      setUntaggedSugg((prev) => {
+        const next = { ...prev };
+        for (const [rel, sugg] of r.data) next[rel] = sugg;
+        return next;
+      });
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [untaggedOpen, untaggedShown, untagged]);
+
+  /** 제안 칩을 눌러 그 자리에서 담는다 — 태그 없는 노트니 배열을 통째로 넣으면 된다 */
+  async function addUntaggedTag(rel: string, tag: string) {
+    await updateFrontmatter(rel, { tags: [tag] });
+    setUntagged((prev) => prev.filter((n) => n.rel_path !== rel));
+    setNote(`#${tag} 붙였습니다`);
+  }
+
+  function skipUntagged(rel: string) {
+    setUntaggedSkipped((prev) => new Set(prev).add(rel));
+  }
 
   /** 이름 바꾸기 — 이미 있는 이름을 적으면 그게 곧 병합이다 */
   async function rename(from: string, to: string) {
@@ -144,6 +205,63 @@ export default function TagBrowser() {
           ),
         )}
       </div>
+
+      {untagged.length > 0 && (
+        <div className="border-b border-neutral-100 px-6 py-2">
+          <button
+            className="text-sm text-neutral-500 hover:text-neutral-700"
+            onClick={() => setUntaggedOpen((v) => !v)}
+          >
+            {untaggedOpen ? "▾" : "▸"} 태그 없는 노트 {untagged.length}개
+          </button>
+          {untaggedOpen && (
+            <>
+              <ul className="mt-2 divide-y divide-neutral-100 rounded-lg border border-neutral-200 bg-white">
+                {untagged
+                  .filter((n) => !untaggedSkipped.has(n.rel_path))
+                  .slice(0, untaggedShown)
+                  .map((n) => (
+                    <li
+                      key={n.rel_path}
+                      className="flex items-center gap-2 px-3 py-2 text-sm"
+                    >
+                      <span className="w-16 shrink-0 rounded bg-neutral-100 px-1 py-0.5 text-center text-2xs text-neutral-500">
+                        {typeLabel(schemas, n.note_type)}
+                      </span>
+                      <button
+                        className="min-w-0 flex-1 truncate text-left hover:underline"
+                        onClick={() => openNote(n.rel_path)}
+                      >
+                        {n.title}
+                      </button>
+                      <TagSuggestionRow
+                        suggestions={untaggedSugg[n.rel_path] ?? []}
+                        onAdd={(tag) => addUntaggedTag(n.rel_path, tag)}
+                        className="flex shrink-0 flex-wrap gap-1"
+                      />
+                      <button
+                        className="shrink-0 rounded px-1.5 py-0.5 text-2xs text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+                        onClick={() => skipUntagged(n.rel_path)}
+                        title="이번에는 건너뛰기"
+                      >
+                        건너뛰기
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+              {untagged.filter((n) => !untaggedSkipped.has(n.rel_path))
+                .length > untaggedShown && (
+                <button
+                  className="mt-2 text-xs text-neutral-500 hover:text-neutral-700"
+                  onClick={() => setUntaggedShown((s) => s + UNTAGGED_PAGE)}
+                >
+                  더 보기
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {selected ? (
