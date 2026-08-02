@@ -140,11 +140,12 @@ async fn render_article(app: &tauri::AppHandle, url: &url::Url) -> Option<(Strin
         .build()
         .ok()?;
 
-    let result = tokio::time::timeout(Duration::from_secs(15), rx)
-        .await
-        .ok()?
-        .ok()?;
+    let outcome = tokio::time::timeout(Duration::from_secs(15), rx).await;
+    // **어떤 경로로 나가든 숨은 창을 닫는다.** 예전에는 `?`로 조기 반환하는 바람에
+    // 타임아웃이나 채널 실패 때 close를 못 지나쳤다. 보이지 않는 창이 그대로 남아
+    // 원격 페이지의 JS를 계속 돌렸고, 스크랩이 실패할 때마다 하나씩 쌓였다.
     let _ = window.close();
+    let result = outcome.ok()?.ok()?;
     let html = unwrap_eval_json(&result);
     extract_article_html(&html, url)
 }
