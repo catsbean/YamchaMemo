@@ -198,8 +198,11 @@ interface VaultStore {
 
 // React StrictMode의 effect 이중 실행으로 init이 중복 호출되는 것을 방지
 let initStarted = false;
-// saveCurrent 재진입 가드 (Ctrl+S 연타·자동저장 중복 방지)
-let saving = false;
+// 진행 중인 저장 (없으면 null). 겹친 요청은 이 약속을 함께 기다린다.
+let saving: Promise<void> | null = null;
+// 저장이 도는 사이에 또 저장 요청이 들어왔다 — 끝나면 한 번 더 돈다.
+// 예전에는 그냥 무시했는데, 그러면 저장 중에 누른 Ctrl+S가 아무 일도 하지 않았다.
+let resaveRequested = false;
 // 미러 동기화 디바운스 타이머
 let mirrorTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -211,6 +214,33 @@ export const useVault = create<VaultStore>((set, get) => {
       set({ error: e instanceof Error ? e.message : String(e) });
       return undefined;
     }
+  }
+
+  /** 실제 저장 한 바퀴. 도는 사이에 저장 요청이 또 들어왔으면 최신 내용으로 한 번 더 돈다. */
+  async function runSave(): Promise<void> {
+    do {
+      resaveRequested = false;
+      const cur = get().current;
+      if (!cur) return;
+      await guard(async () => {
+        unwrap(
+          await commands.saveNote(cur.rel_path, cur.frontmatter, cur.body),
+        );
+        // 저장이 도는 동안 더 친 글자가 있으면 dirty를 유지한다.
+        // 무조건 false로 두면 그 글자들은 "저장됨" 표시 뒤에 메모리에만 남고,
+        // 자동저장 타이머도 !dirty로 멈춰 화면을 옮기는 순간 사라진다.
+        const now = get().current;
+        const nothingNewer =
+          now?.rel_path === cur.rel_path &&
+          now.body === cur.body &&
+          now.frontmatter === cur.frontmatter;
+        if (nothingNewer) set({ dirty: false });
+        await get().refresh();
+        // 같은 노트를 띄운 다른 창이 따라오도록 알린다
+        await notifyOtherWindows([cur.rel_path]);
+        scheduleMirror();
+      });
+    } while (resaveRequested);
   }
 
   /** 변경 2초 뒤 미러로 복제 (변경이 잦으면 마지막 것만) */
@@ -664,24 +694,17 @@ export const useVault = create<VaultStore>((set, get) => {
     },
 
     async saveCurrent() {
-      const cur = get().current;
-      if (!cur) return;
-      if (saving) return;
-      saving = true;
-      try {
-        await guard(async () => {
-          unwrap(
-            await commands.saveNote(cur.rel_path, cur.frontmatter, cur.body),
-          );
-          set({ dirty: false });
-          await get().refresh();
-          // 같은 노트를 띄운 다른 창이 따라오도록 알린다
-          await notifyOtherWindows([cur.rel_path]);
-          scheduleMirror();
-        });
-      } finally {
-        saving = false;
+      // 이미 저장이 돌고 있으면 끝난 뒤 한 번 더 돌도록 예약하고, 그 저장까지 기다린다.
+      // (여기서 그냥 return하면 저장 중에 누른 Ctrl+S가 조용히 사라진다)
+      if (saving) {
+        resaveRequested = true;
+        await saving;
+        return;
       }
+      saving = runSave().finally(() => {
+        saving = null;
+      });
+      await saving;
     },
 
     async createNote(t, title, fields) {

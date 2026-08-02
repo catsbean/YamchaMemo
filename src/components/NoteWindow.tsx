@@ -34,9 +34,20 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
   // 서식 툴바가 명령을 실행하려면 CodeMirror 뷰가 필요하다
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const ctx = useContextMenu();
-  const savingRef = useRef(false);
+  // 진행 중인 저장 (없으면 null). 겹친 요청은 이 약속을 함께 기다린다.
+  const savingRef = useRef<Promise<void> | null>(null);
+  // 저장이 도는 사이에 또 저장 요청이 들어왔다 — 끝나면 최신 내용으로 한 번 더 돈다
+  const resaveRef = useRef(false);
   // 이벤트 리스너가 매번 재구독되지 않도록 dirty를 ref로도 들고 있는다
   const dirtyRef = useRef(false);
+  // 편집 횟수. 저장을 시작할 때 값을 붙잡아 뒀다가, 끝난 뒤에도 그대로면
+  // "그 사이 더 친 글자가 없다"는 뜻이라 그때만 dirty를 내린다.
+  // ref라 동기적으로 갱신되므로 await 사이에 낀 편집을 놓치지 않는다.
+  const revRef = useRef(0);
+  const markEdited = useCallback(() => {
+    revRef.current += 1;
+    setDirty(true);
+  }, []);
 
   useSuppressNativeContextMenu();
 
@@ -50,6 +61,10 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
     () => (isBook && note ? splitBookBody(note.body).intro : ""),
     [isBook, note],
   );
+
+  // 저장이 참조하는 "지금 화면의 내용". closure에 굳어 버리면 재저장이 낡은 본문을 쓴다.
+  const latest = useRef({ note, body, intro, isBook });
+  latest.current = { note, body, intro, isBook };
 
   useEffect(() => {
     commands.getSchemas().then(setSchemas);
@@ -119,23 +134,42 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
     };
   }, [relPath]);
 
-  const save = useCallback(async () => {
-    if (!note || savingRef.current) return;
-    savingRef.current = true;
-    try {
+  /** 실제 저장 한 바퀴. 도는 사이에 저장 요청이 또 들어왔으면 한 번 더 돈다.
+   *  본문은 closure가 아니라 `latest` ref에서 읽는다 — 재저장은 처음 붙잡은 내용이 아니라
+   *  **그때의 최신 내용**을 써야 한다. */
+  const runSave = useCallback(async () => {
+    do {
+      resaveRef.current = false;
+      const { note, body, intro, isBook } = latest.current;
+      if (!note) return;
+      const rev = revRef.current;
       const full = isBook ? composeBookBody(intro, body) : body;
       const r = await commands.saveNote(relPath, note.frontmatter, full);
-      if (r.status === "ok") {
-        setDirty(false);
-        // 메인 창이 목록·검색을 갱신하도록 알린다 (외부변경 이벤트 재사용)
-        await notifyOtherWindows([relPath]);
-      } else {
+      if (r.status !== "ok") {
         setError(r.error);
+        return; // 실패했으면 같은 오류로 계속 돌지 않는다
       }
-    } finally {
-      savingRef.current = false;
+      // 저장하는 동안 더 친 글자가 있으면 dirty를 유지한다 (그래야 자동저장이 다시 돈다)
+      if (revRef.current === rev) setDirty(false);
+      // 메인 창이 목록·검색을 갱신하도록 알린다 (외부변경 이벤트 재사용)
+      await notifyOtherWindows([relPath]);
+    } while (resaveRef.current);
+  }, [relPath]);
+
+  const save = useCallback(async () => {
+    // 이미 저장이 돌고 있으면 끝난 뒤 한 번 더 돌도록 예약하고, 그 저장까지 기다린다.
+    // (여기서 그냥 return하면 저장 중에 누른 Ctrl+S가 조용히 사라진다)
+    if (savingRef.current) {
+      resaveRef.current = true;
+      await savingRef.current;
+      return;
     }
-  }, [note, body, intro, isBook, relPath]);
+    const p = runSave().finally(() => {
+      savingRef.current = null;
+    });
+    savingRef.current = p;
+    await p;
+  }, [runSave]);
 
   /** 일지 빠른 입력 — 메인 창 스토어와 같은 3단계로 갱신 유실을 막는다.
    *  ① 내 편집분 먼저 저장 → ② 백엔드가 최신 파일에 추가 → ③ 결과로 로컬 상태 교체 */
@@ -215,7 +249,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
 
   function setFrontmatter(next: typeof fm) {
     setNote((cur) => (cur ? { ...cur, frontmatter: next } : cur));
-    setDirty(true);
+    markEdited();
   }
 
   /** image 필드 [찾아보기] — 메인 창과 같은 규칙(책 표지는 여기서 다루지 않는다: 책은 기록만 편집) */
@@ -283,7 +317,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
           value={body}
           onChange={(v) => {
             setBody(v);
-            setDirty(true);
+            markEdited();
           }}
           onContextMenu={(e, view) => ctx.open(e, editorMenuItems(view))}
           getTitles={() =>
