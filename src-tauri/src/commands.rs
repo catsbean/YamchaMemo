@@ -346,6 +346,17 @@ pub(crate) fn refresh_note(ctx: &mut Ctx, rel: &str) -> Result<(), yamcha_core::
         Ok(parsed) => {
             ctx.indexer.upsert(&parsed)?;
             ctx.search.upsert(&parsed)?;
+            // 방금 색인한 시점의 파일 신원도 남긴다 — 안 남기면 다음에 앱을 켤 때
+            // 이 편을 또 읽는다 (틀리지는 않지만 증분의 이득이 사라진다)
+            if let Ok(meta) = std::fs::metadata(ctx.vault.root().join(rel)) {
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                ctx.indexer.set_note_state(rel, mtime, meta.len() as i64)?;
+            }
         }
         Err(_) => {
             ctx.indexer.remove(rel)?;
@@ -450,7 +461,8 @@ pub fn set_vault(
     let mut indexer = Indexer::open(&index_dir.join("index.db")).map_err(|e| e.to_string())?;
     let mut search = SearchEngine::open(&index_dir.join("search")).map_err(|e| e.to_string())?;
     remove_legacy_index(vault.root());
-    yamcha_core::reindex_all(&vault, &mut indexer, &mut search).map_err(|e| e.to_string())?;
+    // 바뀐 노트만 다시 읽는다 — 켤 때마다 전체를 읽으면 2,000편에 11.9초다
+    yamcha_core::reindex_changed(&vault, &mut indexer, &mut search).map_err(|e| e.to_string())?;
     let root = vault.root().to_path_buf();
     *guard = Some(Ctx {
         vault,

@@ -92,6 +92,16 @@ pub struct NoteSummary {
     pub frontmatter: Value,
 }
 
+/// 파일 하나의 신원 — 내용을 읽지 않고 "바뀌었나"만 가리는 값들
+#[derive(Debug, Clone)]
+pub struct NoteFile {
+    pub rel_path: String,
+    pub note_type: String,
+    /// 수정 시각 (epoch 밀리초). 읽을 수 없으면 0 — 늘 바뀐 것으로 본다.
+    pub mtime: i64,
+    pub size: i64,
+}
+
 /// 편집기용 노트 전체 내용
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct NoteContent {
@@ -594,6 +604,57 @@ impl Vault {
             self.collect_notes(&dir, &t.id, &mut out)?;
         }
         out.sort_by(|a, b| b.date.cmp(&a.date).then(a.title.cmp(&b.title)));
+        Ok(out)
+    }
+
+    /// 노트 파일의 경로·수정시각·크기만 훑는다 (**내용은 읽지 않는다**).
+    ///
+    /// 증분 색인이 "무엇이 바뀌었나"를 판단할 때 쓴다. `list_notes()`는 편마다 파일을
+    /// 열어 파싱하므로(2,000편에 377ms) 바뀐 게 없는지 확인하는 데 쓸 수 없다.
+    /// 여기는 디렉터리 목록과 메타데이터만 본다.
+    pub fn list_note_files(&self) -> Result<Vec<NoteFile>, CoreError> {
+        fn walk(
+            root: &Path,
+            dir: &Path,
+            type_id: &str,
+            out: &mut Vec<NoteFile>,
+        ) -> Result<(), CoreError> {
+            if !dir.exists() {
+                return Ok(());
+            }
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if path.is_dir() {
+                    walk(root, &path, type_id, out)?;
+                } else if name.ends_with(".md") && !name.starts_with('_') {
+                    let Ok(meta) = entry.metadata() else { continue };
+                    // 수정시각을 못 읽는 파일은 늘 바뀐 것으로 본다 (0)
+                    let mtime = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    let Ok(rel) = path.strip_prefix(root) else {
+                        continue;
+                    };
+                    out.push(NoteFile {
+                        rel_path: rel.to_string_lossy().replace('\\', "/"),
+                        note_type: type_id.to_string(),
+                        mtime,
+                        size: meta.len() as i64,
+                    });
+                }
+            }
+            Ok(())
+        }
+
+        let mut out = Vec::new();
+        for t in &self.types {
+            walk(&self.root, &self.root.join(&t.folder), &t.id, &mut out)?;
+        }
         Ok(out)
     }
 

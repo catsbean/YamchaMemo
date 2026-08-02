@@ -11,7 +11,7 @@
 
 #[cfg(test)]
 mod bench {
-    use crate::{reindex_all, Indexer, SearchEngine, Vault};
+    use crate::{Indexer, SearchEngine, Vault};
     use serde_json::json;
     use std::time::Instant;
 
@@ -65,10 +65,36 @@ mod bench {
         let mut indexer = Indexer::open(&index_dir.join("index.db")).unwrap();
         let mut search = SearchEngine::open(&index_dir.join("search")).unwrap();
 
-        // ① 앱을 켤 때마다 도는 전체 재색인 (set_vault)
+        // ① 첫 실행 — 색인이 비어 있으니 전부 읽는다
         let t = Instant::now();
-        let n = reindex_all(&v, &mut indexer, &mut search).unwrap();
-        println!("① reindex_all (앱 켤 때마다): {}ms, {n}편", t.elapsed().as_millis());
+        let n = crate::reindex_changed(&v, &mut indexer, &mut search).unwrap();
+        println!(
+            "① 첫 실행 (전체 색인): {}ms, {}편",
+            t.elapsed().as_millis(),
+            n.indexed
+        );
+
+        // ①-b 두 번째 실행 — 바뀐 게 없다. 앱을 켤 때마다 치르는 실제 값.
+        let t = Instant::now();
+        let n = crate::reindex_changed(&v, &mut indexer, &mut search).unwrap();
+        println!(
+            "①-b 두 번째 실행 (증분): {}ms, 다시읽음 {}편 / 건너뜀 {}편",
+            t.elapsed().as_millis(),
+            n.indexed,
+            n.skipped
+        );
+
+        // ①-c 한 편만 고치고 다시 켠 상황
+        let one = v.list_notes().unwrap()[0].rel_path.clone();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        v.save_note(&one, json!({}), "한 편만 고쳤다").unwrap();
+        let t = Instant::now();
+        let n = crate::reindex_changed(&v, &mut indexer, &mut search).unwrap();
+        println!(
+            "①-c 한 편 고치고 재실행: {}ms, 다시읽음 {}편",
+            t.elapsed().as_millis(),
+            n.indexed
+        );
 
         // ② 노트 목록 (화면 갱신마다)
         let t = Instant::now();

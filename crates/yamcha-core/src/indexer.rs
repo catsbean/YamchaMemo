@@ -142,6 +142,14 @@ impl Indexer {
                 text TEXT NOT NULL,
                 status TEXT NOT NULL
             );
+            -- 색인해 둔 시점의 파일 신원. 다음에 열 때 바뀌지 않은 편을
+            -- 내용을 읽지 않고 가려내려고 둔다. 비어 있으면(첫 실행·업그레이드
+            -- 직후) 전체를 다시 읽게 되는데, 그건 안전한 쪽이다.
+            CREATE TABLE IF NOT EXISTS note_state(
+                path TEXT PRIMARY KEY,
+                mtime INTEGER NOT NULL,
+                size INTEGER NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_links_target ON links(target);
             CREATE INDEX IF NOT EXISTS idx_links_src ON links(src);
             CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
@@ -188,14 +196,60 @@ impl Indexer {
         tx.execute("DELETE FROM notes WHERE path = ?1", params![rel_path])?;
         tx.execute("DELETE FROM links WHERE src = ?1", params![rel_path])?;
         tx.execute("DELETE FROM tags WHERE path = ?1", params![rel_path])?;
+        tx.execute("DELETE FROM note_state WHERE path = ?1", params![rel_path])?;
         tx.commit()?;
         Ok(())
     }
 
     pub fn clear(&mut self) -> Result<(), CoreError> {
-        self.conn
-            .execute_batch("DELETE FROM notes; DELETE FROM links; DELETE FROM tags;")?;
+        self.conn.execute_batch(
+            "DELETE FROM notes; DELETE FROM links; DELETE FROM tags; DELETE FROM note_state;",
+        )?;
         Ok(())
+    }
+
+    /// 색인해 둔 시점의 파일 신원을 기록한다 (경로 → 수정시각·크기).
+    ///
+    /// `upsert`와 짝이다. 색인에 넣었으면 넣은 시점의 신원도 남겨야 다음에 열 때
+    /// 건너뛸 수 있다. 빠뜨리면 그 편은 매번 다시 읽힌다 — 느릴 뿐 틀리지는 않는다.
+    pub fn set_note_state(&mut self, rel_path: &str, mtime: i64, size: i64) -> Result<(), CoreError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO note_state(path, mtime, size) VALUES (?1, ?2, ?3)",
+            params![rel_path, mtime, size],
+        )?;
+        Ok(())
+    }
+
+    /// 파일 신원을 **한 트랜잭션으로 몰아서** 기록한다.
+    ///
+    /// 전체 재색인은 편마다 이걸 부르는데, 한 건씩 쓰면 SQLite가 매번 커밋한다
+    /// (실측: 2,000편 첫 색인이 11.9초 → 21.7초로 늘었다). 묶으면 그 값이 사라진다.
+    pub fn set_note_states(&mut self, states: &[(String, i64, i64)]) -> Result<(), CoreError> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO note_state(path, mtime, size) VALUES (?1, ?2, ?3)",
+            )?;
+            for (path, mtime, size) in states {
+                stmt.execute(params![path, mtime, size])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 색인이 기억하는 파일 신원 전부 (경로 → (수정시각, 크기))
+    pub fn note_states(&self) -> Result<std::collections::HashMap<String, (i64, i64)>, CoreError> {
+        let mut stmt = self.conn.prepare("SELECT path, mtime, size FROM note_state")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))
+        })?;
+        let mut out = std::collections::HashMap::new();
+        for row in rows {
+            let (path, state) = row?;
+            out.insert(path, state);
+        }
+        Ok(out)
     }
 
     /// 어떤 노트를 가리키는 링크들 (타깃 = 해당 노트의 제목 또는 파일명 stem)

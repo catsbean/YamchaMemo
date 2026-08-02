@@ -102,6 +102,8 @@ pub struct SearchEngine {
     f_date: tantivy::schema::Field,
     f_title_jamo: tantivy::schema::Field,
     f_title_cho: tantivy::schema::Field,
+    /// 열면서 손상된 색인을 버리고 새로 만들었는가 (`was_rebuilt`)
+    rebuilt: bool,
 }
 
 impl From<tantivy::TantivyError> for CoreError {
@@ -140,10 +142,22 @@ impl SearchEngine {
         match Self::try_open(dir) {
             Ok(s) => Ok(s),
             Err(_) => {
+                // 손상됐거나 스키마가 바뀌었다 — 버리고 새로 만든다. 이때 색인은
+                // **비어 있으므로**, 부르는 쪽은 증분이 아니라 전체 재색인을 해야 한다.
                 let _ = std::fs::remove_dir_all(dir);
-                Self::try_open(dir)
+                let mut s = Self::try_open(dir)?;
+                s.rebuilt = true;
+                Ok(s)
             }
         }
+    }
+
+    /// 열면서 색인을 버리고 새로 만들었는가.
+    ///
+    /// true면 안이 비어 있다. 이 상태에서 "파일이 안 바뀌었으니 건너뛴다"고 판단하면
+    /// 그 노트들은 검색에서 영영 사라진다.
+    pub fn was_rebuilt(&self) -> bool {
+        self.rebuilt
     }
 
     fn try_open(dir: &Path) -> Result<SearchEngine, CoreError> {
@@ -196,6 +210,7 @@ impl SearchEngine {
             f_date,
             f_title_jamo,
             f_title_cho,
+            rebuilt: false,
         })
     }
 
