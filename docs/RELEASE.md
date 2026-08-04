@@ -14,24 +14,20 @@ YamchaMemo 새 버전을 내보내는 절차입니다. 데스크톱(Windows·mac
 
 > ⚠️ 키를 소스에 되돌려 넣지 마세요. 실수로 커밋되면 즉시 재발급해야 합니다.
 
-## 릴리스 3단계
+## 릴리스
 
-### ① 버전 올리기 (4개 파일을 같은 값으로)
+### ①·② `scripts\release.bat` 실행
 
-`X.Y.Z`를 새 버전으로 바꿔 아래 네 곳을 모두 맞춥니다.
-
-- `src-tauri/tauri.conf.json` → `"version"`
-- `src-tauri/Cargo.toml` → `version`
-- `crates/yamcha-core/Cargo.toml` → `version`
-- `package.json` → `"version"`
-
-### ② 태그 push
-
-```bash
-git tag vX.Y.Z && git push --tags
-```
+버전을 올리고(`package.json`·`src-tauri/tauri.conf.json`·`src-tauri/Cargo.toml`·
+`Cargo.lock`) 커밋한 뒤 `vX.Y.Z` 태그를 push하는 것까지 한 번에 합니다. 커밋되지
+않은 변경이 있으면 중단하므로, 먼저 정리하고 실행하세요.
 
 `v`로 시작하는 태그가 올라가면 `.github/workflows/release.yml`가 자동으로 실행됩니다.
+
+> `crates/yamcha-core`의 version은 앱 버전과 따로 갑니다(경로 참조 내부 크레이트라
+> 설치본 버전에 영향이 없습니다). 스크립트도 건드리지 않습니다.
+
+손으로 할 때는 위 네 곳을 같은 값으로 맞춘 뒤 `git tag vX.Y.Z && git push --tags`.
 
 ### ③ Release 초안 확인·발행
 
