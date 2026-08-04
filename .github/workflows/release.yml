@@ -61,3 +61,14 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # Mac 실행 허용 스크립트(mac-unlock.command)를 릴리스에 첨부한다.
+      # 실행 권한(+x)은 zip이 macOS에서 만들어져야 보존되므로, 이 macOS 잡에서 압축한다.
+      - name: Package and upload Mac unlock script
+        if: matrix.platform == 'macos-latest'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          chmod +x scripts/mac-unlock.command
+          zip -j mac-unlock.zip scripts/mac-unlock.command
+          gh release upload "${{ github.ref_name }}" mac-unlock.zip --clobber
