@@ -1,2 +1,7 @@
+# 워크스페이스로 쪼개지 않은 단일 패키지지만, pnpm이 이 파일을 설정 파일로도
+# 읽기 때문에 남겨 둔다. packages를 비워 두면 pnpm 9의 `pnpm store` 같은
+# 명령이 "packages field missing or empty"로 실패하므로 빈 목록을 명시한다.
+packages: []
+
 allowBuilds:
   esbuild: true

@@ -28,7 +28,9 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
+          # 로컬 개발 환경과 같은 메이저를 쓴다. pnpm-workspace.yaml의
+          # allowBuilds는 pnpm 10+ 문법이라 9로 내려가면 무시된다.
+          version: 11
 
       - name: Setup Node
         uses: actions/setup-node@v4
