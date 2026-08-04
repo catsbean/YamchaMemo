@@ -4,7 +4,18 @@
 
 모든 메모는 평범한 `.md` 파일로 저장됩니다. 앱이 사라져도 파일은 남고, 다른 편집기로 열어도 됩니다. 클라우드 동기화 폴더(OneDrive·iCloud·Dropbox 등)를 저장 위치로 잡으면 기기 사이에서 그대로 이어집니다.
 
-**설치는 [설치방법.md](설치방법.md)를 참고하세요.** ([최신 릴리스 다운로드](https://github.com/catsbean/YamchaMemo/releases/latest))
+## 설치
+
+[최신 릴리스](https://github.com/catsbean/YamchaMemo/releases/latest) 페이지의 **Assets**에서 내 컴퓨터에 맞는 파일을 받으세요.
+
+| 내 컴퓨터 | 받을 파일 |
+| --- | --- |
+| Windows | `YamchaMemo_x.x.x_x64-setup.exe` |
+| Mac (Apple Silicon·Intel 공통) | `YamchaMemo_x.x.x_universal.dmg` |
+
+정식 인증서로 서명하지 않은 개인 프로젝트라 설치 중 경고가 한 번 뜹니다. Windows는 **추가 정보 → 실행**을 누르면 되고, Mac은 같은 페이지의 `mac-unlock.zip`을 받아 압축을 풀고 `mac-unlock.command`를 더블클릭하면 열립니다.
+
+화면과 함께 보는 자세한 안내는 **[설치방법.md](설치방법.md)** 에 있습니다.
 
 ## 주요 기능
 
@@ -22,11 +33,11 @@
 ## 개발
 
 ```bash
-npm install
-npm run tauri dev      # 개발 실행 (Vite + Tauri)
-npm test                # 프론트 테스트 (vitest)
-cargo test              # Rust 테스트 (yamcha-core + yamcha-app)
-npx tsc --noEmit -p tsconfig.json   # 타입체크
+pnpm install
+pnpm tauri dev                      # 개발 실행 (Vite + Tauri)
+pnpm test                           # 프론트 테스트 (vitest)
+cargo test                          # Rust 테스트 (yamcha-core + yamcha-app)
+pnpm exec tsc --noEmit -p tsconfig.json   # 타입체크
 ```
 
 ### 스택
@@ -51,14 +62,11 @@ src/                  React 프론트엔드
   lib/                공통 유틸 (IME 안전 입력, 단축키, 내보내기 등)
 ```
 
-## 배포
+## 릴리스 만들기
+
+`scripts\release.bat`을 실행하면 버전을 올리고 `vX.Y.Z` 태그를 push합니다. 태그가 올라가면 GitHub Actions가 Windows·macOS 설치본을 각각 빌드해 [릴리스](https://github.com/catsbean/YamchaMemo/releases) 초안으로 올립니다(10~20분 소요). macOS 빌드는 macOS에서만 가능하므로 로컬에서 두 플랫폼을 함께 만들 수는 없습니다.
 
 카카오 REST API 키는 소스에 두지 않고 빌드 시점에 환경변수(`YAMCHA_KAKAO_KEY`)로 주입합니다. 키가 없어도 빌드되며, 그 경우 책 검색은 교보문고 경로로만 동작합니다.
-
-```bash
-npm run release:win    # Windows NSIS 설치본
-npm run release:mac    # macOS 유니버설 (arm64+x86_64)
-```
 
 ## 라이선스
 
