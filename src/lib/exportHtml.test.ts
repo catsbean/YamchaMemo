@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bodyToHtml, inlineToHtml, wrapDocument } from "./exportHtml";
+import { bodyToHtml, inlineToHtml, printStamp, wrapDocument } from "./exportHtml";
 
 describe("한 줄 서식", () => {
   it("굵게·기울임·취소선·코드", () => {
@@ -94,10 +94,23 @@ describe("문서 한 장으로 감싸기", () => {
     expect(doc).toContain("<title>클린 코드</title>");
     expect(doc).toContain('<p class="doc-meta">마틴 · 완독</p>');
     expect(doc).toContain("@media print");
+    // 브라우저가 넣는 머리글·바닥글(제목·URL·시각)을 없애는 핵심 한 줄.
+    // 이게 빠지면 인쇄물 바닥에 tauri.localhost가 찍힌다.
+    expect(doc).toContain("@page { margin: 0; }");
+    expect(doc).toContain("YamchaMemo");
     expect(doc).toContain("<p>본문</p>");
   });
 
   it("제목에 들어간 꺾쇠도 막는다", () => {
     expect(wrapDocument("<b>제목", "", undefined)).toContain("&lt;b&gt;제목");
+  });
+});
+
+describe("printStamp", () => {
+  it("24시간제로 날짜와 시각을 적는다", () => {
+    // 오후 2시 5분 — 브라우저 기본값은 로캘을 따라 "오후 2:05"로 나온다
+    expect(printStamp(new Date(2026, 7, 3, 14, 5))).toBe("2026-08-03 14:05");
+    // 자정과 한 자리 수 자리맞춤
+    expect(printStamp(new Date(2026, 0, 9, 0, 7))).toBe("2026-01-09 00:07");
   });
 });

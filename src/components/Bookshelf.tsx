@@ -15,6 +15,10 @@ import EnrichDialog from "./EnrichDialog";
 import ExportBooksDialog from "./ExportBooksDialog";
 
 type GroupBy = "genre" | "status" | "author" | "none";
+
+/** 아이콘만 있는 툴바 버튼 — 폭이 좁아져도 줄바꿈되지 않게 정사각으로 고정한다 */
+const ICON_BTN =
+  "flex h-7 w-7 shrink-0 items-center justify-center rounded border border-neutral-300 text-sm text-neutral-600 hover:border-neutral-500 hover:bg-neutral-50";
 type ViewMode = "grid" | "list";
 
 /** 저자 문자열을 개별 저자로 분리 (쉼표·세미콜론·가운뎃점) */
@@ -103,7 +107,7 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
             {books.length}권
           </span>
         </h1>
-        <div className="flex items-center gap-1 text-xs">
+        <div className="flex shrink-0 items-center gap-1 text-xs">
           <button
             className={`rounded px-2.5 py-1 ${
               view === "grid"
@@ -124,33 +128,41 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
           >
             목록
           </button>
+          {/* 아래는 아이콘만 남긴다 — 3단 보기처럼 폭이 좁아지면 글씨까지 있는
+              버튼들이 줄바꿈되며 툴바가 무너졌다. 설명은 툴팁으로 남긴다. */}
+          <span className="mx-1 h-4 w-px bg-neutral-200" />
           <button
-            className="ml-2 rounded border border-neutral-300 px-3 py-1 text-neutral-600 hover:border-neutral-500"
+            className={ICON_BTN}
             onClick={() => setExporting(true)}
-            title="지금 보이는 목록을 CSV·마크다운 표로 내보냅니다"
+            title="내보내기 — 목록을 표로, 또는 고른 책의 내용을 문서로"
+            aria-label="내보내기"
           >
-            ⬇ 내보내기
+            ⬇
           </button>
           <button
-            className="rounded border border-neutral-300 px-3 py-1 text-neutral-600 hover:border-neutral-500"
+            className={ICON_BTN}
             onClick={() => setEnriching(true)}
-            title="분야·소개·표지가 비어 있는 책을 자동으로 채웁니다"
+            title="자동 채우기 — 분야·소개·표지가 비어 있는 책을 채웁니다"
+            aria-label="자동 채우기"
           >
-            ✨ 자동 채우기
+            ✨
           </button>
           <button
-            className="rounded bg-amber-600 px-3 py-1 text-white hover:bg-amber-500"
+            className={`${ICON_BTN} border-amber-500 text-amber-600 hover:border-amber-600 hover:bg-amber-50`}
             onClick={() => setSearching(true)}
-            title="카카오 책 검색으로 저자·출판사·표지까지 자동 입력"
+            title="검색해서 추가 — 카카오 책 검색으로 저자·출판사·표지까지 자동 입력"
+            aria-label="검색해서 추가"
           >
-            🔍 검색해서 추가
+            🔍
           </button>
           {view === "grid" && (
             <button
-              className="rounded bg-neutral-800 px-3 py-1 text-white hover:bg-neutral-600"
+              className={ICON_BTN}
               onClick={() => setCreating(true)}
+              title="직접 입력 — 검색에 없는 책을 손으로 추가"
+              aria-label="직접 입력"
             >
-              + 직접 입력
+              ＋
             </button>
           )}
         </div>

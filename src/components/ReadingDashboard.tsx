@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { commands, type ReadingEntry } from "../bindings";
 import { useVault } from "../stores/vault";
 import { coverSrc } from "../lib/note";
+import { printHtml, saveTextAs } from "../lib/exportFile";
+import { wrapDocument } from "../lib/exportHtml";
+import { buildReadingDoc } from "../lib/exportNote";
+import { useContextMenu, type MenuItem } from "../lib/contextMenu";
 import BookPickerDialog from "./BookPickerDialog";
+import ContextMenu from "./ContextMenu";
 
 /** 종류별 색 — 편집기 콜아웃(livePreview.ts)과 같은 계열로 맞춘다 */
 const KIND_STYLE: Record<string, string> = {
@@ -139,6 +144,8 @@ export default function ReadingDashboard() {
   const hasFilter =
     kinds.length > 0 || !!book || !!genre || !!tag || days > 0 || !!q.trim();
 
+  const exportMenu = useContextMenu();
+
   function toggleKind(k: string) {
     setKinds((cur) => (cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]));
     setShuffleSeed(0);
@@ -153,6 +160,36 @@ export default function ReadingDashboard() {
     setQ("");
     setShuffleSeed(0);
   }
+
+  /** 지금 화면에 보이는 기록을 그대로 문서로 — 필터·정렬이 곧 내보낼 범위다 */
+  function readingDoc() {
+    const d = buildReadingDoc(shown);
+    return { ...d, wrapped: wrapDocument(d.title, d.html, d.meta) };
+  }
+
+  const exportItems: MenuItem[] = [
+    {
+      label: "🖨️ 인쇄 · PDF로 저장",
+      hint: "인쇄 창에서 PDF 선택",
+      onClick: () => printHtml(readingDoc().wrapped),
+    },
+    {
+      label: "📄 텍스트로 저장",
+      hint: "글자만 — 어디에나 붙여넣기",
+      onClick: async () => {
+        const d = readingDoc();
+        await saveTextAs("독서기록", "txt", "텍스트", d.text);
+      },
+    },
+    {
+      label: "🖼️ HTML로 저장",
+      hint: "스타일까지 한 파일",
+      onClick: async () => {
+        const d = readingDoc();
+        await saveTextAs("독서기록", "html", "HTML 문서", d.wrapped);
+      },
+    },
+  ];
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -174,6 +211,20 @@ export default function ReadingDashboard() {
             title="지금 조건에 맞는 기록 중 무작위 3개만 보여줍니다 (다시 누르면 해제)"
           >
             🎲 랜덤 보기
+          </button>
+          <button
+            className="rounded border border-neutral-300 px-3 py-1.5 text-sm text-neutral-600 hover:border-neutral-500 disabled:opacity-40"
+            disabled={shown.length === 0}
+            onClick={(ev) => {
+              const r = ev.currentTarget.getBoundingClientRect();
+              exportMenu.open(
+                { clientX: r.right - 180, clientY: r.bottom + 2, preventDefault: () => {} },
+                exportItems,
+              );
+            }}
+            title="지금 화면에 보이는 기록을 문서로 냅니다"
+          >
+            ⬇ 내보내기
           </button>
           <button
             className="rounded bg-neutral-800 px-3 py-1.5 text-sm text-white hover:bg-neutral-600"
@@ -370,10 +421,15 @@ export default function ReadingDashboard() {
                     </div>
 
                     <p
-                      className={`mt-1.5 cursor-text whitespace-pre-wrap text-sm leading-relaxed text-neutral-800 ${
+                      className={`selectable mt-1.5 cursor-text whitespace-pre-wrap text-sm leading-relaxed text-neutral-800 ${
                         open ? "" : "line-clamp-4"
                       }`}
-                      onClick={() => setExpanded(open ? null : id)}
+                      onClick={() => {
+                        // 글자를 끌어 고르는 중이면 펼치기로 받지 않는다 —
+                        // 안 그러면 복사하려고 드래그할 때마다 접혔다 펴진다
+                        if (window.getSelection()?.toString()) return;
+                        setExpanded(open ? null : id);
+                      }}
                       title={open ? "접기" : "펼치기"}
                     >
                       {e.text || <span className="text-neutral-300">(빈 기록)</span>}
@@ -394,6 +450,9 @@ export default function ReadingDashboard() {
         </ul>
       </div>
 
+      {exportMenu.menu && (
+        <ContextMenu state={exportMenu.menu} onClose={exportMenu.close} />
+      )}
       {picking && <BookPickerDialog onClose={() => setPicking(false)} />}
     </div>
   );

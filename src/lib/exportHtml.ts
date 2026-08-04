@@ -170,6 +170,22 @@ const CALLOUT_COLOR: Record<string, string> = {
 
 /** 혼자 다닐 수 있는 HTML 문서 한 장으로 감싼다.
  *  스타일을 안에 박아 넣어 어디서 열어도 같은 모양이고, 인쇄용 규칙도 함께 넣는다. */
+/** 여러 편을 한 문서로 묶는다 (책 여러 권을 한 번에 내보낼 때).
+ *  편마다 새 페이지에서 시작해 인쇄물에서 서로 섞이지 않는다. */
+export function joinSections(
+  sections: { title: string; meta?: string; html: string }[],
+): string {
+  return sections
+    .map(
+      (s, i) =>
+        `<section${i > 0 ? ' style="break-before:page"' : ""}>\n` +
+        `<h1>${esc(s.title)}</h1>\n` +
+        (s.meta ? `<p class="doc-meta">${esc(s.meta)}</p>\n` : "") +
+        `${s.html}\n</section>`,
+    )
+    .join("\n");
+}
+
 export function wrapDocument(
   title: string,
   bodyHtml: string,
@@ -224,17 +240,45 @@ export function wrapDocument(
   th, td { border: 1px solid #e5e7eb; padding: .3rem .6rem; text-align: left; }
   hr { border: 0; border-top: 1px solid #e5e7eb; margin: 2rem 0; }
 
+  /* 인쇄용 머리글·바닥글 — 화면에서는 감춘다 */
+  .print-head, .print-foot { display: none; }
+
   @media print {
-    body { padding: 0; max-width: none; font-size: 11pt; }
+    /* 여백을 0으로 두면 브라우저가 넣던 머리글·바닥글(문서 제목·URL·시각)이
+       그려질 자리가 없어져 사라진다. 그 자리를 우리가 직접 채운다 —
+       안 그러면 바닥에 tauri.localhost가 찍힌다. */
+    @page { margin: 0; }
+    body { padding: 20mm 16mm 18mm; max-width: none; font-size: 11pt; }
+
+    /* fixed 요소는 인쇄 시 페이지마다 반복된다 */
+    .print-head, .print-foot {
+      display: block; position: fixed; left: 16mm; right: 16mm;
+      font-size: 9pt; color: #9ca3af;
+    }
+    .print-head { top: 9mm; text-align: right; }
+    .print-foot { bottom: 9mm; }
+
     /* 제목이 페이지 끝에 홀로 남지 않게 */
     h1, h2, h3 { break-after: avoid; }
     .callout, blockquote, li, img { break-inside: avoid; }
     a { color: inherit; text-decoration: none; }
   }
 </style>
+<div class="print-head">${esc(printStamp())}</div>
+<div class="print-foot">YamchaMemo</div>
 <h1>${esc(title)}</h1>
 ${meta ? `<p class="doc-meta">${esc(meta)}</p>` : ""}
 ${bodyHtml}
 </html>
 `;
+}
+
+/** 인쇄 머리글에 찍을 날짜와 시각 — 24시간제 (`2026-08-03 14:05`).
+ *  브라우저가 넣는 값은 로캘을 따라 "오후 2:05"로 나와서 직접 만든다. */
+export function printStamp(at: Date = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${at.getFullYear()}-${p(at.getMonth() + 1)}-${p(at.getDate())} ` +
+    `${p(at.getHours())}:${p(at.getMinutes())}`
+  );
 }

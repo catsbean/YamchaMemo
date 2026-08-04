@@ -1,9 +1,8 @@
 import { useState } from "react";
 import type { NoteContent } from "../bindings";
-import { splitBookBody } from "../lib/book";
-import { bodyToHtml, wrapDocument } from "../lib/exportHtml";
+import { wrapDocument } from "../lib/exportHtml";
+import { buildNoteDoc } from "../lib/exportNote";
 import { printHtml, saveTextAs } from "../lib/exportFile";
-import { fmStr, BOOK_STATUS_LABELS } from "../lib/note";
 import { useContextMenu, type MenuItem } from "../lib/contextMenu";
 import ContextMenu from "./ContextMenu";
 
@@ -15,42 +14,21 @@ export default function ExportNoteButton({ note }: { note: NoteContent }) {
   const menu = useContextMenu();
   const [error, setError] = useState("");
 
-  /** 노트 종류에 맞는 제목·부제·본문을 만든다 */
-  function build(): { title: string; meta: string; html: string } {
-    const fm = note.frontmatter as Record<string, unknown> | null;
-    const stem = note.rel_path.split("/").pop()?.replace(/\.md$/, "") ?? "";
-    const title = fmStr(fm, "title") || stem;
-    const date = fmStr(fm, "date");
-    const tags = ((fm?.tags as string[] | undefined) ?? []).map((t) => `#${t}`);
-
-    if (note.note_type === "book") {
-      const { intro, records } = splitBookBody(note.body);
-      const bits = [
-        fmStr(fm, "author"),
-        fmStr(fm, "genre"),
-        BOOK_STATUS_LABELS[fmStr(fm, "status")],
-        fmStr(fm, "rating") ? `★ ${fmStr(fm, "rating")}` : "",
-        fmStr(fm, "finished") ? `완독 ${fmStr(fm, "finished")}` : "",
-      ].filter(Boolean);
-      const html =
-        (intro.trim() ? `<h2>소개</h2>\n${bodyToHtml(intro)}\n` : "") +
-        `<h2>기록</h2>\n${bodyToHtml(records)}`;
-      return { title, meta: [...bits, ...tags].join(" · "), html };
-    }
-
+  function document(): { name: string; html: string; text: string } {
+    const d = buildNoteDoc(note);
     return {
-      title: note.note_type === "daily" ? `${stem} 일지` : title,
-      meta: [date, ...tags].filter(Boolean).join(" · "),
-      html: bodyToHtml(note.body),
+      name: d.title,
+      html: wrapDocument(d.title, d.html, d.meta),
+      text: d.text,
     };
   }
 
-  function document(): { name: string; html: string } {
-    const { title, meta, html } = build();
-    return { name: title, html: wrapDocument(title, html, meta) };
-  }
-
   const items: MenuItem[] = [
+    {
+      label: "🖨️ 인쇄 · PDF로 저장",
+      hint: "인쇄 창에서 PDF 선택",
+      onClick: () => printHtml(document().html),
+    },
     {
       label: "🖼️ HTML로 저장",
       hint: "스타일까지 한 파일",
@@ -64,9 +42,16 @@ export default function ExportNoteButton({ note }: { note: NoteContent }) {
       },
     },
     {
-      label: "🖨️ 인쇄 · PDF로 저장",
-      hint: "인쇄 창에서 PDF 선택",
-      onClick: () => printHtml(document().html),
+      label: "📄 텍스트로 저장",
+      hint: "글자만 — 어디에나 붙여넣기",
+      onClick: async () => {
+        try {
+          const d = document();
+          await saveTextAs(d.name, "txt", "텍스트", d.text);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      },
     },
   ];
 
