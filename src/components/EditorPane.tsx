@@ -385,6 +385,7 @@ export default function EditorPane() {
                 relPath={current.rel_path}
                 body={current.body}
                 onChanged={onStructuredChange}
+                showAddInput={false}
                 kinds={DAILY_KINDS}
                 big={todoBig}
                 onToggleBig={toggleTodoBig}

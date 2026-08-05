@@ -55,7 +55,6 @@ export default function EntryList({
 }) {
   const [blocks, setBlocks] = useState<NoteBlock[]>([]);
   const [editing, setEditing] = useState<number | null>(null);
-  const [draft, setDraft] = useState("");
   const [confirming, setConfirming] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -99,9 +98,9 @@ export default function EntryList({
     index: number,
     expected: string,
     curKind: string,
-    value?: string,
+    value: string,
   ) {
-    const draftText = (value ?? draft).trim();
+    const draftText = value.trim();
     if (busy || !draftText) return;
     setBusy(true);
     setError("");
@@ -204,8 +203,8 @@ export default function EntryList({
                   <>
                     <button
                       className="rounded bg-neutral-800 px-2 py-0.5 text-2xs text-white hover:bg-neutral-600 disabled:opacity-50"
-                      disabled={busy || !draft.trim()}
-                      onClick={() => saveEdit(index, b.text, b.kind_label)}
+                      disabled={busy}
+                      onClick={() => saveEdit(index, b.text, b.kind_label, editIme.value())}
                     >
                       저장
                     </button>
@@ -238,7 +237,6 @@ export default function EntryList({
                       className="rounded px-1.5 py-0.5 text-2xs opacity-70 hover:bg-white/60"
                       onClick={() => {
                         setEditing(index);
-                        setDraft(b.text);
                         setDraftKind(b.kind_label);
                         editingRef.current = {
                           index,

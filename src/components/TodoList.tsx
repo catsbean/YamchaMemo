@@ -12,6 +12,7 @@ export default function TodoList({
   body,
   onChanged,
   showOpenWindow = true,
+  showAddInput = true,
   panel,
   onTogglePanel,
   big,
@@ -24,6 +25,8 @@ export default function TodoList({
   onChanged: (note: NoteContent) => void;
   /** 새 창으로 열기 버튼 표시 (할 일 창 안에서는 숨긴다) */
   showOpenWindow?: boolean;
+  /** 하단 추가 입력창 표시 — 위에 DailyEntryBar가 이미 있는 화면에서는 중복이라 끈다 */
+  showAddInput?: boolean;
   /** 지금 아래에 있는지 오른쪽에 있는지 (전환 버튼 표시용) */
   panel?: "bottom" | "right";
   onTogglePanel?: () => void;
@@ -70,15 +73,13 @@ export default function TodoList({
   const addIme = useImeInput((v) => add(v), "enter");
   // 수정 입력: 어떤 항목을 고치는 중인지 ref로 들고 훅에 넘긴다
   const editingRef = useRef<NoteTodo | null>(null);
-  const editIme = useImeInput(
-    (v) => {
-      const t = editingRef.current;
-      if (!t || !v.trim()) return;
-      apply(() => commands.updateTodo(relPath, t.index, t.text, v.trim()));
-    },
-    "enter",
-    () => setEditing(null),
-  );
+  function saveTodoEdit(value: string) {
+    const t = editingRef.current;
+    const text = value.trim();
+    if (!t || !text) return;
+    apply(() => commands.updateTodo(relPath, t.index, t.text, text));
+  }
+  const editIme = useImeInput(saveTodoEdit, "enter", () => setEditing(null));
 
   async function apply(
     run: () => Promise<{ status: "ok"; data: NoteContent } | { status: "error"; error: string }>,
@@ -235,12 +236,21 @@ export default function TodoList({
                       </button>
                     </>
                   ) : editing === t.index ? (
-                    <button
-                      className="rounded px-1 py-0.5 text-2xs text-neutral-500 hover:bg-neutral-100"
-                      onClick={() => setEditing(null)}
-                    >
-                      취소
-                    </button>
+                    <>
+                      <button
+                        className="rounded bg-neutral-800 px-1.5 py-0.5 text-2xs text-white hover:bg-neutral-600 disabled:opacity-50"
+                        disabled={busy}
+                        onClick={() => saveTodoEdit(editIme.value())}
+                      >
+                        저장
+                      </button>
+                      <button
+                        className="rounded px-1 py-0.5 text-2xs text-neutral-500 hover:bg-neutral-100"
+                        onClick={() => setEditing(null)}
+                      >
+                        취소
+                      </button>
+                    </>
                   ) : (
                     <>
                       <button
@@ -248,6 +258,7 @@ export default function TodoList({
                         onClick={() => {
                           setEditing(t.index);
                           setConfirming(null);
+                          editingRef.current = t;
                         }}
                       >
                         수정
@@ -270,22 +281,24 @@ export default function TodoList({
         )}
       </div>
 
-      <div className="flex shrink-0 items-center gap-1.5 border-t border-neutral-200 px-3 py-1.5">
-        <span className="shrink-0 text-sm text-neutral-300">☐</span>
-        <input
-          className="min-w-0 flex-1 rounded border border-neutral-300 bg-white px-2 py-0.5 text-sm focus:border-neutral-500 focus:outline-none"
-          placeholder="할 일 추가 후 Enter"
-          defaultValue=""
-          {...addIme.handlers}
-        />
-        <button
-          className="shrink-0 rounded bg-emerald-500 px-2 py-0.5 text-2xs text-white hover:bg-emerald-400 disabled:opacity-50"
-          disabled={busy}
-          onClick={() => add()}
-        >
-          추가
-        </button>
-      </div>
+      {showAddInput && (
+        <div className="flex shrink-0 items-center gap-1.5 border-t border-neutral-200 px-3 py-1.5">
+          <span className="shrink-0 text-sm text-neutral-300">☐</span>
+          <input
+            className="min-w-0 flex-1 rounded border border-neutral-300 bg-white px-2 py-0.5 text-sm focus:border-neutral-500 focus:outline-none"
+            placeholder="할 일 추가 후 Enter"
+            defaultValue=""
+            {...addIme.handlers}
+          />
+          <button
+            className="shrink-0 rounded bg-emerald-500 px-2 py-0.5 text-2xs text-white hover:bg-emerald-400 disabled:opacity-50"
+            disabled={busy}
+            onClick={() => add()}
+          >
+            추가
+          </button>
+        </div>
+      )}
     </div>
   );
 }
