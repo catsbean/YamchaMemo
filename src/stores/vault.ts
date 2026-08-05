@@ -92,6 +92,11 @@ interface VaultStore {
   captureError: string | null;
   setQuickCaptureOn(v: boolean): Promise<void>;
   setQuickCaptureShortcut(s: string): Promise<void>;
+  /** 스크랩(우클릭 저장) 기본 저장 분류. 기본은 "free".
+   *  저장 시점에 이 분류가 없어졌거나 쓸 수 없으면 백엔드가 free로 대신 저장하고,
+   *  그 결과를 받아 이 값도 free로 되돌린다 — 다음에도 계속 실패하지 않도록. */
+  scrapType: string;
+  setScrapType(id: string): Promise<void>;
   /** 회고에 독서기록도 함께 볼지 (회고 화면 토글) */
   reviewShowReading: boolean;
   toggleReviewShowReading(): Promise<void>;
@@ -381,6 +386,12 @@ export const useVault = create<VaultStore>((set, get) => {
         if (err) set({ captureError: err });
       }
     },
+    scrapType: "free",
+    async setScrapType(id) {
+      set({ scrapType: id });
+      const store = await settings();
+      await store.set("scrapType", id);
+    },
     reviewShowReading: false,
     async toggleReviewShowReading() {
       const v = !get().reviewShowReading;
@@ -522,6 +533,7 @@ export const useVault = create<VaultStore>((set, get) => {
         const quickCaptureShortcut =
           (await store.get<string>("quickCaptureShortcut")) ??
           DEFAULT_CAPTURE_SHORTCUT;
+        const scrapType = (await store.get<string>("scrapType")) ?? "free";
         const reviewShowReading =
           (await store.get<boolean>("reviewShowReading")) ?? false;
         const searchFuzzy = (await store.get<boolean>("searchFuzzy")) ?? false;
@@ -553,6 +565,7 @@ export const useVault = create<VaultStore>((set, get) => {
           todoBig,
           quickCaptureOn,
           quickCaptureShortcut,
+          scrapType,
           reviewShowReading,
           searchFuzzy,
           searchInFiles,

@@ -34,6 +34,8 @@ export default function ScrapModal({
   onSaved: (stem: string) => void;
 }) {
   const refresh = useVault((s) => s.refresh);
+  const scrapType = useVault((s) => s.scrapType);
+  const setScrapType = useVault((s) => s.setScrapType);
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState(hostOf(url));
   const [body, setBody] = useState("");
@@ -64,14 +66,16 @@ export default function ScrapModal({
     if (!title.trim() || saving) return;
     setSaving(true);
     setError(null);
-    const r = await commands.saveScrap(title, url, body);
+    const r = await commands.saveScrap(title, url, body, scrapType);
     setSaving(false);
     if (r.status === "error") {
       setError(r.error);
       return;
     }
+    // 요청한 분류가 없어져서 백엔드가 자유노트로 대신 저장했으면, 설정도 맞춰 둔다
+    if (r.data.type_id !== scrapType) await setScrapType(r.data.type_id);
     await refresh();
-    const stem = r.data.split("/").pop()?.replace(/\.md$/, "") ?? title.trim();
+    const stem = r.data.rel.split("/").pop()?.replace(/\.md$/, "") ?? title.trim();
     onSaved(stem);
   }
 

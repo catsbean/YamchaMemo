@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use tauri::{Emitter, Manager, State};
-use yamcha_core::schema::{builtin_defs, EntryKind};
+use yamcha_core::schema::{builtin_defs, Builtin, EntryKind};
 use yamcha_core::{
     Backlink, FieldDef, FileIndexStatus, Indexer, NoteContent, NoteRef, NoteSummary, SearchEngine,
     SearchHit,
@@ -197,7 +197,32 @@ pub async fn scrape_article(app: tauri::AppHandle, url: String) -> Option<Scrape
     html_result.map(|(title, body_md)| ScrapedArticle { title, body_md, via: "html".into() })
 }
 
-/// 스크랩 저장 — 자유노트로 만들고 frontmatter에 `source`(원본 URL)를 심는다.
+/// 저장 결과 — `type_id`는 실제로 쓰인 분류다. 요청한 분류가 없어졌거나
+/// (커스텀 분류 삭제 등) 책·데일리처럼 쓸 수 없는 분류면 자유노트로 대신
+/// 저장하고, 호출부가 이 값으로 설정을 되돌릴 수 있게 한다.
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone)]
+pub struct ScrapSaved {
+    pub rel: String,
+    pub type_id: String,
+}
+
+/// 요청한 분류로 스크랩을 저장해도 되는지 정한다. 비어 있거나, 책·데일리처럼
+/// 파일명·연동 규칙이 확고한 분류거나, vault에 더 이상 없는 분류(커스텀 분류
+/// 삭제 등)면 자유노트로 대신 쓴다.
+fn resolve_scrap_type<'a>(vault: &Vault, requested: &'a str) -> &'a str {
+    let requested = requested.trim();
+    let locked = matches!(
+        Builtin::from_id(requested),
+        Some(Builtin::Daily) | Some(Builtin::Book)
+    );
+    if requested.is_empty() || locked || vault.def_by_id(requested).is_none() {
+        Builtin::Free.id()
+    } else {
+        requested
+    }
+}
+
+/// 스크랩 저장 — `type_id` 분류로 만들고 frontmatter에 `source`(원본 URL)를 심는다.
 /// `create_note`가 만드는 기본 템플릿 본문을 실제 스크랩 본문으로 갈아끼운다 —
 /// frontmatter는 create_note가 정규화해 둔 것을 그대로 유지한다.
 #[tauri::command]
@@ -207,17 +232,21 @@ pub fn save_scrap(
     title: String,
     url: String,
     body: String,
-) -> Result<String, String> {
+    type_id: String,
+) -> Result<ScrapSaved, String> {
     let title = title.trim();
     if title.is_empty() {
         return Err("제목이 비어 있습니다".into());
     }
     with_ctx_write(&state, |c| {
-        let rel = c.vault.create_note("free", title, serde_json::json!({ "source": url }))?;
+        let effective = resolve_scrap_type(&c.vault, &type_id).to_string();
+        let rel = c
+            .vault
+            .create_note(&effective, title, serde_json::json!({ "source": url }))?;
         let note = c.vault.read_note(&rel)?;
         c.vault.save_note(&rel, note.frontmatter, &body)?;
         refresh_note(c, &rel)?;
-        Ok(rel)
+        Ok(ScrapSaved { rel, type_id: effective })
     })
 }
 
@@ -3201,6 +3230,28 @@ mod version_tests {
         assert_eq!(parse_semver("v0.5.4"), parse_semver("0.5.4"));
         assert!(parse_semver("0.5.4") == parse_semver("0.5.4"));
         assert_eq!(parse_semver("bad"), (0, 0, 0));
+    }
+}
+
+#[cfg(test)]
+mod save_scrap_tests {
+    use super::resolve_scrap_type;
+    use yamcha_core::Vault;
+
+    #[test]
+    fn falls_back_to_free_when_type_missing_locked_or_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = Vault::open(dir.path()).unwrap();
+        v.add_custom_type("회사", "company", vec![], "").unwrap();
+
+        assert_eq!(resolve_scrap_type(&v, "company"), "company");
+        assert_eq!(resolve_scrap_type(&v, ""), "free");
+        assert_eq!(resolve_scrap_type(&v, "book"), "free");
+        assert_eq!(resolve_scrap_type(&v, "daily"), "free");
+        assert_eq!(resolve_scrap_type(&v, "없어진분류"), "free");
+
+        v.remove_custom_type("company").unwrap();
+        assert_eq!(resolve_scrap_type(&v, "company"), "free");
     }
 }
 

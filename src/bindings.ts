@@ -437,13 +437,13 @@ async scrapeArticle(url: string) : Promise<ScrapedArticle | null> {
     return await TAURI_INVOKE("scrape_article", { url });
 },
 /**
- * 스크랩 저장 — 자유노트로 만들고 frontmatter에 `source`(원본 URL)를 심는다.
+ * 스크랩 저장 — `type_id` 분류로 만들고 frontmatter에 `source`(원본 URL)를 심는다.
  * `create_note`가 만드는 기본 템플릿 본문을 실제 스크랩 본문으로 갈아끼운다 —
  * frontmatter는 create_note가 정규화해 둔 것을 그대로 유지한다.
  */
-async saveScrap(title: string, url: string, body: string) : Promise<Result<string, string>> {
+async saveScrap(title: string, url: string, body: string, typeId: string) : Promise<Result<ScrapSaved, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("save_scrap", { title, url, body }) };
+    return { status: "ok", data: await TAURI_INVOKE("save_scrap", { title, url, body, typeId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1262,6 +1262,12 @@ cover: string; kind_label: string; date: string; text: string }
  * 버전 확인 결과 — 자동 설치는 하지 않고 안내만 한다.
  */
 export type ReleaseCheck = { current: string; latest: string; newer: boolean; url: string }
+/**
+ * 저장 결과 — `type_id`는 실제로 쓰인 분류다. 요청한 분류가 없어졌거나
+ * (커스텀 분류 삭제 등) 책·데일리처럼 쓸 수 없는 분류면 자유노트로 대신
+ * 저장하고, 호출부가 이 값으로 설정을 되돌릴 수 있게 한다.
+ */
+export type ScrapSaved = { rel: string; type_id: string }
 export type ScrapedArticle = { title: string; body_md: string; 
 /**
  * 어느 갈래로 얻었는지 — 화면에 작게 보여 주면 "왜 짧지"를 사용자가 스스로 안다
