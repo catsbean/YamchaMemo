@@ -12,9 +12,6 @@ pub fn builtin_body_template(b: Builtin) -> &'static str {
         // 글쓰기 본문 = 원고 그 자체
         Builtin::Writing => "",
         Builtin::Daily => "## 할 일\n\n- [ ] \n\n## 기록\n\n",
-        // 정보노트 = 어디서 얻은 정보를 정리해 두는 곳.
-        // 출처는 frontmatter에 있으니 본문은 "무엇을 알았나 / 원문 / 내 생각" 세 칸.
-        Builtin::Info => "## 요약\n\n## 내용\n\n## 메모\n\n",
         Builtin::Free => "",
     }
 }

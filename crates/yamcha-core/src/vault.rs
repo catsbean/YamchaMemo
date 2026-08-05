@@ -471,24 +471,7 @@ impl Vault {
             .map(String::from)
             .unwrap_or_else(|| old_stem.clone());
 
-        // 새 파일명: 정보노트는 날짜 접두어 유지
-        let new_stem = if type_id == Builtin::Info.id() {
-            let date_prefix = old_stem
-                .get(..10)
-                .filter(|p| p.chars().enumerate().all(|(i, c)| {
-                    if i == 4 || i == 7 { c == '-' } else { c.is_ascii_digit() }
-                }))
-                .map(String::from)
-                .unwrap_or_else(|| {
-                    fm.get("date")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                        .unwrap_or_else(Self::today)
-                });
-            format!("{date_prefix} {}", Self::sanitize_filename(new_title))
-        } else {
-            Self::sanitize_filename(new_title)
-        };
+        let new_stem = Self::sanitize_filename(new_title);
 
         // 파일 이동
         let abs_old = self.abs(rel)?;
@@ -1047,14 +1030,9 @@ impl Vault {
         )
     }
 
-    /// 타입별 기본 머릿글. 정보노트는 원래부터 파일명이 `{날짜} {제목}`이었고,
-    /// 그 규칙을 이 템플릿으로 옮겨 이제 사용자가 바꿀 수 있게 했다.
-    fn default_title_template(type_id: &str) -> &'static str {
-        if type_id == Builtin::Info.id() {
-            "{{date}} "
-        } else {
-            ""
-        }
+    /// 타입별 기본 머릿글. 기본은 없음(빈 문자열) — 필요하면 설정에서 직접 정한다.
+    fn default_title_template(_type_id: &str) -> &'static str {
+        ""
     }
 
     /// 설정 화면용: 저장된 머릿글이 있으면 그것, 없으면 기본값
@@ -1106,12 +1084,11 @@ impl Vault {
         )
     }
 
-    /// 커스텀 템플릿 파일 경로 (kind: "daily"|"free"|"info"|"writing")
+    /// 커스텀 템플릿 파일 경로 (kind: "daily"|"free"|"writing")
     fn template_file_path(&self, kind: &str) -> Option<PathBuf> {
         let name = match kind {
             "daily" => "daily.md",
             "free" => "free.md",
-            "info" => "info.md",
             "writing" => "writing.md",
             _ => return None,
         };
@@ -1122,7 +1099,6 @@ impl Vault {
         match kind {
             "daily" => Some(Builtin::Daily),
             "free" => Some(Builtin::Free),
-            "info" => Some(Builtin::Info),
             "writing" => Some(Builtin::Writing),
             _ => None,
         }
@@ -1134,7 +1110,6 @@ impl Vault {
         let kind = match b {
             Builtin::Daily => "daily",
             Builtin::Free => "free",
-            Builtin::Info => "info",
             Builtin::Writing => "writing",
             _ => return template::builtin_body_template(b).to_string(),
         };
@@ -1197,15 +1172,6 @@ impl Vault {
                 fm.insert("title".into(), json!(title));
                 let abs = self.unique_path(&self.root.join(&def.folder), &title);
                 (abs, template::render_template(&def.template, &today, &title))
-            }
-            Some(Builtin::Info) => {
-                // 머릿글(기본 "{{date}} ")이 붙은 결과가 곧 제목이자 파일명이다
-                let raw = Self::sanitize_filename(title);
-                let stem =
-                    Self::sanitize_filename(&self.apply_title_prefix(type_id, &today, &raw));
-                let abs = self.unique_path(&self.root.join(&def.folder), &stem);
-                let tmpl = self.body_template(Builtin::Info);
-                (abs, template::render_template(&tmpl, &today, &raw))
             }
             Some(Builtin::Free) | Some(Builtin::Writing) | None => {
                 // 자유노트·글쓰기·사용자 정의 타입은 제목 = 파일명
@@ -1325,12 +1291,7 @@ impl Vault {
             .unwrap_or("")
             .to_string();
         let date = if date.is_empty() { Self::today() } else { date };
-        // 정보노트는 rename_note가 스스로 날짜 접두어를 붙이므로 중복해서 넣지 않는다
-        if note.note_type == Builtin::Info.id() {
-            self.rename_note(rel, &head)
-        } else {
-            self.rename_note(rel, &format!("{date} {head}"))
-        }
+        self.rename_note(rel, &format!("{date} {head}"))
     }
 
     /// 인덱싱용 완전 파싱
@@ -2632,30 +2593,6 @@ mod tests {
         assert!(r.body.contains("> 기록"));
         // 데일리 rename 제한
         assert!(v.rename_note(&v.open_daily("2026-07-18").unwrap(), "x").is_err());
-    }
-
-    #[test]
-    fn rename_info_keeps_date_prefix() {
-        let (_d, v) = vault();
-        let rel = v.create_note("info", "원래 정보", serde_json::json!({})).unwrap();
-        let new_rel = v.rename_note(&rel, "고친 정보").unwrap();
-        let today = Vault::today();
-        assert_eq!(new_rel, format!("Info/{today} 고친 정보.md"));
-        assert_eq!(v.read_note(&new_rel).unwrap().frontmatter["title"], "고친 정보");
-    }
-
-    #[test]
-    fn info_date_prefix_comes_from_title_template() {
-        let (_d, v) = vault();
-        let today = Vault::today();
-        // 기본 머릿글이 "{{date}} "이라 예전과 같은 파일명이 나온다
-        let rel = v.create_note("info", "어떤 정보", serde_json::json!({})).unwrap();
-        assert_eq!(rel, format!("Info/{today} 어떤 정보.md"));
-
-        // 머릿글을 비우면 날짜 없이 만들어진다
-        v.write_title_template("info", "").unwrap();
-        let bare = v.create_note("info", "머릿글 없음", serde_json::json!({})).unwrap();
-        assert_eq!(bare, "Info/머릿글 없음.md");
     }
 
     #[test]

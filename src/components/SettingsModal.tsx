@@ -1121,7 +1121,6 @@ const NOTE_TEMPLATE_KINDS: { id: string; label: string; placeholder: string }[] 
     label: "자유노트",
     placeholder: "(기본은 빈 문서 — 원하는 템플릿을 넣어보세요)",
   },
-  { id: "info", label: "정보노트", placeholder: "## 요약\n\n## 내용\n\n## 메모\n" },
   {
     id: "writing",
     label: "글쓰기",

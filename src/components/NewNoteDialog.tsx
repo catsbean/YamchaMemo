@@ -38,9 +38,6 @@ function creationFields(noteType: string, fields: FieldDef[]): FieldDef[] {
   if (noteType === "reading") {
     return fields.filter((f) => ["author"].includes(f.name));
   }
-  if (noteType === "info") {
-    return fields.filter((f) => ["source"].includes(f.name));
-  }
   // writing은 전용 UI 사용
   if (noteType === "writing" || noteType === "free" || noteType === "daily") {
     return [];

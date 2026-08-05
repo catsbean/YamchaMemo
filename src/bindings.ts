@@ -437,10 +437,9 @@ async scrapeArticle(url: string) : Promise<ScrapedArticle | null> {
     return await TAURI_INVOKE("scrape_article", { url });
 },
 /**
- * 스크랩 저장 — `info` 타입 노트로 만든다. 새 분류를 만들지 않는다:
- * Info 타입에 이미 `source` 필드가 있다(0.3 버전부터, 이 기능을 염두에 두고
- * 설계돼 있었다). `create_note`가 만드는 기본 템플릿 본문을 실제 스크랩 본문으로
- * 갈아끼운다 — frontmatter는 create_note가 정규화해 둔 것을 그대로 유지한다.
+ * 스크랩 저장 — 자유노트로 만들고 frontmatter에 `source`(원본 URL)를 심는다.
+ * `create_note`가 만드는 기본 템플릿 본문을 실제 스크랩 본문으로 갈아끼운다 —
+ * frontmatter는 create_note가 정규화해 둔 것을 그대로 유지한다.
  */
 async saveScrap(title: string, url: string, body: string) : Promise<Result<string, string>> {
     try {
@@ -894,7 +893,7 @@ async cancelEnrich() : Promise<void> {
     await TAURI_INVOKE("cancel_enrich");
 },
 /**
- * 노트 본문 템플릿 읽기 (kind: "daily"|"free"|"info"|"writing"). 커스텀 없으면 기본값.
+ * 노트 본문 템플릿 읽기 (kind: "daily"|"free"|"writing"). 커스텀 없으면 기본값.
  */
 async getNoteTemplate(kind: string) : Promise<Result<string, string>> {
     try {

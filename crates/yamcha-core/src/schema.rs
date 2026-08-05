@@ -1,26 +1,24 @@
-//! 노트 타입 정의: 내장 5종 + 사용자 정의 타입.
+//! 노트 타입 정의: 내장 4종 + 사용자 정의 타입.
 //! 모든 타입은 `TypeDef`로 표현되며, frontmatter `type` 값(id)과 폴더가 1:1 대응한다.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-/// 동작이 특별한 내장 타입 5종.
+/// 동작이 특별한 내장 타입 4종.
 /// 책(Book) 파일 하나가 도서 정보(frontmatter) + `## 소개` + `## 기록`(독서기록)을 모두 담는다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Builtin {
     Book,
     Writing,
     Daily,
-    Info,
     Free,
 }
 
 impl Builtin {
-    pub const ALL: [Builtin; 5] = [
+    pub const ALL: [Builtin; 4] = [
         Builtin::Book,
         Builtin::Writing,
         Builtin::Daily,
-        Builtin::Info,
         Builtin::Free,
     ];
 
@@ -29,7 +27,6 @@ impl Builtin {
             Builtin::Book => "book",
             Builtin::Writing => "writing",
             Builtin::Daily => "daily",
-            Builtin::Info => "info",
             Builtin::Free => "free",
         }
     }
@@ -43,7 +40,6 @@ impl Builtin {
             Builtin::Book => "Books",
             Builtin::Writing => "Writing",
             Builtin::Daily => "Daily",
-            Builtin::Info => "Info",
             Builtin::Free => "Free",
         }
     }
@@ -53,7 +49,6 @@ impl Builtin {
             Builtin::Book => "도서리스트",
             Builtin::Writing => "글쓰기",
             Builtin::Daily => "데일리노트",
-            Builtin::Info => "정보노트",
             Builtin::Free => "자유노트",
         }
     }
@@ -237,9 +232,6 @@ fn builtin_fields(b: Builtin) -> Vec<FieldDef> {
             f.push(FieldDef::new("finished", "완성일", FieldKind::Date, false));
         }
         Builtin::Daily => {}
-        Builtin::Info => {
-            f.push(FieldDef::new("source", "출처", FieldKind::Url, false));
-        }
         Builtin::Free => {
             f.push(FieldDef::new("title", "제목", FieldKind::Text, false));
         }
@@ -306,7 +298,7 @@ mod tests {
             assert_eq!(Builtin::from_id(b.id()), Some(b));
         }
         let defs = builtin_defs();
-        assert_eq!(defs.len(), 5);
+        assert_eq!(defs.len(), 4);
         assert!(defs.iter().all(|d| d.builtin));
     }
 

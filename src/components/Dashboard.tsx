@@ -234,9 +234,16 @@ function Row({ note, noteType }: { note: NoteSummary; noteType: string }) {
         </>
       );
     }
-    case "info": {
-      const source = fmStr(note, "source");
-      const host = hostOf(source);
+    case "daily":
+      return (
+        <>
+          <Title note={note} className="text-sm font-medium" />
+          {tags}
+        </>
+      );
+    default: {
+      // source 필드(스크랩 등)가 있으면 출처 배지를 붙인다 — 특정 타입 전용이 아니다
+      const host = hostOf(fmStr(note, "source"));
       return (
         <>
           {date}
@@ -250,20 +257,5 @@ function Row({ note, noteType }: { note: NoteSummary; noteType: string }) {
         </>
       );
     }
-    case "daily":
-      return (
-        <>
-          <Title note={note} className="text-sm font-medium" />
-          {tags}
-        </>
-      );
-    default:
-      return (
-        <>
-          {date}
-          <Title note={note} className="truncate text-sm" />
-          {tags}
-        </>
-      );
   }
 }
