@@ -40,6 +40,9 @@ url = "2"
 readability = "0.3"
 htmd = "0.5"
 chrono = { workspace = true }
+# 두 번째 실행을 막는다. 검색 색인(tantivy)은 프로세스 하나만 쓰기 잠금을 쥘 수 있어서,
+# 두 벌이 뜨면 뒤에 뜬 쪽이 앞선 쪽의 색인을 건드린다.
+tauri-plugin-single-instance = "2.4.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

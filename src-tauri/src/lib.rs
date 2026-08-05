@@ -4,6 +4,7 @@ mod watcher;
 use std::sync::Mutex;
 
 use commands::{AppState, WatcherState};
+use tauri::Manager as _;
 use tauri_specta::{collect_commands, Builder};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -110,6 +111,17 @@ pub fn run() {
         .expect("Failed to export typescript bindings");
 
     tauri::Builder::default()
+        // **제일 먼저 붙인다** (플러그인 문서의 요구). 두 번째 실행은 여기서 끝나고,
+        // 이미 떠 있던 창이 앞으로 나온다. 두 벌이 뜨면 뒤에 뜬 쪽이 앞선 쪽의 검색
+        // 색인을 지우려 들기 때문에(tantivy 쓰기 잠금은 프로세스 하나만 쥔다), 막는 편이
+        // 사용자에게도 자연스럽다 — 아이콘을 두 번 눌렀을 때 기대하는 동작이 그거다.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())

@@ -112,6 +112,18 @@ impl From<tantivy::TantivyError> for CoreError {
     }
 }
 
+/// IndexWriter를 얻지 못한 이유를 가른다. 잠금 실패면 `Busy` —
+/// `open()`이 이걸 보고 색인을 지울지 말지 정한다.
+fn writer_err(e: tantivy::TantivyError) -> CoreError {
+    if matches!(e, tantivy::TantivyError::LockFailure(..)) {
+        CoreError::Busy(
+            "검색 색인을 다른 창에서 쓰고 있습니다. 앱이 이미 실행 중인지 확인해주세요.".into(),
+        )
+    } else {
+        e.into()
+    }
+}
+
 impl From<tantivy::directory::error::OpenDirectoryError> for CoreError {
     fn from(e: tantivy::directory::error::OpenDirectoryError) -> Self {
         CoreError::Invalid(format!("검색 인덱스 디렉토리 오류: {e}"))
@@ -141,6 +153,11 @@ impl SearchEngine {
     pub fn open(dir: &Path) -> Result<SearchEngine, CoreError> {
         match Self::try_open(dir) {
             Ok(s) => Ok(s),
+            // **잠금 충돌은 손상이 아니다.** 앱이 이미 떠 있는데 한 번 더 실행하면
+            // 여기로 온다. 예전에는 실패 원인을 가리지 않고 지웠는데, 그러면 두 번째
+            // 인스턴스가 **먼저 뜬 인스턴스가 쓰고 있는 색인을 지운다** — 돌고 있던
+            // 쪽의 검색이 그 자리에서 깨진다. 백신·동기화가 잠깐 파일을 쥘 때도 같다.
+            Err(e @ CoreError::Busy(_)) => Err(e),
             Err(_) => {
                 // 손상됐거나 스키마가 바뀌었다 — 버리고 새로 만든다. 이때 색인은
                 // **비어 있으므로**, 부르는 쪽은 증분이 아니라 전체 재색인을 해야 한다.
@@ -196,7 +213,7 @@ impl SearchEngine {
             .filter(LowerCaser)
             .build(),
         );
-        let writer = index.writer(30_000_000)?;
+        let writer = index.writer(30_000_000).map_err(writer_err)?;
         let reader = index.reader()?;
         Ok(SearchEngine {
             index,
@@ -680,6 +697,30 @@ mod tests {
             body: body.into(),
             frontmatter_json: "{}".into(),
         }
+    }
+
+    /// **이미 열려 있는 색인을 두 번째로 열면, 지우지 말고 거절해야 한다.**
+    /// 앱을 두 번 실행했을 때의 자리다. 예전에는 실패 원인을 안 가리고 지워서,
+    /// 두 번째 인스턴스가 먼저 뜬 쪽의 색인을 날렸다.
+    #[test]
+    fn 이미_쓰고_있는_색인은_지우지_않는다() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut first = SearchEngine::open(dir.path()).unwrap();
+        first.upsert(&note("Free/지켜야 할 노트.md", "제목", "가나다라마", &[])).unwrap();
+        first.commit().unwrap();
+
+        let second = SearchEngine::open(dir.path());
+        assert!(
+            matches!(second, Err(CoreError::Busy(_))),
+            "잠금 충돌을 손상으로 오인했다"
+        );
+
+        // 먼저 뜬 쪽은 멀쩡해야 한다
+        assert_eq!(
+            first.search("가나다라마", 10).unwrap().len(),
+            1,
+            "돌고 있던 인스턴스의 색인이 깨졌다"
+        );
     }
 
     // ---- 규모 벤치 (기본 제외, 수동 실행) ----
