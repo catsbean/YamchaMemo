@@ -16,6 +16,7 @@ pub fn run() {
         commands::get_vault_path,
         commands::get_schemas,
         commands::list_notes,
+        commands::note_summary,
         commands::read_note,
         commands::save_note,
         commands::create_note,

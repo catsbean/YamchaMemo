@@ -697,6 +697,30 @@ impl Vault {
         cache.retain(|rel, _| alive.contains(rel.as_str()));
     }
 
+    /// 노트 **한 편**의 요약. 저장 뒤 목록에서 그 한 줄만 갈아끼울 때 쓴다.
+    ///
+    /// 자동저장은 3초마다 도는데 그때마다 `list_notes()`로 vault 전체 요약을 다시
+    /// 만들어 화면까지 실어 나를 이유가 없다 — 바뀐 건 방금 저장한 한 편뿐이다.
+    /// 캐시를 거치므로 다음 `list_notes()`도 이 편을 다시 읽지 않는다.
+    pub fn note_summary(&self, rel: &str) -> Result<NoteSummary, CoreError> {
+        let abs = self.abs(rel)?;
+        let meta = fs::metadata(&abs)?;
+        let file = NoteFile {
+            rel_path: rel.replace('\\', "/"),
+            note_type: self.type_of_rel(rel)?,
+            // list_note_files와 같은 잣대(나노초)여야 캐시가 어긋나지 않는다
+            mtime: meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos() as i64)
+                .unwrap_or(0),
+            size: meta.len() as i64,
+        };
+        self.summary_of(&file)
+            .ok_or_else(|| CoreError::NotFound(rel.to_string()))
+    }
+
     pub fn list_notes(&self) -> Result<Vec<NoteSummary>, CoreError> {
         let files = self.list_note_files()?;
         let mut out: Vec<NoteSummary> =

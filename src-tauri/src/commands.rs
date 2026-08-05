@@ -958,6 +958,14 @@ pub fn list_notes(state: State<'_, AppState>) -> Result<Vec<NoteSummary>, String
     with_ctx(&state, |c| c.vault.list_notes())
 }
 
+/// 노트 한 편의 요약 — 저장 뒤 목록에서 그 줄만 갈아끼울 때.
+/// 자동저장마다 `list_notes`로 전체를 다시 실어 나르지 않으려고 둔다.
+#[tauri::command]
+#[specta::specta]
+pub fn note_summary(state: State<'_, AppState>, rel_path: String) -> Result<NoteSummary, String> {
+    with_ctx(&state, |c| c.vault.note_summary(&rel_path))
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn read_note(state: State<'_, AppState>, rel_path: String) -> Result<NoteContent, String> {

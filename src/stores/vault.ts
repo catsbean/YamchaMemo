@@ -152,6 +152,9 @@ interface VaultStore {
   historyIntervalSecs: number;
   setHistoryPolicy(max: number, intervalSecs: number): Promise<void>;
 
+  /** 방금 저장한 노트 한 편만 목록에 반영한다 (자동저장용).
+   *  제목·날짜가 바뀌어 순서가 달라질 수 있으면 전체를 다시 읽는다. */
+  refreshNote(relPath: string): Promise<void>;
   init(): Promise<void>;
   chooseVault(): Promise<void>;
   /** 감지된 위치 등 base 폴더 아래 YamchaMemo로 바로 시작 */
@@ -265,7 +268,10 @@ export const useVault = create<VaultStore>((set, get) => {
           now.body === cur.body &&
           now.frontmatter === cur.frontmatter;
         if (nothingNewer) set({ dirty: false });
-        await get().refresh();
+        // 바뀐 건 방금 저장한 한 편뿐이다. 예전에는 여기서 refresh()로 vault 전체
+        // 요약을 다시 만들고(2,000편) 점검까지 돌렸는데, 자동저장이 3초마다 도니까
+        // 타이핑하는 내내 그 일이 반복됐다 — 점검은 파일을 캐시 없이 전부 읽는다.
+        await get().refreshNote(cur.rel_path);
         // 같은 노트를 띄운 다른 창이 따라오도록 알린다
         await notifyOtherWindows([cur.rel_path]);
         afterWrite();
@@ -690,6 +696,26 @@ export const useVault = create<VaultStore>((set, get) => {
       });
       // 목록에서 조용히 빠진 파일이 있는지 함께 확인 (실패는 무시)
       await get().refreshIssues();
+    },
+
+    async refreshNote(relPath) {
+      const r = await commands.noteSummary(relPath);
+      if (r.status !== "ok") {
+        // 방금 만든 노트라 아직 목록에 없는 경우 등 — 안전하게 전체를 읽는다
+        await get().refresh();
+        return;
+      }
+      const fresh = r.data;
+      const cur = get().notes;
+      const at = cur.findIndex((n) => n.rel_path === relPath);
+      // 목록에 없거나, 정렬 기준(날짜·제목)이 바뀌었으면 순서가 달라진다 — 전체를 다시 읽는다
+      if (at < 0 || cur[at].date !== fresh.date || cur[at].title !== fresh.title) {
+        await get().refresh();
+        return;
+      }
+      const next = cur.slice();
+      next[at] = fresh;
+      set({ notes: next });
     },
 
     async refreshSchemas() {

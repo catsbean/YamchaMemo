@@ -44,6 +44,18 @@ async listNotes() : Promise<Result<NoteSummary[], string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * 노트 한 편의 요약 — 저장 뒤 목록에서 그 줄만 갈아끼울 때.
+ * 자동저장마다 `list_notes`로 전체를 다시 실어 나르지 않으려고 둔다.
+ */
+async noteSummary(relPath: string) : Promise<Result<NoteSummary, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("note_summary", { relPath }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async readNote(relPath: string) : Promise<Result<NoteContent, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("read_note", { relPath }) };
