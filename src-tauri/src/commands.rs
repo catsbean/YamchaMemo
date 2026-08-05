@@ -537,6 +537,8 @@ pub fn set_vault(
         let live: Vec<String> = files.into_iter().map(|f| f.rel_path).collect();
         let _ = yamcha_core::history::prune_orphans(&vault, &live);
     }
+    // 강제 종료로 남은 `.md.tmp`도 함께 (하루 지난 것만 — 갓 만들어진 건 쓰는 중일 수 있다)
+    let _ = vault.sweep_stale_tmp(Duration::from_secs(24 * 60 * 60));
     let root = vault.root().to_path_buf();
     *guard = Some(Ctx {
         vault,

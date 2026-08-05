@@ -256,6 +256,47 @@ impl Vault {
         Ok(())
     }
 
+    /// 크래시로 남은 `.md.tmp`를 걷는다 → 지운 개수.
+    ///
+    /// `atomic_write`는 정상 경로에서 임시파일을 반드시 치우지만(rename 실패 시에도),
+    /// 그 사이에 프로세스가 강제 종료되면 파일이 남는다. watcher와 목록이 `.md`만 보므로
+    /// 아무도 그 파일을 다시 쳐다보지 않는다 — 계속 쌓이기만 한다.
+    ///
+    /// `max_age`보다 오래된 것만 지운다 — 방금 만들어진 것은 지금 다른 창이 쓰는 중일
+    /// 수 있다. 기준을 인자로 받는 이유는 시계를 건드리지 않고 시험하기 위해서다.
+    pub fn sweep_stale_tmp(&self, max_age: std::time::Duration) -> Result<u32, CoreError> {
+        fn walk(dir: &Path, cutoff: std::time::SystemTime, removed: &mut u32) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, cutoff, removed);
+                    continue;
+                }
+                if !entry.file_name().to_string_lossy().ends_with(".md.tmp") {
+                    continue;
+                }
+                let old = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .map(|t| t < cutoff)
+                    .unwrap_or(false);
+                if old && fs::remove_file(&path).is_ok() {
+                    *removed += 1;
+                }
+            }
+        }
+
+        let cutoff = std::time::SystemTime::now() - max_age;
+        let mut removed = 0;
+        for t in &self.types {
+            walk(&self.root.join(&t.folder), cutoff, &mut removed);
+        }
+        Ok(removed)
+    }
+
     // ---------- 사용자 정의 타입 ----------
 
     /// 사용자 정의 타입 추가. label로 folder를 만들고, id(frontmatter `type` 값)는
@@ -1995,6 +2036,7 @@ fn replace_inline_tag(body: &str, from: &str, to: &str) -> String {
 mod tests {
     use super::*;
     use crate::schema::{FieldDef, FieldKind};
+    use std::time::Duration;
 
     fn vault() -> (tempfile::TempDir, Vault) {
         let dir = tempfile::tempdir().unwrap();
@@ -2122,6 +2164,27 @@ mod tests {
         // 멀쩡한 상대경로는 그대로 통과해야 한다
         assert!(v.abs("Free/메모.md").is_ok());
         assert!(v.abs("Daily/2026/08/2026-08-05.md").is_ok());
+    }
+
+    /// 강제 종료로 남은 임시파일은 걷되, **갓 만들어진 건 건드리지 않는다**
+    /// (지금 다른 창이 저장하는 중일 수 있다)
+    #[test]
+    fn 오래된_임시파일만_걷는다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "메모", json!({})).unwrap();
+        let dir = v.abs(&rel).unwrap().parent().unwrap().to_path_buf();
+
+        let tmp = dir.join("죽은 저장.md.tmp");
+        fs::write(&tmp, "반쯤 쓰인 내용").unwrap();
+
+        // 갓 만들어진 것은 지금 쓰는 중일 수 있으니 건드리지 않는다
+        assert_eq!(v.sweep_stale_tmp(Duration::from_secs(3600)).unwrap(), 0);
+        assert!(tmp.exists(), "지금 쓰는 중일 수 있는 임시파일을 지웠다");
+
+        // 기준을 넘긴 것은 걷는다
+        assert_eq!(v.sweep_stale_tmp(Duration::ZERO).unwrap(), 1);
+        assert!(!tmp.exists(), "오래된 임시파일이 남았다");
+        assert!(v.abs(&rel).unwrap().exists(), "멀쩡한 노트를 건드렸다");
     }
 
     #[test]
