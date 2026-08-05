@@ -15,8 +15,48 @@ use yamcha_core::{
 
 /// 빌드 시 주입된 카카오 키 (build.rs가 환경변수 또는 src-tauri/.env에서 읽어 넘긴다).
 /// 소스에는 키를 두지 않는다 — 주입이 없으면 빈 문자열이고, 앱은 교보 폴백으로 동작한다.
+///
+/// 키는 XOR로 흩어진 채 들어와 여기서 되맞춘다. 이건 잠금이 아니라 속도 방지턱이다
+/// (build.rs의 설명 참조) — 배포 파일에 `strings`를 걸어 키를 긁어가는 자동 수집만
+/// 막는다. 되맞춘 값은 한 번만 만들어 두고 재사용한다.
 fn default_kakao_key() -> &'static str {
-    option_env!("YAMCHA_KAKAO_KEY").unwrap_or("")
+    static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| {
+        let (Some(obf), Some(pad)) = (
+            option_env!("YAMCHA_KAKAO_OBF"),
+            option_env!("YAMCHA_KAKAO_PAD"),
+        ) else {
+            return String::new();
+        };
+        let pad = unhex(pad);
+        if pad.is_empty() {
+            return String::new();
+        }
+        let bytes: Vec<u8> = unhex(obf)
+            .iter()
+            .zip(pad.iter().cycle())
+            .map(|(b, p)| b ^ p)
+            .collect();
+        String::from_utf8(bytes).unwrap_or_default()
+    })
+}
+
+/// 16진 문자열 → 바이트. 짝이 안 맞거나 16진이 아니면 빈 벡터(키 없음으로 동작).
+fn unhex(s: &str) -> Vec<u8> {
+    if !s.len().is_multiple_of(2) {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    for pair in s.as_bytes().chunks(2) {
+        let Ok(text) = std::str::from_utf8(pair) else {
+            return Vec::new();
+        };
+        match u8::from_str_radix(text, 16) {
+            Ok(b) => out.push(b),
+            Err(_) => return Vec::new(),
+        }
+    }
+    out
 }
 
 /// 사용자 키가 비어 있으면 빌드 주입 키를 쓴다. 둘 다 없으면 빈 문자열.
@@ -3232,6 +3272,51 @@ pub async fn check_latest_release() -> Result<ReleaseCheck, String> {
         .to_string();
     let newer = parse_semver(&latest) > parse_semver(&current);
     Ok(ReleaseCheck { current, latest, newer, url })
+}
+
+#[cfg(test)]
+mod kakao_key_tests {
+    use super::{default_kakao_key, effective_key, unhex};
+
+    #[test]
+    fn unhex_rejects_garbage() {
+        assert_eq!(unhex("00ff10"), vec![0x00, 0xff, 0x10]);
+        assert!(unhex("abc").is_empty(), "홀수 길이");
+        assert!(unhex("zz").is_empty(), "16진이 아님");
+    }
+
+    /// **되맞추기가 깨지면 책 검색이 조용히 폴백으로만 돈다.**
+    /// XOR로 흩어 넣은 키가 원래 값으로 돌아오는지 여기서 지킨다.
+    #[test]
+    fn 주입된_키를_원래대로_되맞춘다() {
+        // 키 없이도 빌드된다 (CI). 그때는 빈 문자열이 정답이다.
+        if option_env!("YAMCHA_KAKAO_OBF").is_none() {
+            assert!(default_kakao_key().is_empty());
+            return;
+        }
+        let decoded = default_kakao_key();
+        assert!(!decoded.is_empty(), "주입된 키를 되맞추지 못했다");
+        assert!(
+            decoded.chars().all(|c| c.is_ascii_alphanumeric()),
+            "되맞춘 값이 깨졌다 (패드가 어긋났을 때 나오는 모양)"
+        );
+        // .env로 빌드했다면 그 값과 정확히 같아야 한다
+        if let Ok(env) = std::fs::read_to_string(".env") {
+            if let Some(expected) = env.lines().find_map(|l| {
+                l.trim().strip_prefix("YAMCHA_KAKAO_KEY=").map(str::trim)
+            }) {
+                if !expected.is_empty() {
+                    assert_eq!(decoded, expected, "되맞춘 키가 .env와 다르다");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn 사용자_키가_있으면_그걸_먼저_쓴다() {
+        assert_eq!(effective_key("  내키  "), "내키");
+        assert_eq!(effective_key("   "), default_kakao_key());
+    }
 }
 
 #[cfg(test)]
