@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { FieldDef, FieldKind } from "../bindings";
 import { useVault } from "../stores/vault";
 import Modal from "./Modal";
@@ -32,6 +32,7 @@ const EMPTY_ROW: FieldRow = {
 /** 사용자 정의 분류 생성: 이름 + 추가 frontmatter 필드 + 본문 템플릿 */
 export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
   const addCustomType = useVault((s) => s.addCustomType);
+  const schemas = useVault((s) => s.schemas);
   const [label, setLabel] = useState("");
   const [id, setId] = useState("");
   const [idTouched, setIdTouched] = useState(false);
@@ -39,12 +40,19 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
   const [template, setTemplate] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // 내장 4종 + 이미 만든 커스텀 분류 — 타입 ID로 쓸 수 없는 값들을 미리 보여 준다
+  const takenIds = useMemo(
+    () => schemas.map((s) => s.id).sort((a, b) => a.localeCompare(b)),
+    [schemas],
+  );
+  const idConflict = id.trim() !== "" && takenIds.includes(id.trim());
+
   function setRow(i: number, patch: Partial<FieldRow>) {
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   }
 
   async function submit() {
-    if (busy || !label.trim() || !id.trim()) return;
+    if (busy || !label.trim() || !id.trim() || idConflict) return;
     setBusy(true);
     try {
       const fields: FieldDef[] = rows
@@ -124,7 +132,7 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
             타입 ID (frontmatter type 값) *
           </span>
           <input
-            className={`${inputCls} mt-0.5 w-full`}
+            className={`${inputCls} mt-0.5 w-full ${idConflict ? "border-rose-400" : ""}`}
             placeholder="예: meeting"
             value={id}
             onChange={(e) => {
@@ -132,10 +140,21 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
               setIdTouched(true);
             }}
           />
-          <span className="mt-0.5 block text-2xs text-neutral-400">
-            노트 파일의 frontmatter에 저장되는 값입니다. 공백·슬래시는 쓸 수
-            없습니다.
-          </span>
+          {idConflict ? (
+            <span className="mt-0.5 block text-2xs text-rose-500">
+              이미 쓰고 있는 ID입니다. 다른 값을 정해 주세요.
+            </span>
+          ) : (
+            <span className="mt-0.5 block text-2xs text-neutral-400">
+              노트 파일의 frontmatter에 저장되는 값입니다. 공백·슬래시는 쓸 수
+              없습니다.
+            </span>
+          )}
+          {takenIds.length > 0 && (
+            <span className="mt-0.5 block text-2xs text-neutral-400">
+              이미 쓰는 ID: {takenIds.join(", ")}
+            </span>
+          )}
         </label>
 
         <div className="mb-3">
@@ -223,7 +242,7 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
           </button>
           <button
             className="rounded bg-neutral-800 px-4 py-1.5 text-sm text-white hover:bg-neutral-600 disabled:opacity-50"
-            disabled={busy || !label.trim() || !id.trim()}
+            disabled={busy || !label.trim() || !id.trim() || idConflict}
             onClick={submit}
           >
             만들기
