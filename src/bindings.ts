@@ -566,6 +566,18 @@ async autoTitleNote(relPath: string) : Promise<Result<string, string>> {
 }
 },
 /**
+ * GitHub 릴리스에서 최신 버전을 확인한다. 자동 설치는 하지 않고,
+ * 새 버전이 있으면 안내 문구와 릴리스 페이지 링크만 돌려준다.
+ */
+async checkLatestRelease() : Promise<Result<ReleaseCheck, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("check_latest_release") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * vault에서 규격에 어긋난 노트를 찾는다 (고치지는 않는다)
  */
 async auditVault() : Promise<Result<NoteIssue[], string>> {
@@ -1246,6 +1258,10 @@ tags: string[];
  * 표지 rel 경로 (없으면 빈 문자열)
  */
 cover: string; kind_label: string; date: string; text: string }
+/**
+ * 버전 확인 결과 — 자동 설치는 하지 않고 안내만 한다.
+ */
+export type ReleaseCheck = { current: string; latest: string; newer: boolean; url: string }
 export type ScrapedArticle = { title: string; body_md: string; 
 /**
  * 어느 갈래로 얻었는지 — 화면에 작게 보여 주면 "왜 짧지"를 사용자가 스스로 안다

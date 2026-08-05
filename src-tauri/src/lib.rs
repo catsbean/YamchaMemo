@@ -62,6 +62,7 @@ pub fn run() {
         commands::get_title_template,
         commands::set_title_template,
         commands::auto_title_note,
+        commands::check_latest_release,
         commands::audit_vault,
         commands::fix_issue,
         commands::read_raw,
