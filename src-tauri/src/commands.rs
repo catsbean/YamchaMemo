@@ -584,10 +584,13 @@ pub fn get_schemas(state: State<'_, AppState>) -> Vec<TypeDef> {
 pub fn add_custom_type(
     state: State<'_, AppState>,
     label: String,
+    id: String,
     fields: Vec<FieldDef>,
     template: String,
 ) -> Result<TypeDef, String> {
-    with_ctx_write(&state, |c| c.vault.add_custom_type(&label, fields, &template))
+    with_ctx_write(&state, |c| {
+        c.vault.add_custom_type(&label, &id, fields, &template)
+    })
 }
 
 /// 사용자 정의 분류의 본문 템플릿 수정 (생성 후에도 언제든 변경 가능)

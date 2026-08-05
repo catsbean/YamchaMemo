@@ -701,9 +701,9 @@ async purgeTrash(retentionDays: number) : Promise<Result<number, string>> {
 /**
  * 사용자 정의 분류 추가
  */
-async addCustomType(label: string, fields: FieldDef[], template: string) : Promise<Result<TypeDef, string>> {
+async addCustomType(label: string, id: string, fields: FieldDef[], template: string) : Promise<Result<TypeDef, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("add_custom_type", { label, fields, template }) };
+    return { status: "ok", data: await TAURI_INVOKE("add_custom_type", { label, id, fields, template }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

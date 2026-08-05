@@ -265,7 +265,7 @@ mod tests {
         let vdir = tempfile::tempdir().unwrap();
         let mdir = tempfile::tempdir().unwrap();
         let mut v = Vault::open(vdir.path()).unwrap();
-        v.add_custom_type("회의록", vec![], "").unwrap();
+        v.add_custom_type("회의록", "회의록", vec![], "").unwrap();
         v.save_pasted_image(b"img", "png").unwrap();
 
         sync_to(&MirrorSource::of(&v), mdir.path()).unwrap();

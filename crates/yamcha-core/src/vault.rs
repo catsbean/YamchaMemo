@@ -258,10 +258,12 @@ impl Vault {
 
     // ---------- 사용자 정의 타입 ----------
 
-    /// 사용자 정의 타입 추가. label로 id/folder를 만들고 `_types.json`에 저장한다.
+    /// 사용자 정의 타입 추가. label로 folder를 만들고, id(frontmatter `type` 값)는
+    /// 사용자가 직접 정한 값을 그대로 쓴다. `_types.json`에 저장한다.
     pub fn add_custom_type(
         &mut self,
         label: &str,
+        id: &str,
         fields: Vec<crate::schema::FieldDef>,
         template: &str,
     ) -> Result<TypeDef, CoreError> {
@@ -269,15 +271,23 @@ impl Vault {
         if label.is_empty() {
             return Err(CoreError::Invalid("분류 이름을 입력하세요".into()));
         }
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(CoreError::Invalid("타입 ID를 입력하세요".into()));
+        }
+        if id.chars().any(|c| c.is_whitespace() || c == '/' || c == '\\') {
+            return Err(CoreError::Invalid(
+                "타입 ID에는 공백이나 슬래시를 쓸 수 없습니다".into(),
+            ));
+        }
         let folder = Self::sanitize_filename(label);
-        let id = folder.clone();
         if self
             .types
             .iter()
             .any(|t| t.id == id || t.folder == folder || t.label == label)
         {
             return Err(CoreError::Invalid(format!(
-                "이미 존재하는 분류입니다: {label}"
+                "이미 존재하는 분류이거나 타입 ID입니다: {label}"
             )));
         }
         // 공통 필드(date/tags)를 앞에 보장
@@ -291,7 +301,7 @@ impl Vault {
             }
         }
         let def = TypeDef {
-            id,
+            id: id.to_string(),
             label: label.to_string(),
             folder,
             fields: all_fields,
@@ -2475,40 +2485,42 @@ mod tests {
             let def = v
                 .add_custom_type(
                     "회의록",
+                    "meeting",
                     vec![FieldDef::new("attendees", "참석자", FieldKind::Text, true)],
                     "## 안건\n\n## 결정사항\n",
                 )
                 .unwrap();
-            assert_eq!(def.id, "회의록");
+            assert_eq!(def.id, "meeting");
             assert!(v.root().join("회의록").is_dir());
             // 공통 필드 + 커스텀 필드
             assert!(def.fields.iter().any(|f| f.name == "date"));
             assert!(def.fields.iter().any(|f| f.name == "attendees"));
 
             let rel = v
-                .create_note("회의록", "주간 회의", serde_json::json!({"attendees": "SG"}))
+                .create_note("meeting", "주간 회의", serde_json::json!({"attendees": "SG"}))
                 .unwrap();
             assert_eq!(rel, "회의록/주간 회의.md");
             let note = v.read_note(&rel).unwrap();
-            assert_eq!(note.note_type, "회의록");
+            assert_eq!(note.note_type, "meeting");
             assert!(note.body.contains("## 안건"));
             assert_eq!(note.frontmatter["attendees"], "SG");
 
-            // 중복 방지
-            assert!(v.add_custom_type("회의록", vec![], "").is_err());
+            // 중복 방지 (라벨·ID 둘 다 검사)
+            assert!(v.add_custom_type("회의록", "meeting2", vec![], "").is_err());
+            assert!(v.add_custom_type("다른 이름", "meeting", vec![], "").is_err());
         }
         // 재오픈 시 커스텀 타입 유지
         {
             let v = Vault::open(dir.path()).unwrap();
-            assert!(v.def_by_id("회의록").is_some());
+            assert!(v.def_by_id("meeting").is_some());
             let notes = v.list_notes().unwrap();
-            assert!(notes.iter().any(|n| n.note_type == "회의록"));
+            assert!(notes.iter().any(|n| n.note_type == "meeting"));
         }
         // 제거 시 정의가 사라지고 노트는 자유노트로 이동
         {
             let mut v = Vault::open(dir.path()).unwrap();
-            v.remove_custom_type("회의록").unwrap();
-            assert!(v.def_by_id("회의록").is_none());
+            v.remove_custom_type("meeting").unwrap();
+            assert!(v.def_by_id("meeting").is_none());
             assert!(dir.path().join("Free/주간 회의.md").exists());
         }
     }
@@ -2635,7 +2647,7 @@ mod tests {
     fn update_custom_type_template_applies_to_new_notes_only() {
         let dir = tempfile::tempdir().unwrap();
         let mut v = Vault::open(dir.path()).unwrap();
-        v.add_custom_type("회의록", vec![], "## 안건\n").unwrap();
+        v.add_custom_type("회의록", "회의록", vec![], "## 안건\n").unwrap();
 
         let before = v.create_note("회의록", "첫 회의", serde_json::json!({})).unwrap();
         assert!(v.read_note(&before).unwrap().body.contains("## 안건"));
@@ -2664,7 +2676,7 @@ mod tests {
     fn remove_custom_type_moves_notes_to_free() {
         let dir = tempfile::tempdir().unwrap();
         let mut v = Vault::open(dir.path()).unwrap();
-        v.add_custom_type("회의록", vec![], "").unwrap();
+        v.add_custom_type("회의록", "회의록", vec![], "").unwrap();
         let rel = v
             .create_note("회의록", "주간 회의", serde_json::json!({}))
             .unwrap();

@@ -178,6 +178,7 @@ interface VaultStore {
   openByTitle(title: string): Promise<void>;
   addCustomType(
     label: string,
+    id: string,
     fields: FieldDef[],
     template: string,
   ): Promise<boolean>;
@@ -857,9 +858,9 @@ export const useVault = create<VaultStore>((set, get) => {
       }
     },
 
-    async addCustomType(label, fields, template) {
+    async addCustomType(label, id, fields, template) {
       const ok = await guard(async () => {
-        unwrap(await commands.addCustomType(label, fields, template));
+        unwrap(await commands.addCustomType(label, id, fields, template));
         await get().refreshSchemas();
         return true;
       });

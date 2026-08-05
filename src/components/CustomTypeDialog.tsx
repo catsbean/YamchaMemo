@@ -33,6 +33,8 @@ const EMPTY_ROW: FieldRow = {
 export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
   const addCustomType = useVault((s) => s.addCustomType);
   const [label, setLabel] = useState("");
+  const [id, setId] = useState("");
+  const [idTouched, setIdTouched] = useState(false);
   const [rows, setRows] = useState<FieldRow[]>([{ ...EMPTY_ROW }]);
   const [template, setTemplate] = useState("");
   const [busy, setBusy] = useState(false);
@@ -42,7 +44,7 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
   }
 
   async function submit() {
-    if (busy || !label.trim()) return;
+    if (busy || !label.trim() || !id.trim()) return;
     setBusy(true);
     try {
       const fields: FieldDef[] = rows
@@ -61,7 +63,7 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
             option_labels: options,
           };
         });
-      const ok = await addCustomType(label.trim(), fields, template);
+      const ok = await addCustomType(label.trim(), id.trim(), fields, template);
       if (ok) onClose();
     } finally {
       setBusy(false);
@@ -92,8 +94,8 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
               오늘 날짜로 자동 입력)
             </li>
             <li>
-              <code className="text-neutral-700">type</code> — 분류 이름 (자동
-              입력, 수정 불가)
+              <code className="text-neutral-700">type</code> — 아래 "타입 ID"로
+              직접 정한 값
             </li>
             <li>
               <code className="text-neutral-700">tags</code> — 태그 목록 (빈
@@ -109,8 +111,31 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
             className={`${inputCls} mt-0.5 w-full`}
             placeholder="예: 회의록, 여행기록, 레시피"
             value={label}
-            onChange={(e) => setLabel(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setLabel(v);
+              if (!idTouched) setId(v);
+            }}
           />
+        </label>
+
+        <label className="mb-3 block">
+          <span className="text-xs font-medium text-neutral-500">
+            타입 ID (frontmatter type 값) *
+          </span>
+          <input
+            className={`${inputCls} mt-0.5 w-full`}
+            placeholder="예: meeting"
+            value={id}
+            onChange={(e) => {
+              setId(e.target.value);
+              setIdTouched(true);
+            }}
+          />
+          <span className="mt-0.5 block text-2xs text-neutral-400">
+            노트 파일의 frontmatter에 저장되는 값입니다. 공백·슬래시는 쓸 수
+            없습니다.
+          </span>
         </label>
 
         <div className="mb-3">
@@ -198,7 +223,7 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
           </button>
           <button
             className="rounded bg-neutral-800 px-4 py-1.5 text-sm text-white hover:bg-neutral-600 disabled:opacity-50"
-            disabled={busy || !label.trim()}
+            disabled={busy || !label.trim() || !id.trim()}
             onClick={submit}
           >
             만들기
