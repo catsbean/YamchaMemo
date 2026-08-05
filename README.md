@@ -1,5 +1,7 @@
 # YamchaMemo
 
+[![최신 릴리스 다운로드](https://img.shields.io/github/v/release/catsbean/YamchaMemo?label=%EC%B5%9C%EC%8B%A0%20%EB%A6%B4%EB%A6%AC%EC%A6%88%20%EB%8B%A4%EC%9A%B4%EB%A1%9C%EB%93%9C&style=for-the-badge)](https://github.com/catsbean/YamchaMemo/releases/latest)
+
 마크다운 기반 독서·글쓰기 메모 데스크톱 앱. Windows/macOS.
 
 모든 메모는 평범한 `.md` 파일로 저장됩니다. 앱이 사라져도 파일은 남고, 다른 편집기로 열어도 됩니다. 클라우드 동기화 폴더(OneDrive·iCloud·Dropbox 등)를 저장 위치로 잡으면 기기 사이에서 그대로 이어집니다.
