@@ -16,40 +16,34 @@ pub fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
     let Some(rest) = rest.strip_prefix("\r\n").or_else(|| rest.strip_prefix('\n')) else {
         return (None, content);
     };
-    // 종료 구분자: 줄 시작의 "---"
-    for (idx, line_start) in close_delim_candidates(rest) {
-        let _ = line_start;
-        let yaml = &rest[..idx];
-        let after = &rest[idx..];
-        let after = after
-            .strip_prefix("---")
-            .expect("candidate starts with ---");
-        let body = after
-            .strip_prefix("\r\n")
-            .or_else(|| after.strip_prefix('\n'))
-            .unwrap_or(after);
-        return (Some(yaml), body);
-    }
-    (None, content)
+    // 종료 구분자가 없으면 frontmatter로 치지 않는다 (파일 전체가 본문)
+    let Some(idx) = close_delim_offset(rest) else {
+        return (None, content);
+    };
+    let yaml = &rest[..idx];
+    let after = rest[idx..]
+        .strip_prefix("---")
+        .expect("close_delim_offset은 --- 자리를 가리킨다");
+    let body = after
+        .strip_prefix("\r\n")
+        .or_else(|| after.strip_prefix('\n'))
+        .unwrap_or(after);
+    (Some(yaml), body)
 }
 
-/// rest 안에서 줄 시작 위치의 "---" 오프셋을 찾는다 (첫 번째 것만 사용).
-fn close_delim_candidates(rest: &str) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
+/// 줄 시작에 홀로 있는 `---`의 첫 오프셋. 없으면 None.
+///
+/// `split_inclusive`라서 마지막 줄에 개행이 없어도(파일이 `---`로 끝나는 경우)
+/// 한 조각으로 들어온다 — 따로 챙길 필요가 없다.
+fn close_delim_offset(rest: &str) -> Option<usize> {
     let mut offset = 0usize;
     for line in rest.split_inclusive('\n') {
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if trimmed == "---" {
-            out.push((offset, offset));
-            break;
+        if line.trim_end_matches(['\r', '\n']) == "---" {
+            return Some(offset);
         }
         offset += line.len();
     }
-    // 파일이 개행 없이 "---"로 끝나는 경우
-    if out.is_empty() && rest.ends_with("\n---") {
-        out.push((rest.len() - 3, rest.len() - 3));
-    }
-    out
+    None
 }
 
 /// YAML frontmatter 문자열 → JSON 오브젝트 (키 순서 보존)
@@ -163,6 +157,15 @@ mod tests {
         let (fm, body) = split_frontmatter("---\r\ndate: 2026-07-18\r\n---\r\n본문");
         assert_eq!(fm, Some("date: 2026-07-18\r\n"));
         assert_eq!(body, "본문");
+    }
+
+    /// 파일이 개행 없이 `---`로 끝나면 본문은 비어 있다
+    /// (예전에는 이 경우를 따로 챙기는 갈래가 있었다 — split_inclusive가 이미 준다)
+    #[test]
+    fn split_ends_without_newline() {
+        let (fm, body) = split_frontmatter("---\ndate: 2026-07-18\n---");
+        assert_eq!(fm, Some("date: 2026-07-18\n"));
+        assert_eq!(body, "");
     }
 
     #[test]

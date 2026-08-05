@@ -1716,7 +1716,7 @@ pub fn daily_digest(state: State<'_, AppState>, date: String) -> Result<DailyDig
             }
         }
 
-        d.today_entries.sort_by(|a, b| b.count.cmp(&a.count));
+        d.today_entries.sort_by_key(|e| std::cmp::Reverse(e.count));
         Ok(d)
     })
 }

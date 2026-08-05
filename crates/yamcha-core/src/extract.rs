@@ -48,7 +48,9 @@ impl Status {
         }
     }
 
-    pub fn from_str(s: &str) -> Status {
+    /// `as_str`의 짝 — 캐시 컬럼에 든 짧은 이름을 되읽는다.
+    /// (`FromStr` 트레이트가 아니라 이름을 `from_code`로 둔다 — 실패가 없다)
+    pub fn from_code(s: &str) -> Status {
         match s {
             "ok" => Status::Ok,
             "empty" => Status::Empty,
@@ -899,10 +901,10 @@ mod tests {
             Status::TooBig,
             Status::Unsupported,
         ] {
-            assert_eq!(Status::from_str(s.as_str()), s);
+            assert_eq!(Status::from_code(s.as_str()), s);
         }
         assert!(matches!(
-            Status::from_str(Status::Failed("무엇이든".into()).as_str()),
+            Status::from_code(Status::Failed("무엇이든".into()).as_str()),
             Status::Failed(_)
         ));
     }

@@ -1973,6 +1973,24 @@ impl Vault {
     }
 }
 
+/// 본문의 인라인 `#from`을 `#to`로 바꾼다.
+/// `#클린` 을 바꿀 때 `#클린코드` 가 함께 바뀌지 않도록 뒤 글자까지 확인한다.
+fn replace_inline_tag(body: &str, from: &str, to: &str) -> String {
+    // `(?m)`이 있어야 `$`가 줄 끝을 가리킨다 — 태그는 보통 줄 끝에 있다.
+    // regex 크레이트에는 look-around가 없어서 뒤 글자를 잡아 두고 그대로 되돌려 붙인다.
+    let pattern = format!(
+        r"(?m)(^|\s)#{}([^\p{{L}}\p{{N}}/_-]|$)",
+        regex::escape(from)
+    );
+    match regex::Regex::new(&pattern) {
+        Ok(re) => re
+            .replace_all(body, format!("${{1}}#{to}${{2}}").as_str())
+            .into_owned(),
+        Err(_) => body.to_string(),
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2868,21 +2886,4 @@ mod tests {
         assert_eq!(v.rename_tag("", "나").unwrap().len(), 0);
     }
 
-}
-
-/// 본문의 인라인 `#from`을 `#to`로 바꾼다.
-/// `#클린` 을 바꿀 때 `#클린코드` 가 함께 바뀌지 않도록 뒤 글자까지 확인한다.
-fn replace_inline_tag(body: &str, from: &str, to: &str) -> String {
-    // `(?m)`이 있어야 `$`가 줄 끝을 가리킨다 — 태그는 보통 줄 끝에 있다.
-    // regex 크레이트에는 look-around가 없어서 뒤 글자를 잡아 두고 그대로 되돌려 붙인다.
-    let pattern = format!(
-        r"(?m)(^|\s)#{}([^\p{{L}}\p{{N}}/_-]|$)",
-        regex::escape(from)
-    );
-    match regex::Regex::new(&pattern) {
-        Ok(re) => re
-            .replace_all(body, format!("${{1}}#{to}${{2}}").as_str())
-            .into_owned(),
-        Err(_) => body.to_string(),
-    }
 }

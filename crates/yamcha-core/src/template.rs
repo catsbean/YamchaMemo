@@ -469,13 +469,12 @@ fn parse_todo_line(line: &str) -> Option<(bool, String)> {
         .or_else(|| t.strip_prefix("* "))
         .or_else(|| t.strip_prefix("+ "))?;
     let rest = rest.trim_start();
-    let (done, body) = if let Some(b) = rest.strip_prefix("[ ]") {
-        (false, b)
-    } else if let Some(b) = rest.strip_prefix("[x]").or_else(|| rest.strip_prefix("[X]")) {
-        (true, b)
-    } else {
-        return None;
-    };
+    let unchecked = rest.strip_prefix("[ ]").map(|b| (false, b));
+    let checked = rest
+        .strip_prefix("[x]")
+        .or_else(|| rest.strip_prefix("[X]"))
+        .map(|b| (true, b));
+    let (done, body) = unchecked.or(checked)?;
     let text = body.trim();
     if text.is_empty() {
         None

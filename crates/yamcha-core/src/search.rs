@@ -654,7 +654,7 @@ fn find_ci(hay: &str, needle: &str) -> Option<usize> {
         if h[i..i + n.len()]
             .iter()
             .zip(n)
-            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
             && hay.is_char_boundary(i)
         {
             return Some(i);

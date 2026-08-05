@@ -168,14 +168,12 @@ pub fn build<A: IndexAccess>(
     mut progress: impl FnMut(FileIndexProgress),
 ) -> Result<FileIndexStatus, CoreError> {
     let total = rels.len() as u32;
-    let mut done = 0u32;
-    for rel in rels {
+    for (i, rel) in rels.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        done += 1;
         progress(FileIndexProgress {
-            done,
+            done: i as u32 + 1,
             total,
             current: file_name(rel),
         });
@@ -455,7 +453,6 @@ mod tests {
             search: std::cell::RefCell::new(&mut s),
         };
         build(&root, &one, &b, Arc::new(AtomicBool::new(false)), |_| {}).unwrap();
-        drop(b);
 
         assert_eq!(
             i.all_docs().unwrap().len(),
