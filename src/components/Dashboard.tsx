@@ -49,9 +49,10 @@ function hostOf(url: string): string {
   }
 }
 
-/** 제목을 미리 받지 않고 바로 만들어도 되는 타입.
- *  정보·자유노트는 생성 폼에 받을 게 사실상 없어서, 편집기에서 바로 쓰기 시작하는 편이 빠르다. */
-const QUICK_CREATE = new Set(["free", "info"]);
+/** 제목을 미리 받지 않고 바로 만들어도 되는 내장 타입.
+ *  자유노트는 생성 폼에 받을 게 사실상 없어서, 편집기에서 바로 쓰기 시작하는 편이 빠르다.
+ *  사용자 정의 타입도 마찬가지로 바로 시작한다 (아래 quickCreate 판정). */
+const QUICK_CREATE = new Set(["free"]);
 
 function ListDashboard({ noteType }: { noteType: string }) {
   const { schemas, notes, current, openNote, openToday, createUntitled } =
@@ -63,6 +64,8 @@ function ListDashboard({ noteType }: { noteType: string }) {
   useCreateRequest(() => setCreating(true));
   const ctx = useContextMenu();
   const schema = schemas.find((s) => s.id === noteType);
+  // 사용자 정의 분류는 채울 필드를 스스로 정한 것이므로, 생성 폼 없이 바로 편집기로 시작한다
+  const quickCreate = QUICK_CREATE.has(noteType) || (schema != null && !schema.builtin);
 
   const all = useMemo(
     () => notes.filter((n) => n.note_type === noteType),
@@ -114,7 +117,7 @@ function ListDashboard({ noteType }: { noteType: string }) {
           className="rounded bg-neutral-800 px-3 py-1.5 text-sm text-white hover:bg-neutral-600"
           onClick={() => {
             if (noteType === "daily") openToday();
-            else if (QUICK_CREATE.has(noteType)) createUntitled(noteType);
+            else if (quickCreate) createUntitled(noteType);
             else setCreating(true);
           }}
         >
