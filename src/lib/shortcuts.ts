@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useVault } from "../stores/vault";
 
 /** 맥에서는 ⌘, 그 밖에서는 Ctrl을 "주 수정키(mod)"로 쓴다 */
@@ -148,6 +148,57 @@ export function useShortcut(
     // handler는 매 렌더 새로 만들어지지만 다시 걸 필요가 없다 —
     // ref 없이도 최신 클로저가 잡히도록 의존성에 넣는다.
   }, [id, active, handler]);
+}
+
+/** Ctrl(⌘)만 누르고 있으면 잠시 뒤 true — 단축키 목록 팝업을 띄우는 데 쓴다.
+ *
+ *  다른 키와 조합해 누르면(=목록을 보려는 게 아니라 단축키를 실제로 쓰려는 것)
+ *  바로 꺼진다. 포커스를 잃어도(창 전환 등) keyup을 못 받을 수 있어 blur에서도 끈다. */
+export function useModKeyHeld(delay = 450) {
+  const [held, setHeld] = useState(false);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let down = false;
+
+    function isModKey(e: KeyboardEvent) {
+      return IS_MAC ? e.key === "Meta" : e.key === "Control";
+    }
+
+    function reset() {
+      down = false;
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      setHeld(false);
+    }
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.isComposing) return;
+      if (isModKey(e)) {
+        if (down) return; // 키 반복 이벤트
+        down = true;
+        timer = setTimeout(() => setHeld(true), delay);
+        return;
+      }
+      if (down) reset(); // 조합 키를 눌렀다 = 지금은 실행이지 열람이 아니다
+    }
+
+    function onKeyUp(e: KeyboardEvent) {
+      if (isModKey(e)) reset();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", reset);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", reset);
+      if (timer) clearTimeout(timer);
+    };
+  }, [delay]);
+
+  return held;
 }
 
 /** "새 노트" 요청을 받는다 (대시보드가 자기 만들기 창을 연다).

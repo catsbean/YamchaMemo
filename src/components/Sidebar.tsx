@@ -3,6 +3,7 @@ import { useVault } from "../stores/vault";
 import { openTrashWindow } from "../lib/trashWindow";
 import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
 import CustomTypeDialog from "./CustomTypeDialog";
+import ShortcutHint from "./ShortcutHint";
 
 const BUILTIN_ICONS: Record<string, string> = {
   book: "📚",
@@ -87,7 +88,7 @@ export default function Sidebar({
   }
 
   return (
-    <aside className="flex h-full w-52 shrink-0 flex-col border-r border-neutral-200 bg-neutral-100">
+    <aside className="relative flex h-full w-52 shrink-0 flex-col border-r border-neutral-200 bg-neutral-100">
       <div className="flex items-center justify-between px-3 py-3">
         <span className="text-sm font-bold">YamchaMemo</span>
         <button
@@ -176,6 +177,8 @@ export default function Sidebar({
       </div>
 
       {addingType && <CustomTypeDialog onClose={() => setAddingType(false)} />}
+
+      <ShortcutHint />
     </aside>
   );
 }
