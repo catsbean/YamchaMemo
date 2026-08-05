@@ -23,6 +23,27 @@ describe("한 줄 서식", () => {
     expect(inlineToHtml("![](img/a.png)")).toBe('<img src="img/a.png" alt="">');
   });
 
+  it("누르면 스크립트가 도는 주소는 링크로 만들지 않는다", () => {
+    // 내보낸 HTML은 브라우저에서 열리고, 본문에는 스크랩해 온 글이 섞일 수 있다
+    for (const bad of [
+      "[클릭](javascript:alert(1))",
+      "[클릭](JavaScript:alert(1))",
+      "[클릭](  javascript:alert(1))",
+      "[클릭](vbscript:msgbox)",
+      "[클릭](data:text/html,<script>alert(1)</script>)",
+    ]) {
+      expect(inlineToHtml(bad)).not.toContain("<a href");
+    }
+    expect(inlineToHtml("![](javascript:alert(1))")).not.toContain("<img");
+    // 멀쩡한 주소는 그대로 링크가 된다
+    expect(inlineToHtml("[메일](mailto:a@b.c)")).toBe(
+      '<a href="mailto:a@b.c">메일</a>',
+    );
+    expect(inlineToHtml("![](_attachments/a.png)")).toBe(
+      '<img src="_attachments/a.png" alt="">',
+    );
+  });
+
   it("위키링크는 표시명만 남긴다 (내보낸 파일은 혼자 다닌다)", () => {
     expect(inlineToHtml("[[클린 코드]]")).toBe('<span class="wl">클린 코드</span>');
     expect(inlineToHtml("[[클린 코드#3장|그 책]]")).toBe(

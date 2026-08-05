@@ -15,6 +15,21 @@ const ESC: Record<string, string> = {
 };
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ESC[c]);
 
+/** `<a href>`·`<img src>`에 넣어도 되는 주소인가.
+ *
+ *  내보낸 HTML은 브라우저에서 열리고, 본문에는 웹에서 스크랩해 온 글이 섞일 수 있다.
+ *  `[클릭](javascript:...)`이 그대로 링크가 되면 그걸 누르는 순간 스크립트가 돈다.
+ *  그래서 **허용 목록**으로 간다 — 스킴이 없는 상대 경로(첨부 이미지)는 통과시키고,
+ *  스킴이 있으면 아는 것만 통과시킨다. `data:`도 막는다(data:text/html이 같은 문제다). */
+const SAFE_SCHEME = /^(https?|mailto|tel):/i;
+function safeUrl(url: string): string | null {
+  const trimmed = url.trim();
+  // 스킴처럼 보이는 앞부분이 있는가 (`javascript:`, `vbscript:`, `data:` …)
+  const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed);
+  if (hasScheme && !SAFE_SCHEME.test(trimmed)) return null;
+  return trimmed;
+}
+
 /** 한 줄 안의 서식. 코드(`)를 먼저 떼어 그 안은 건드리지 않는다. */
 export function inlineToHtml(text: string): string {
   const codes: string[] = [];
@@ -25,14 +40,15 @@ export function inlineToHtml(text: string): string {
 
   s = esc(s);
   // 이미지가 링크보다 먼저 (![]() 가 []() 에 먹히지 않게)
-  s = s.replace(
-    /!\[([^\]]*)\]\(([^)]+)\)/g,
-    (_, alt: string, src: string) => `<img src="${src}" alt="${alt}">`,
-  );
-  s = s.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    (_, label: string, href: string) => `<a href="${href}">${label}</a>`,
-  );
+  s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (whole, alt: string, src: string) => {
+    const safe = safeUrl(src);
+    return safe === null ? whole : `<img src="${safe}" alt="${alt}">`;
+  });
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (whole, label: string, href: string) => {
+    // 거른 주소는 링크로 만들지 않고 쓴 그대로 둔다 — 조용히 지우면 뭐가 있었는지 모른다
+    const safe = safeUrl(href);
+    return safe === null ? whole : `<a href="${safe}">${label}</a>`;
+  });
   // 위키링크는 링크할 곳이 없으니 표시명만 남긴다 (내보낸 파일은 혼자 다닌다)
   s = s.replace(
     /\[\[([^[\]|#]+)(?:#[^[\]|]*)?(?:\|([^[\]]*))?\]\]/g,
