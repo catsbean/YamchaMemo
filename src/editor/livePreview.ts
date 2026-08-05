@@ -12,15 +12,15 @@ import {
   MatchDecorator,
   WidgetType,
 } from "@codemirror/view";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { useVault } from "../stores/vault";
+import { vaultAssetSrc } from "../lib/note";
 
 /** 이미지 경로 해석: http는 그대로, vault 상대 경로는 asset 프로토콜 */
 function resolveImageSrc(url: string): string {
   if (/^https?:\/\//i.test(url)) return url;
   const vault = useVault.getState().vaultPath;
   if (!vault) return url;
-  return convertFileSrc(`${vault}\\${decodeURI(url).replace(/\//g, "\\")}`);
+  return vaultAssetSrc(vault, decodeURI(url));
 }
 
 class ImageWidget extends WidgetType {

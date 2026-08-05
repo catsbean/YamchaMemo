@@ -1,5 +1,16 @@
 // 노트/책 공통 유틸 — 여러 컴포넌트에 흩어져 있던 중복 로직을 모았다.
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { sep } from "@tauri-apps/api/path";
+
+/** vault 루트 + vault 상대경로 → `<img src>`로 쓸 asset URL.
+ *
+ *  구분자는 **플랫폼에서 받아 온다**. 예전에는 `\`를 박아 뒀는데, Mac에서는 그게
+ *  경로 구분이 아니라 파일 이름에 든 글자라서 `/Users/me/vault\_attachments\...`
+ *  같은 없는 파일을 가리켰다 — 표지와 본문 이미지가 통째로 안 보였다. */
+export function vaultAssetSrc(vaultPath: string, rel: string): string {
+  const s = sep();
+  return convertFileSrc(`${vaultPath}${s}${rel.replace(/[\\/]/g, s)}`);
+}
 
 /** 책 상태 코드 → 한국어 라벨 */
 export const BOOK_STATUS_LABELS: Record<string, string> = {
@@ -44,5 +55,5 @@ export function coverSrc(vaultPath: string | null, cover: string): string {
   if (!cover) return "";
   if (/^https?:\/\//i.test(cover)) return cover;
   if (!vaultPath) return "";
-  return convertFileSrc(`${vaultPath}\\${cover.replace(/\//g, "\\")}`);
+  return vaultAssetSrc(vaultPath, cover);
 }
