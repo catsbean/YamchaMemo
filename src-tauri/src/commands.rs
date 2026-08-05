@@ -617,6 +617,22 @@ pub fn remove_custom_type(state: State<'_, AppState>, id: String) -> Result<(), 
     })
 }
 
+/// 노트를 다른 분류로 이동 (파일을 새 분류 폴더로 옮기고 type을 갱신) → 새 rel 경로
+#[tauri::command]
+#[specta::specta]
+pub fn move_note(
+    state: State<'_, AppState>,
+    rel_path: String,
+    new_type_id: String,
+) -> Result<String, String> {
+    with_ctx_write(&state, |c| {
+        let new_rel = c.vault.move_note(&rel_path, &new_type_id)?;
+        // 폴더·타입이 바뀌므로 전체 재색인
+        yamcha_core::reindex_all(&c.vault, &mut c.indexer, &mut c.search)?;
+        Ok(new_rel)
+    })
+}
+
 /// 노트 제목 변경 (파일명 + 링크 연쇄 수정, 책이면 독서기록도 연동) → 새 rel 경로
 #[tauri::command]
 #[specta::specta]

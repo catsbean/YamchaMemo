@@ -743,6 +743,17 @@ async renameNote(relPath: string, newTitle: string) : Promise<Result<string, str
 }
 },
 /**
+ * 노트를 다른 분류로 이동 (파일을 새 분류 폴더로 옮기고 type을 갱신) → 새 rel 경로
+ */
+async moveNote(relPath: string, newTypeId: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("move_note", { relPath, newTypeId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * frontmatter 일부 필드만 갱신 (목록 뷰 인라인 편집용)
  */
 async updateFrontmatter(relPath: string, patch: JsonValue) : Promise<Result<null, string>> {

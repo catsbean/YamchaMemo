@@ -78,6 +78,7 @@ pub fn run() {
         commands::update_custom_type_template,
         commands::remove_custom_type,
         commands::rename_note,
+        commands::move_note,
         commands::update_frontmatter,
         commands::attach_cover,
         commands::attach_cover_pasted,

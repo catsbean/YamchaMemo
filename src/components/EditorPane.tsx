@@ -19,6 +19,7 @@ import { DAILY_KINDS } from "../lib/callouts";
 import DailyDateNav from "./DailyDateNav";
 import ScrapModal from "./ScrapModal";
 import DeleteButton from "./DeleteButton";
+import MoveNoteButton from "./MoveNoteButton";
 import ExportNoteButton from "./ExportNoteButton";
 import { notifyOtherWindows } from "../lib/windowSync";
 import DailyDigestBar from "./DailyDigestBar";
@@ -43,6 +44,7 @@ export default function EditorPane() {
     closeNote,
     refresh,
     renameCurrent,
+    moveCurrent,
     externalChanged,
     reloadCurrent,
     dismissExternalChange,
@@ -300,6 +302,11 @@ export default function EditorPane() {
           </button>
           <ExportNoteButton note={current} />
           <HistoryButton relPath={current.rel_path} />
+          <MoveNoteButton
+            schemas={schemas}
+            currentTypeId={current.note_type}
+            onMove={moveCurrent}
+          />
           <button
             className="rounded bg-neutral-800 px-3 py-1 text-xs text-white hover:bg-neutral-600 disabled:opacity-40"
             disabled={!dirty}

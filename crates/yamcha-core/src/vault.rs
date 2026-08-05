@@ -374,6 +374,51 @@ impl Vault {
         Ok(())
     }
 
+    /// 노트를 다른 분류로 옮긴다. 파일을 새 분류의 폴더로 옮기고(파일명 충돌 시
+    /// 유니크 접미사) frontmatter의 `type`을 새로 정규화한다. 새 rel 경로를 반환.
+    ///
+    /// 책·데일리는 파일명·폴더 규칙(연/월, 독서기록 연동)이 확고해 원본·대상
+    /// 어느 쪽으로도 이동을 허용하지 않는다.
+    pub fn move_note(&self, rel: &str, new_type_id: &str) -> Result<String, CoreError> {
+        let note = self.read_note(rel)?;
+        let cur_type = note.note_type.clone();
+        if cur_type == new_type_id {
+            return Err(CoreError::Invalid("이미 그 분류에 있는 노트입니다".into()));
+        }
+        let locked = |id: &str| {
+            matches!(
+                Builtin::from_id(id),
+                Some(Builtin::Daily) | Some(Builtin::Book)
+            )
+        };
+        if locked(&cur_type) || locked(new_type_id) {
+            return Err(CoreError::Invalid(
+                "책·데일리는 다른 분류로 옮길 수 없습니다".into(),
+            ));
+        }
+        let dest_def = self
+            .def_by_id(new_type_id)
+            .ok_or_else(|| CoreError::Invalid(format!("알 수 없는 분류: {new_type_id}")))?
+            .clone();
+
+        let abs = self.abs(rel)?;
+        let stem = Path::new(rel)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "무제".into());
+        let dest_dir = self.root.join(&dest_def.folder);
+        let dest = self.unique_path(&dest_dir, &stem);
+        fs::rename(&abs, &dest)?;
+        let dest_rel = self.rel_of(&dest);
+        // save_note가 새 경로 기준으로 type을 다시 정규화한다
+        let moved = self.read_note(&dest_rel)?;
+        self.save_note(&dest_rel, moved.frontmatter, &moved.body)?;
+
+        self.mark_index_stale(&cur_type);
+        self.mark_index_stale(new_type_id);
+        Ok(dest_rel)
+    }
+
     // ---------- 제목 변경 ----------
 
     /// 모든 노트에서 `[[old]]` 링크를 `[[new]]`로 치환 (본문·frontmatter 원문 기준)
@@ -2523,6 +2568,35 @@ mod tests {
             assert!(v.def_by_id("meeting").is_none());
             assert!(dir.path().join("Free/주간 회의.md").exists());
         }
+    }
+
+    #[test]
+    fn move_note_switches_folder_and_type() {
+        let (_d, mut v) = vault();
+        v.add_custom_type("회의록", "meeting", vec![], "").unwrap();
+        v.add_custom_type("자료집", "archive", vec![], "").unwrap();
+        let rel = v
+            .create_note("meeting", "주간 회의", serde_json::json!({}))
+            .unwrap();
+
+        let new_rel = v.move_note(&rel, "archive").unwrap();
+        assert_eq!(new_rel, "자료집/주간 회의.md");
+        assert!(v.read_note(&rel).is_err());
+        let moved = v.read_note(&new_rel).unwrap();
+        assert_eq!(moved.note_type, "archive");
+
+        // 같은 분류로는 이동 불가, 없는 분류로도 불가
+        assert!(v.move_note(&new_rel, "archive").is_err());
+        assert!(v.move_note(&new_rel, "없음").is_err());
+
+        // 책·데일리는 원본·대상 어느 쪽으로도 이동 불가
+        let book = v
+            .create_note("book", "어떤 책", serde_json::json!({"author": "저자"}))
+            .unwrap();
+        assert!(v.move_note(&book, "archive").is_err());
+        assert!(v.move_note(&new_rel, "book").is_err());
+        let daily = v.open_daily("2026-07-18").unwrap();
+        assert!(v.move_note(&daily, "archive").is_err());
     }
 
     #[test]
