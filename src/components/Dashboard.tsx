@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { NoteSummary } from "../bindings";
 import { useVault } from "../stores/vault";
 import { fileSuffix, fmStr } from "../lib/note";
@@ -59,9 +59,12 @@ function ListDashboard({ noteType }: { noteType: string }) {
     useVault();
   const [creating, setCreating] = useState(false);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [groupFilters, setGroupFilters] = useState<Record<string, string>>({});
   const [review, setReview] = useState(false);
 
   useCreateRequest(() => setCreating(true));
+  // 필드 이름이 타입마다 달라 다른 분류로 넘어가면 걸어 둔 구분 필터를 씻어낸다
+  useEffect(() => setGroupFilters({}), [noteType]);
   const ctx = useContextMenu();
   const schema = schemas.find((s) => s.id === noteType);
   // 사용자 정의 분류는 채울 필드를 스스로 정한 것이므로, 생성 폼 없이 바로 편집기로 시작한다
@@ -76,10 +79,30 @@ function ListDashboard({ noteType }: { noteType: string }) {
     for (const n of all) for (const t of n.tags) set.add(t);
     return [...set].sort((a, b) => a.localeCompare(b, "ko"));
   }, [all]);
-  const list = useMemo(
-    () => (tagFilter ? all.filter((n) => n.tags.includes(tagFilter)) : all),
-    [all, tagFilter],
+
+  // select 필드마다 실제 쓰인 값들을 태그 칩처럼 필터로 보여준다
+  const selectFields = useMemo(
+    () => schema?.fields.filter((f) => f.kind === "select") ?? [],
+    [schema],
   );
+  const selectFieldValues = useMemo(() => {
+    return selectFields.map((f) => {
+      const set = new Set<string>();
+      for (const n of all) {
+        const v = fmStr(n, f.name);
+        if (v) set.add(v);
+      }
+      return { field: f, values: [...set].sort((a, b) => a.localeCompare(b, "ko")) };
+    });
+  }, [all, selectFields]);
+
+  const list = useMemo(() => {
+    let out = tagFilter ? all.filter((n) => n.tags.includes(tagFilter)) : all;
+    for (const [name, value] of Object.entries(groupFilters)) {
+      out = out.filter((n) => fmStr(n, name) === value);
+    }
+    return out;
+  }, [all, tagFilter, groupFilters]);
 
   // 데일리는 월별 그룹, 나머지는 단일 목록
   const groups = useMemo(() => {
@@ -142,6 +165,37 @@ function ListDashboard({ noteType }: { noteType: string }) {
           ))}
         </div>
       )}
+
+      {selectFieldValues
+        .filter(({ values }) => values.length > 0)
+        .map(({ field, values }) => (
+          <div
+            key={field.name}
+            className="flex flex-wrap items-center gap-1.5 border-b border-neutral-100 px-6 py-2"
+          >
+            <span className="text-2xs text-neutral-400">{field.label}</span>
+            {values.map((v) => (
+              <button
+                key={v}
+                className={`rounded-full px-2.5 py-0.5 text-xs ${
+                  groupFilters[field.name] === v
+                    ? "bg-sky-600 text-white"
+                    : "bg-sky-50 text-sky-600 hover:bg-sky-100"
+                }`}
+                onClick={() =>
+                  setGroupFilters((f) => {
+                    const next = { ...f };
+                    if (next[field.name] === v) delete next[field.name];
+                    else next[field.name] = v;
+                    return next;
+                  })
+                }
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+        ))}
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {list.length === 0 && (
