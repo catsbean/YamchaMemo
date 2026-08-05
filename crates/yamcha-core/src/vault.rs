@@ -540,11 +540,24 @@ impl Vault {
         }
     }
 
+    /// vault 상대경로 → 절대경로. **vault 밖을 가리키면 거절한다.**
+    ///
+    /// `..`만 막던 때가 있었는데 그걸로는 모자란다. `Path::join`은 인자가 절대경로면
+    /// 앞을 통째로 버려서, `C:\Windows\...`나 `/etc/passwd`를 넘기면 vault와 상관없는
+    /// 파일이 나온다. 대부분의 커맨드는 `type_of_rel`이 최상위 폴더를 검사해 우연히
+    /// 막히지만 `read_raw`·`write_raw`(수리 화면)는 그 검사를 거치지 않는다.
+    ///
+    /// 그래서 "합친 결과가 vault 안인가"를 직접 본다 — 절대경로·루트 상대경로·
+    /// 드라이브 상대경로가 한 검사로 다 걸린다.
     pub(crate) fn abs(&self, rel: &str) -> Result<PathBuf, CoreError> {
         if rel.split(['/', '\\']).any(|seg| seg == "..") {
             return Err(CoreError::Invalid(format!("잘못된 경로: {rel}")));
         }
-        Ok(self.root.join(rel))
+        let joined = self.root.join(rel);
+        if !joined.starts_with(&self.root) {
+            return Err(CoreError::Invalid(format!("vault 밖의 경로: {rel}")));
+        }
+        Ok(joined)
     }
 
     /// 원자적 쓰기: 같은 디렉토리에 임시 파일을 쓰고 rename.
@@ -2046,6 +2059,27 @@ mod tests {
 
         assert!(!abs.with_extension("md.tmp").exists(), "tmp가 남았다");
         assert!(fs::read_to_string(&abs).unwrap().contains("덮어쓴 내용"));
+    }
+
+    /// **vault 밖을 가리키는 경로는 어떤 모양이어도 거절한다.**
+    /// `..`만 막던 때는 절대경로가 그대로 통과했다 — `Path::join`이 앞을 버리기 때문에
+    /// 수리 화면의 read_raw·write_raw로 vault 밖 파일을 읽고 덮어쓸 수 있었다.
+    #[test]
+    fn vault_밖_경로는_거절한다() {
+        let (_d, v) = vault();
+        let 밖 = [
+            "../몰래.md",
+            "Free/../../몰래.md",
+            "/etc/passwd",
+            "C:\\Windows\\System32\\drivers\\etc\\hosts",
+            "\\\\서버\\공유\\몰래.md",
+        ];
+        for rel in 밖 {
+            assert!(v.abs(rel).is_err(), "vault 밖 경로가 통과했다: {rel}");
+        }
+        // 멀쩡한 상대경로는 그대로 통과해야 한다
+        assert!(v.abs("Free/메모.md").is_ok());
+        assert!(v.abs("Daily/2026/08/2026-08-05.md").is_ok());
     }
 
     #[test]
