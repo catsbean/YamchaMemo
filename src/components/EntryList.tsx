@@ -8,6 +8,7 @@ import {
 } from "../lib/callouts";
 import { useVault } from "../stores/vault";
 import { useImeInput } from "../lib/ime";
+import WikiLinkSuggest from "./WikiLinkSuggest";
 import NoteText from "./NoteText";
 
 /** 콜아웃 종류별 색 — 입력 바·본문 렌더와 같은 계열 */
@@ -286,13 +287,16 @@ export default function EntryList({
                     </span>
                   )}
                 </div>
-                <textarea
-                autoFocus
-                className="min-h-16 w-full resize-y rounded border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-800 focus:outline-none"
-                defaultValue={b.text}
-                key={`edit-${index}`}
-                {...editIme.handlers}
-                />
+                <div className="relative">
+                  <textarea
+                  autoFocus
+                  className="min-h-16 w-full resize-y rounded border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-800 focus:outline-none"
+                  defaultValue={b.text}
+                  key={`edit-${index}`}
+                  {...editIme.handlers}
+                  />
+                  <WikiLinkSuggest inputRef={editIme.handlers.ref} />
+                </div>
               </>
             ) : (
               <NoteText

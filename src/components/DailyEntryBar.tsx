@@ -3,6 +3,7 @@ import { styleOf } from "../lib/callouts";
 import { useImeInput } from "../lib/ime";
 import type { DailyKind } from "../bindings";
 import { useVault } from "../stores/vault";
+import WikiLinkSuggest from "./WikiLinkSuggest";
 
 /** 기본 종류. 화면에 놓이는 순서는 설정(dailyKindOrder)이 정한다 */
 const KINDS: {
@@ -144,13 +145,14 @@ export default function DailyEntryBar({
           </button>
         ))}
       </div>
-      <div className="flex items-start gap-2">
+      <div className="relative flex items-start gap-2">
         <textarea
           className="min-h-9 flex-1 resize-y rounded border border-neutral-300 bg-white px-2 py-1 text-sm focus:outline-none"
           placeholder={current.hint}
           defaultValue=""
           {...ime.handlers}
         />
+        <WikiLinkSuggest inputRef={ime.handlers.ref} />
         <button
           className={`rounded px-3 py-1 text-sm text-white disabled:opacity-50 ${activeCls} hover:opacity-90`}
           disabled={busy}
