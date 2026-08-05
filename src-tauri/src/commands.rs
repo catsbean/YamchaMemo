@@ -491,6 +491,12 @@ pub fn set_vault(
     remove_legacy_index(vault.root());
     // 바뀐 노트만 다시 읽는다 — 켤 때마다 전체를 읽으면 2,000편에 11.9초다
     yamcha_core::reindex_changed(&vault, &mut indexer, &mut search).map_err(|e| e.to_string())?;
+    // 없어진 노트의 스냅샷을 걷는다. 앱 밖(옵시디언·탐색기)에서 지운 파일은
+    // delete_note를 거치지 않아 스냅샷만 남는다 — 놔두면 계속 쌓인다.
+    if let Ok(files) = vault.list_note_files() {
+        let live: Vec<String> = files.into_iter().map(|f| f.rel_path).collect();
+        let _ = yamcha_core::history::prune_orphans(&vault, &live);
+    }
     let root = vault.root().to_path_buf();
     *guard = Some(Ctx {
         vault,

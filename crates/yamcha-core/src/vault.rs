@@ -410,6 +410,9 @@ impl Vault {
         let dest = self.unique_path(&dest_dir, &stem);
         fs::rename(&abs, &dest)?;
         let dest_rel = self.rel_of(&dest);
+        // 스냅샷도 따라 옮긴다. **save_note보다 먼저** 해야 한다 —
+        // save_note가 새 경로로 스냅샷을 하나 뜨고 나면 옮겨갈 자리가 이미 차 있다.
+        crate::history::move_note(self, rel, &dest_rel)?;
         // save_note가 새 경로 기준으로 type을 다시 정규화한다
         let moved = self.read_note(&dest_rel)?;
         self.save_note(&dest_rel, moved.frontmatter, &moved.body)?;
@@ -484,6 +487,8 @@ impl Vault {
             let dest = self.unique_path(&dir, &new_stem);
             fs::rename(&abs_old, &dest)?;
             new_rel = self.rel_of(&dest);
+            // 되돌릴 지점은 제목을 바꿨다고 사라지면 안 된다 (save_note보다 먼저)
+            crate::history::move_note(self, rel, &new_rel)?;
         }
 
         // frontmatter title 갱신 (save_note가 인덱스 파일도 갱신)
@@ -892,6 +897,9 @@ impl Vault {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "note.md".into());
         fs::rename(&abs, trash.join(format!("{stamp}_{name}")))?;
+        // 스냅샷을 남겨 두면 지운 글의 본문이 최대 20벌 vault 안에 계속 남는다.
+        // 파일 자체는 휴지통에 통째로 있으므로 되돌릴 길은 그대로다.
+        let _ = crate::history::clear_note(self, rel);
         self.mark_index_stale(&t);
         Ok(())
     }

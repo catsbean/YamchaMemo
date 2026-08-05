@@ -200,13 +200,61 @@ pub fn restore(
     vault.write_raw(rel, &content)
 }
 
-/// 노트 하나의 스냅샷 전부 삭제 (노트를 지웠을 때 등)
+/// 노트 하나의 스냅샷 전부 삭제 (노트를 지웠을 때 등).
+///
+/// 노트를 지우면 파일 자체는 휴지통에 통째로 남으므로 되돌릴 길은 그대로 있다.
+/// 여기서 지우는 건 중간 스냅샷이고, 안 지우면 **지운 글의 본문이 최대 20벌**
+/// `.yamcha/history/`에 계속 남는다.
 pub fn clear_note(vault: &Vault, rel: &str) -> Result<(), CoreError> {
     let dir = note_dir(vault, rel);
     if dir.is_dir() {
         fs::remove_dir_all(&dir)?;
     }
     Ok(())
+}
+
+/// 노트가 자리를 옮기면 스냅샷도 따라간다 (제목 변경·분류 이동).
+///
+/// 스냅샷 폴더 이름은 rel 경로에서 나오므로, 안 옮기면 옛 이름 폴더는 고아로 남고
+/// 새 이름은 이력이 없는 상태에서 다시 시작한다 — 이름 한 번 바꿨다고 되돌릴 지점이
+/// 사라지면 안전장치라고 할 수 없다.
+pub fn move_note(vault: &Vault, from: &str, to: &str) -> Result<(), CoreError> {
+    let src = note_dir(vault, from);
+    if !src.is_dir() || from == to {
+        return Ok(());
+    }
+    let dst = note_dir(vault, to);
+    if dst.exists() {
+        // 옮겨갈 자리에 이미 이력이 있다 (같은 이름을 다시 쓴 경우) — 덮지 않는다
+        return Ok(());
+    }
+    fs::rename(&src, &dst)?;
+    Ok(())
+}
+
+/// vault에 더 이상 없는 노트의 스냅샷 폴더를 지운다 → 지운 폴더 수.
+///
+/// 앱 밖(옵시디언·탐색기)에서 지운 파일은 `delete_note`를 거치지 않아 스냅샷만 남는다.
+/// 예전 버전이 쌓아 둔 것도 여기서 함께 걷힌다. vault를 열 때 한 번 돈다.
+pub fn prune_orphans(vault: &Vault, live: &[String]) -> Result<u32, CoreError> {
+    let root = vault.root().join(".yamcha").join("history");
+    if !root.is_dir() {
+        return Ok(0);
+    }
+    let alive: std::collections::HashSet<String> =
+        live.iter().map(|rel| rel.replace(['/', '\\'], "__")).collect();
+    let mut removed = 0u32;
+    for entry in fs::read_dir(&root)?.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !alive.contains(&name) && fs::remove_dir_all(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 /// vault의 모든 스냅샷 삭제 → 지운 파일 수
@@ -366,5 +414,65 @@ mod tests {
         snapshot(&v, &rel, None, EAGER).unwrap();
         assert!(purge_all(&v).unwrap() >= 1);
         assert!(list(&v, &rel).unwrap().is_empty());
+    }
+
+    /// **지운 글의 본문이 vault 안에 남으면 안 된다.**
+    /// 파일 자체는 휴지통에 있으니 되돌릴 길은 그대로다.
+    #[test]
+    fn 노트를_지우면_스냅샷도_지운다() {
+        let (_d, mut v, rel) = setup();
+        v.set_history_policy(EAGER);
+        put(&v, &rel, "지워질 내용");
+        snapshot(&v, &rel, None, EAGER).unwrap();
+        assert_eq!(list(&v, &rel).unwrap().len(), 1);
+
+        v.delete_note(&rel).unwrap();
+        assert!(
+            list(&v, &rel).unwrap().is_empty(),
+            "지운 글의 스냅샷이 남았다"
+        );
+        assert!(!note_dir(&v, &rel).exists());
+    }
+
+    /// 제목을 바꿨다고 되돌릴 지점이 사라지면 안전장치가 아니다
+    #[test]
+    fn 제목을_바꾸면_스냅샷이_따라온다() {
+        let (_d, mut v, rel) = setup();
+        v.set_history_policy(EAGER);
+        put(&v, &rel, "옛 제목 시절의 내용");
+        snapshot(&v, &rel, None, EAGER).unwrap();
+
+        let new_rel = v.rename_note(&rel, "새 제목").unwrap();
+        assert_ne!(new_rel, rel, "이름이 안 바뀌었다");
+        assert!(
+            !list(&v, &new_rel).unwrap().is_empty(),
+            "이름을 바꾸자 이력이 사라졌다"
+        );
+        assert!(!note_dir(&v, &rel).exists(), "옛 이름 폴더가 고아로 남았다");
+    }
+
+    /// 앱 밖에서 지운 파일은 delete_note를 거치지 않는다 — 그 스냅샷은 켤 때 걷는다
+    #[test]
+    fn 없어진_노트의_스냅샷은_걷어낸다() {
+        let (_d, v, rel) = setup();
+        snapshot(&v, &rel, None, EAGER).unwrap();
+        let other = v.create_note("free", "살아 있는 노트", json!({})).unwrap();
+        snapshot(&v, &other, None, EAGER).unwrap();
+
+        // 탐색기에서 지운 상황
+        std::fs::remove_file(v.abs(&rel).unwrap()).unwrap();
+
+        let live: Vec<String> = v
+            .list_note_files()
+            .unwrap()
+            .into_iter()
+            .map(|f| f.rel_path)
+            .collect();
+        assert_eq!(prune_orphans(&v, &live).unwrap(), 1);
+        assert!(list(&v, &rel).unwrap().is_empty(), "고아 스냅샷이 남았다");
+        assert!(
+            !list(&v, &other).unwrap().is_empty(),
+            "살아 있는 노트의 이력까지 지웠다"
+        );
     }
 }
