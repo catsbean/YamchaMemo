@@ -80,8 +80,12 @@ export default function WikiLinkSuggest({
     // 안 그러면 Esc의 keyup이 곧바로 refresh를 불러 방금 닫은 목록이 되살아난다.
     let dismissed = false;
 
+    // 이미 닫혀 있으면 **같은 배열을 그대로 돌려준다**. `setItems([])`처럼 새 배열을
+    // 만들면 React가 매번 값이 바뀐 것으로 보고 다시 그린다 — 추천이 뜰 일이 없는
+    // 평범한 타이핑에서도 글자마다·keyup마다 그랬다. 이 입력창의 규칙은
+    // "타이핑 중에는 리렌더가 없어야 한다"(lib/ime.ts 규칙 2)이므로 어기면 안 된다.
     const close = () => {
-      setItems([]);
+      setItems((cur) => (cur.length === 0 ? cur : []));
       setActive(0);
     };
 
