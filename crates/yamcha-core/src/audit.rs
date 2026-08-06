@@ -23,6 +23,8 @@ use crate::vault::Vault;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueKind {
+    /// 클라우드 동기화가 만든 충돌 사본 — 같은 글이 둘로 갈라져 있다
+    CloudConflictCopy,
     /// 타입 폴더 밖(루트 등)에 있는 노트 — 목록에 아예 안 잡힌다
     OutsideTypeFolder,
     /// frontmatter YAML 문법 오류 — 자동으로 고칠 수 없다
@@ -40,6 +42,7 @@ pub enum IssueKind {
 impl IssueKind {
     pub fn label(self) -> &'static str {
         match self {
+            IssueKind::CloudConflictCopy => "동기화 충돌 사본",
             IssueKind::OutsideTypeFolder => "분류 폴더 밖에 있음",
             IssueKind::ParseError => "frontmatter를 읽을 수 없음",
             IssueKind::NoFrontmatter => "frontmatter 없음",
@@ -87,6 +90,45 @@ fn is_skipped_dir(name: &str) -> bool {
     name.starts_with('.') || name.starts_with('_')
 }
 
+/// 클라우드 동기화(iCloud·Dropbox·OneDrive·Syncthing)가 만든 충돌 사본인가 →
+/// 그렇다면 "무엇의 사본인지"를 돌려준다.
+///
+/// 두 기기에서 같은 노트를 고친 뒤 양쪽이 올라오면, 동기화 클라이언트는 하나를 고르지
+/// 못하고 **둘 다 남긴다**. 앱에서는 그냥 노트가 하나 더 생긴 것으로 보여서, 어느 쪽이
+/// 최신인지 모른 채 한쪽에만 계속 쓰다가 나머지 절반을 잃는다. 조용히 갈라지는 게
+/// 문제이므로 점검에서 반드시 보이게 한다.
+///
+/// iCloud는 표시를 남기지 않고 `이름 2.md`로만 만든다. 그것만으로는 사람이 지은 이름
+/// (`회의록 2.md`)과 구별할 수 없으므로, **같은 폴더에 `이름.md`가 함께 있을 때만**
+/// 사본으로 본다.
+fn conflict_copy_of(abs: &Path) -> Option<String> {
+    let name = abs.file_name()?.to_string_lossy().to_string();
+    let stem = name.strip_suffix(".md")?;
+
+    // 이름에 표시를 남기는 것들 — 사람이 이렇게 지을 일이 없다
+    for mark in [
+        ".sync-conflict-",
+        "(conflicted copy",
+        "충돌이 발생한 사본",
+        "-conflict-",
+    ] {
+        if let Some(at) = stem.find(mark) {
+            return Some(format!("{}.md", stem[..at].trim_end()));
+        }
+    }
+
+    // iCloud: `이름 2` — 원본이 옆에 있을 때만
+    let (base, tail) = stem.rsplit_once(' ')?;
+    if tail.len() > 2 || !tail.chars().all(|c| c.is_ascii_digit()) || tail == "1" {
+        return None;
+    }
+    let original = format!("{base}.md");
+    abs.parent()?
+        .join(&original)
+        .exists()
+        .then_some(original)
+}
+
 /// vault 전체를 훑어 규격에서 벗어난 노트를 찾는다. `.yamcha/`·`_attachments/` 등은 제외.
 pub fn audit(vault: &Vault) -> Vec<NoteIssue> {
     let mut out = Vec::new();
@@ -128,6 +170,21 @@ fn inspect(vault: &Vault, abs: &Path) -> Option<NoteIssue> {
             fixable,
         })
     };
+
+    // 0) 동기화 충돌 사본인가 (읽기 전에 판정 가능).
+    //    **자동으로 고치지 않는다** — 어느 쪽에 사용자의 마지막 수정이 들어 있는지
+    //    파일만 봐서는 알 수 없다. 지우는 것은 사람이 내용을 확인한 뒤에 할 일이다.
+    if let Some(original) = conflict_copy_of(abs) {
+        return make(
+            IssueKind::CloudConflictCopy,
+            format!(
+                "같은 폴더에 '{original}'이 함께 있습니다. \
+                 두 기기에서 같은 글을 고쳐 클라우드가 사본을 남긴 것일 수 있습니다."
+            ),
+            "두 파일을 열어 비교하고, 필요한 내용을 하나로 합친 뒤 나머지를 지우세요.",
+            false,
+        );
+    }
 
     // 1) 타입 폴더 밖인가 (읽기 전에 판정 가능)
     let type_id = match vault.type_of_rel(&rel) {
@@ -226,6 +283,14 @@ pub fn fix(vault: &Vault, rel: &str, kind: IssueKind) -> Result<String, CoreErro
             "frontmatter 문법 오류는 자동으로 고칠 수 없습니다. 원문을 직접 수정해주세요.".into(),
         ));
     }
+    if kind == IssueKind::CloudConflictCopy {
+        // 어느 쪽에 마지막 수정이 들어 있는지 파일만 봐서는 알 수 없다.
+        // 잘못 고르면 사용자가 쓴 글이 사라진다 — 사람이 보고 정해야 한다.
+        return Err(CoreError::Invalid(
+            "동기화 충돌 사본은 자동으로 합칠 수 없습니다. 두 파일을 열어 확인한 뒤 하나로 정리해주세요."
+                .into(),
+        ));
+    }
     vault.snapshot_before_change(rel)?;
 
     // 폴더 밖 파일은 먼저 Free/로 옮긴다
@@ -254,7 +319,9 @@ pub fn fix(vault: &Vault, rel: &str, kind: IssueKind) -> Result<String, CoreErro
         }
         // TypeMismatch는 save_note의 정규화가 폴더 기준으로 type을 다시 써 준다
         IssueKind::TypeMismatch => {}
-        IssueKind::ParseError => unreachable!("위에서 이미 걸렀다"),
+        IssueKind::ParseError | IssueKind::CloudConflictCopy => {
+            unreachable!("위에서 이미 걸렀다")
+        }
     }
 
     vault.save_note(&rel, Value::Object(fm), &note.body)?;
@@ -296,6 +363,57 @@ mod tests {
         v.create_note("free", "메모", json!({})).unwrap();
         v.create_note("book", "클린 코드", json!({"author": "마틴"})).unwrap();
         assert!(audit(&v).is_empty(), "{:?}", audit(&v));
+    }
+
+    /// 두 기기에서 같은 글을 고치면 클라우드가 사본을 남긴다. 앱에서는 노트가 하나
+    /// 더 생긴 것처럼만 보여서, 어느 쪽이 최신인지 모른 채 절반을 잃는다.
+    #[test]
+    fn 동기화_충돌_사본을_찾아낸다() {
+        let (d, v) = setup();
+        let rel = v.create_note("free", "메모", json!({})).unwrap();
+        let original = v.abs(&rel).unwrap();
+        let raw = fs::read_to_string(&original).unwrap();
+        // iCloud가 남기는 모양: 원본 옆에 `이름 2.md`
+        fs::write(original.with_file_name("메모 2.md"), &raw).unwrap();
+        // 이름에 표시를 남기는 것들(Syncthing 등)은 원본이 없어도 알아본다
+        fs::write(
+            d.path().join("Free").join("딴글.sync-conflict-20260806-노트북.md"),
+            &raw,
+        )
+        .unwrap();
+
+        let issues = audit(&v);
+        let found: Vec<_> = issues
+            .iter()
+            .filter(|i| i.kind == IssueKind::CloudConflictCopy)
+            .map(|i| i.rel_path.as_str())
+            .collect();
+        assert_eq!(found.len(), 2, "{issues:?}");
+        // 사람이 확인해야 하는 일이므로 [고치기]를 내놓지 않는다
+        assert!(issues
+            .iter()
+            .filter(|i| i.kind == IssueKind::CloudConflictCopy)
+            .all(|i| !i.fixable));
+    }
+
+    /// 사람이 지은 이름과 앱이 붙인 접미사를 사본으로 오인하면 안 된다
+    #[test]
+    fn 사람이_지은_이름은_사본으로_보지_않는다() {
+        let (_d, v) = setup();
+        // 원본이 없는 `회의록 2` — 그냥 두 번째 회의록일 수 있다
+        v.create_note("free", "회의록 2", json!({})).unwrap();
+        // 이름이 겹쳐 앱이 붙인 접미사 `(2)`
+        v.create_note("free", "메모", json!({})).unwrap();
+        let dup = v.create_note("free", "메모", json!({})).unwrap();
+        assert!(dup.contains("(2)"), "{dup}");
+
+        assert!(
+            audit(&v)
+                .iter()
+                .all(|i| i.kind != IssueKind::CloudConflictCopy),
+            "{:?}",
+            audit(&v)
+        );
     }
 
     #[test]

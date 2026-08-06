@@ -1171,6 +1171,10 @@ char_count: number }
  */
 export type IssueKind = 
 /**
+ * 클라우드 동기화가 만든 충돌 사본 — 같은 글이 둘로 갈라져 있다
+ */
+"cloud_conflict_copy" | 
+/**
  * 타입 폴더 밖(루트 등)에 있는 노트 — 목록에 아예 안 잡힌다
  */
 "outside_type_folder" | 

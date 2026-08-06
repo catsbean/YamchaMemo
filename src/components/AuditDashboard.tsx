@@ -5,6 +5,8 @@ import RawEditModal from "./RawEditModal";
 
 /** 점검 종류별 설명 — 왜 이게 문제인지 한 줄로 */
 const KIND_HINT: Record<IssueKind, string> = {
+  cloud_conflict_copy:
+    "두 기기에서 같은 글을 고치면 클라우드(iCloud 등)가 어느 쪽도 버리지 못하고 사본을 남깁니다. 그대로 두면 한쪽에만 계속 쓰다 나머지 절반을 잃습니다. 두 파일을 열어 비교한 뒤 하나로 합쳐주세요.",
   outside_type_folder:
     "분류 폴더 안에 있어야 목록·검색에 나타납니다. 다른 앱에서 vault 아무 곳에나 만든 파일입니다.",
   parse_error:
