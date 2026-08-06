@@ -261,7 +261,7 @@ npx tsc --noEmit -p tsconfig.json
 8. `pnpm release:win` → NSIS exe 생성.
 9. 실네트워크 프로브: `cargo test -p yamcha-app --lib kyobo_live_probe -- --ignored --nocapture` 통과.
 
-**회귀 기준선**: 0.5.1 시점 테스트 수 = **core 149(+ignored 3) + app 14(+ignored 2)**. 작업 후 감소 금지.
+**회귀 기준선**: 0.5.6 시점 테스트 수 = **core 202(+ignored 4) + app 31(+ignored 3) + 프론트(vitest) 104**. 작업 후 감소 금지.
 `--no-default-features`(docs 끔)로도 돌려 본다 — 137개 통과. 추출에 기대는 테스트는 feature 게이트를 달아야 한다.
 
 **검색 기능 수동 회귀 (0.5.0에서 추가)** — `pnpm tauri dev`로 실행하며 Ctrl+K:
@@ -305,6 +305,25 @@ npx tsc --noEmit -p tsconfig.json
     `catch_unwind`를 걷어내면 앱이 죽는다.
 17. **`docs` feature를 끈 빌드도 테스트해야 한다.** 추출에 기대는 테스트에 게이트를 안 달면
     초경량 빌드에서만 깨진다 — 실제로 `file_index` 테스트 4개가 그랬다.
+
+**한글 입력·동시 편집에서 밟은 것 (0.5.6)**
+
+18. **조합(composition) 이벤트를 아예 안 내는 한글 IME가 있다.** 음절을 곧바로 확정해 넣고,
+    고쳐 쓸 때는 지웠다 다시 넣는다. Ctrl이 눌려 있으면 그 백스페이스가 브라우저에서
+    `deleteWordBackward`가 되어 **단어가 통째로 날아간다** — `기록` + Ctrl+Enter가 `록`으로
+    저장됐다. `isComposing`만 보는 코드에는 이 경로가 보이지 않는다(`lib/ime.ts` 참고).
+18-b. **같은 IME 동작이 안내 문구(placeholder)를 깜빡이게 한다.** 첫 음절을 쓰는 동안
+    값이 통째로 빈 칸이 되는 구간이 생겨서(실측 `기록` 한 단어에 3번, 매번 30~40ms)
+    문구가 그때마다 번쩍인다. **감추는 건 즉시, 되살리는 건 한 박자 뒤**로 나눠야 한다
+    (`syncPlaceholder`의 `PLACEHOLDER_GRACE_MS`).
+19. **CDP(`Input.imeSetComposition`)로는 18번을 못 만든다.** Blink 조합만 흉내 낼 뿐 IME 엔진
+    쪽 동작이 없다. 실제 IME 문제는 **`document`에 capture 리스너를 심어 사용자가 한 번
+    재현하게 하고 그 순서를 읽는 것**이 가장 빠르다 (`scratchpad/record.mjs` 방식).
+20. **자기 쓰기를 시각으로 가리면 안 된다.** 예전 watcher는 마지막 쓰기 후 2.5초 안의 변경을
+    전부 자기 것으로 봤는데, 그 창이 파일을 구분하지 않아서 **내가 A를 저장하는 사이에 온
+    남의 B 저장 알림까지 삼켰다**. 지금은 내용 지문으로 가린다(`Vault::is_self_write`).
+21. **클라우드 동기화는 내용이 같아도 mtime을 갈아치운다.** "바뀌었나"의 잣대로 mtime을 쓰면
+    헛된 충돌 경고가 뜬다. 저장 충돌 검사(`save_note_checked`)도 지문 기준이다.
 
 ---
 
