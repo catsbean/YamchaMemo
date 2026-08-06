@@ -59,6 +59,24 @@ textarea,
   max-width: 46rem;
 }
 
+/* 옆으로 흐르는 줄(추천 태그 칩 등)의 가느다란 스크롤바.
+   기본 스크롤바는 15px라 한 줄짜리 칩 줄의 높이를 두 배로 만든다. 넘칠 때만
+   나타나고(overflow-x: auto), 나타나도 줄 높이를 거의 건드리지 않아야 한다. */
+.thin-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-neutral-300) transparent;
+}
+.thin-scrollbar::-webkit-scrollbar {
+  height: 6px;
+}
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-neutral-300);
+  border-radius: 3px;
+}
+
 /* 어두운 화면에서는 이미지가 너무 밝게 튄다 — 살짝 눌러 준다 */
 .dark .cm-inline-img,
 .dark img {

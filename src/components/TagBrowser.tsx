@@ -237,7 +237,7 @@ export default function TagBrowser() {
                       <TagSuggestionRow
                         suggestions={untaggedSugg[n.rel_path] ?? []}
                         onAdd={(tag) => addUntaggedTag(n.rel_path, tag)}
-                        className="flex shrink-0 flex-wrap gap-1"
+                        className="shrink"
                       />
                       <button
                         className="shrink-0 rounded px-1.5 py-0.5 text-2xs text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"

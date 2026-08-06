@@ -110,11 +110,7 @@ export default function CaptureWindow() {
       )}
       {suggestions.length > 0 && (
         <div className="px-4 pb-1">
-          <TagSuggestionRow
-            suggestions={suggestions}
-            onAdd={addTag}
-            className="flex flex-wrap gap-1"
-          />
+          <TagSuggestionRow suggestions={suggestions} onAdd={addTag} className="" />
         </div>
       )}
       <div className="flex items-center gap-2 border-t border-neutral-200 px-3 py-1.5">

@@ -238,7 +238,6 @@ export default function BookView({ note }: { note: NoteContent }) {
           <TagSuggestionRow
             suggestions={tagSuggestions.filter((s) => !tags.includes(s.tag))}
             onAdd={addSuggestedTag}
-            className="mt-1 flex flex-wrap gap-1"
           />
         </div>
       </div>
