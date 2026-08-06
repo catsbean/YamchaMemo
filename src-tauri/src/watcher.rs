@@ -71,12 +71,22 @@ pub fn start(app: AppHandle, root: PathBuf) -> Option<WatcherHandle> {
             let was_suppressed = suppressed();
             // 바뀐 md 파일 인덱스 갱신 — 자기쓰기여도 인덱스는 항상 최신으로 유지
             let state = app.state::<AppState>();
+            // 노트는 **내용으로** 자기 쓰기를 가린다. 시각으로 가리면 창이 파일을
+            // 구분하지 못해서, 내가 A를 저장하는 사이에 온 남의 B 저장 알림까지 삼킨다.
+            let mut external: Vec<String> = Vec::new();
             if let Ok(mut guard) = state.0.lock() {
                 if let Some(ctx) = guard.as_mut() {
                     for rel in rels.iter().filter(|r| r.ends_with(".md")) {
+                        if !ctx.vault.is_self_write(rel) {
+                            external.push(rel.clone());
+                        }
                         let _ = crate::commands::refresh_note(ctx, rel);
                     }
                 }
+            }
+            // 노트가 아닌 것(첨부·_types.json)은 지문을 남기는 길이 없어 예전대로 시각으로 가린다
+            if !was_suppressed {
+                external.extend(rels.iter().filter(|r| !r.ends_with(".md")).cloned());
             }
             // 첨부 변경은 **잠금을 놓은 뒤** 처리한다.
             // 추출이 파일 하나에 15초까지 걸리는데(실측 PDF) 그동안 상태 잠금을 쥐면
@@ -91,9 +101,9 @@ pub fn start(app: AppHandle, root: PathBuf) -> Option<WatcherHandle> {
                     crate::commands::refresh_attachments(&app, &changed);
                 }
             }
-            // UI 이벤트만 억제: 자기 저장 직후엔 프론트로 외부 변경 알림을 보내지 않는다.
-            if !was_suppressed {
-                let _ = app.emit("vault-external-change", rels);
+            // UI 이벤트만 억제: 내가 방금 써 넣은 그 내용이면 프론트에 알리지 않는다.
+            if !external.is_empty() {
+                let _ = app.emit("vault-external-change", external);
             }
         },
     )

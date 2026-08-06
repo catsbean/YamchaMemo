@@ -76,6 +76,39 @@ fn format_trash_stamp(stamp: &str) -> String {
 /// 사용자 정의 타입 정의 파일 (vault 루트, 미러링 대상에 포함)
 const TYPES_FILE: &str = "_types.json";
 
+/// 클라우드 동기화·백신이 파일을 **잠깐** 붙들고 있어서 나는 오류인가.
+/// 윈도우: 5 ACCESS_DENIED · 32 SHARING_VIOLATION · 33 LOCK_VIOLATION.
+/// 권한이 아예 없거나 디스크가 찬 것과는 다르다 — 그건 기다려 봐야 소용없다.
+fn is_transient_lock(e: &std::io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(5) | Some(32) | Some(33))
+        || e.kind() == std::io::ErrorKind::PermissionDenied
+}
+
+/// 잠깐 붙들린 파일이면 조금씩 기다리며 다시 해 본다 (최대 ~1초).
+///
+/// iCloud Drive 같은 동기화 폴더에서는 클라이언트가 파일을 올리는 동안 핸들을 쥐고 있어
+/// 그 찰나에 겹친 저장이 실패한다. 사람은 아무 잘못이 없는데 "저장 실패"만 본다.
+/// 대부분 수십 밀리초면 풀리므로 한 번 실패했다고 포기할 이유가 없다.
+/// 잠금이 아닌 오류는 그 자리에서 그대로 돌려준다.
+fn retry_while_locked<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    const BACKOFF_MS: [u64; 5] = [20, 50, 120, 300, 600];
+    let mut last = match op() {
+        Ok(v) => return Ok(v),
+        Err(e) => e,
+    };
+    for ms in BACKOFF_MS {
+        if !is_transient_lock(&last) {
+            return Err(last);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        match op() {
+            Ok(v) => return Ok(v),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
 /// 사이드바/대시보드 목록용 요약 정보
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct NoteSummary {
@@ -109,6 +142,34 @@ pub struct NoteContent {
     pub note_type: String,
     pub frontmatter: Value,
     pub body: String,
+    /// 이 내용을 읽어 온 시점의 파일 지문. 저장할 때 되돌려 주면
+    /// 그 사이에 파일이 바뀌었는지 알 수 있다 (`save_note_checked`).
+    pub stamp: String,
+}
+
+/// 저장 결과.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct SaveResult {
+    /// 지금 디스크에 있는 내용의 지문 — 저장했으면 방금 쓴 내용의 것,
+    /// 충돌이면 **남이 써 넣은** 내용의 것.
+    pub stamp: String,
+    /// 우리가 읽은 뒤에 파일이 바뀌어 있어 **아무것도 쓰지 않았다**
+    pub conflict: bool,
+}
+
+/// 파일 내용을 가리키는 짧은 지문 (FNV-1a 64비트 + 길이).
+///
+/// 수정시각을 쓰지 않는 이유: 클라우드 동기화(iCloud·OneDrive)는 내용이 같아도
+/// 파일을 다시 내려받으며 mtime을 갈아치운다. 그걸 잣대로 삼으면 아무도 고치지
+/// 않은 노트에 "외부에서 바뀌었다"는 경고가 뜨고, 반대로 같은 밀리초 안에 일어난
+/// 진짜 변경은 놓친다. 내용이 곧 신원이다.
+pub fn fingerprint(content: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in content.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:x}-{:x}", content.len())
 }
 
 /// 인덱싱용으로 완전히 파싱된 노트
@@ -148,6 +209,15 @@ pub struct Vault {
     /// 파일이 그대로면 지난번 요약을 그대로 쓴다 — 진실원본은 여전히 파일이고,
     /// 캐시는 (수정시각, 크기)가 어긋나는 순간 버려진다.
     summaries: Mutex<HashMap<String, (i64, i64, NoteSummary)>>,
+    /// 앱이 마지막으로 써 넣은 내용의 지문 (경로 → 지문).
+    ///
+    /// 파일 감시가 "이건 내가 쓴 것"을 알아보는 데 쓴다. 예전에는 마지막 쓰기
+    /// **시각**으로 판단했다 — 2.5초 안에 들어온 변경은 전부 자기 쓰기로 봤다.
+    /// 그런데 그 창은 파일을 가리지 않아서, 같은 저장소를 두 곳에서 열어 두면
+    /// 내가 A를 저장하는 사이에 도착한 **남의 B 저장 알림까지 함께 삼켰다**.
+    /// 알림을 못 받은 쪽은 낡은 내용을 들고 있다가 그대로 덮어썼다.
+    /// 시각이 아니라 내용으로 판단하면 그 구멍이 없다.
+    self_writes: Mutex<HashMap<String, String>>,
 }
 
 impl Vault {
@@ -173,6 +243,7 @@ impl Vault {
             history: crate::history::HistoryPolicy::default(),
             index_stale: Mutex::new(HashSet::new()),
             summaries: Mutex::new(HashMap::new()),
+            self_writes: Mutex::new(HashMap::new()),
         };
         vault.ensure_layout()?;
         // 옛 독서기록 파일을 책 파일로 통합 (있을 때만, 실패해도 vault 열기는 계속)
@@ -291,6 +362,8 @@ impl Vault {
 
         let cutoff = std::time::SystemTime::now() - max_age;
         let mut removed = 0;
+        // 지금 쓰는 자리(.yamcha/tmp)와, 예전에 노트 옆에 쓰던 자리를 함께 걷는다
+        walk(&self.root.join(".yamcha").join("tmp"), cutoff, &mut removed);
         for t in &self.types {
             walk(&self.root.join(&t.folder), cutoff, &mut removed);
         }
@@ -601,13 +674,34 @@ impl Vault {
         Ok(joined)
     }
 
-    /// 원자적 쓰기: 같은 디렉토리에 임시 파일을 쓰고 rename.
+    /// 임시파일을 두는 곳 — **노트 폴더 안이 아니다**.
+    ///
+    /// 예전에는 노트 옆에 `제목.md.tmp`를 만들었다. vault가 클라우드 동기화 폴더
+    /// (iCloud·OneDrive) 안에 있으면 저장할 때마다 그 폴더에서 파일이 생겼다 사라지고,
+    /// 동기화 클라이언트가 그 찰나의 파일까지 업로드하려 든다. 올라간 tmp는 다른 기기로
+    /// 내려가고, 이름이 겹치면 충돌 사본까지 따라 붙는다 — 앱은 `.md`만 보므로 아무도
+    /// 치우지 않는다. 같은 볼륨이면 폴더가 달라도 rename은 그대로 원자적이다.
+    fn tmp_path_for(&self, abs: &Path) -> PathBuf {
+        let name = abs
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "note.md".into());
+        let dir = self.root.join(".yamcha").join("tmp");
+        if fs::create_dir_all(&dir).is_err() {
+            // 임시 폴더를 못 만들면 예전처럼 노트 옆에 쓴다 (저장 자체는 살린다)
+            return abs.with_extension("md.tmp");
+        }
+        // 같은 이름의 노트가 폴더마다 있을 수 있으니 경로 지문으로 구분한다
+        let key = fingerprint(&abs.to_string_lossy());
+        dir.join(format!("{key}-{name}.tmp"))
+    }
+
+    /// 원자적 쓰기: 임시 파일에 다 쓰고 rename으로 갈아 끼운다.
     ///
     /// **원본을 미리 지우지 않는다.** `fs::rename`은 Windows에서도 대상 파일을 덮어쓴다
     /// (MoveFileEx + MOVEFILE_REPLACE_EXISTING). 예전에는 rename 전에 `remove_file`을 했는데,
     /// 그 두 줄 사이에 노트가 존재하지 않는 창이 생겼다 — 백신이나 클라우드 동기화가 갓 만들어진
-    /// `.md.tmp`를 잠그면 rename만 실패해서 **원본은 지워지고 내용은 tmp에만 남았다**. watcher가
-    /// `.md.tmp`를 무시하므로 앱은 그 파일을 영영 못 본다.
+    /// 임시파일을 잠그면 rename만 실패해서 **원본은 지워지고 내용은 tmp에만 남았다**.
     ///
     /// rename 전에 `sync_all`로 내용을 디스크에 확정한다. 안 하면 정전 시 rename만 살아남아
     /// 빈 파일이 남을 수 있다.
@@ -617,18 +711,44 @@ impl Vault {
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent)?;
         }
-        let tmp = abs.with_extension("md.tmp");
-        {
+        let tmp = self.tmp_path_for(abs);
+        retry_while_locked(|| {
             let mut f = fs::File::create(&tmp)?;
             f.write_all(content.as_bytes())?;
-            f.sync_all()?;
-        }
+            f.sync_all()
+        })?;
         // 실패하면 tmp를 치우고 원본은 그대로 둔다 (반쯤 지워진 상태를 남기지 않는다)
-        if let Err(e) = fs::rename(&tmp, abs) {
+        if let Err(e) = retry_while_locked(|| fs::rename(&tmp, abs)) {
             let _ = fs::remove_file(&tmp);
             return Err(e.into());
         }
+        // 방금 쓴 내용을 적어 둔다 — 파일 감시가 이걸로 자기 쓰기를 알아본다
+        if let Ok(rel) = abs.strip_prefix(&self.root) {
+            if let Ok(mut map) = self.self_writes.lock() {
+                map.insert(
+                    rel.to_string_lossy().replace('\\', "/"),
+                    fingerprint(content),
+                );
+            }
+        }
         Ok(())
+    }
+
+    /// 지금 디스크에 있는 내용이 **앱이 마지막으로 써 넣은 그것**인가.
+    ///
+    /// 파일 감시가 자기 쓰기를 외부 변경으로 오인하지 않게 한다. 시간이 아니라 내용으로
+    /// 판단하므로, 저장이 늦게 반영되거나 그 사이에 다른 창이 저장해도 헷갈리지 않는다.
+    pub fn is_self_write(&self, rel: &str) -> bool {
+        let Ok(abs) = self.abs(rel) else { return false };
+        let Ok(content) = fs::read_to_string(&abs) else {
+            return false;
+        };
+        let now = fingerprint(&content);
+        self.self_writes
+            .lock()
+            .ok()
+            .and_then(|m| m.get(rel).cloned())
+            .is_some_and(|last| last == now)
     }
 
     /// rel 경로에서 타입 id 추론 (최상위 폴더 기준)
@@ -909,6 +1029,7 @@ impl Vault {
             note_type: t,
             frontmatter: Value::Object(fm),
             body: body.to_string(),
+            stamp: fingerprint(&content),
         })
     }
 
@@ -931,8 +1052,39 @@ impl Vault {
     }
 
     pub fn save_note(&self, rel: &str, frontmatter: Value, body: &str) -> Result<(), CoreError> {
+        self.save_note_checked(rel, frontmatter, body, None)
+            .map(|_| ())
+    }
+
+    /// 저장하되, `expected`(읽어 올 때 받은 지문)를 주면 **그 사이에 파일이 바뀌었는지
+    /// 먼저 확인한다.** 바뀌었으면 아무것도 쓰지 않고 `conflict`로 돌려준다.
+    ///
+    /// 같은 저장소를 두 곳(다른 기기·다른 창)에서 열어 두면 양쪽 다 화면에 든 본문을
+    /// 통째로 써 넣는다. 나중에 저장한 쪽이 이기고, 진 쪽의 수정은 흔적도 없이 사라진다.
+    /// 파일 감시 알림이 늦거나(클라우드 동기화는 몇 초씩 걸린다) 그 사이 내 저장에 묻히면
+    /// 경고조차 뜨지 않는다. 그래서 **쓰기 직전에 파일 자신에게 다시 묻는다** — 알림에
+    /// 기대지 않는 마지막 방어선이다.
+    pub fn save_note_checked(
+        &self,
+        rel: &str,
+        frontmatter: Value,
+        body: &str,
+        expected: Option<&str>,
+    ) -> Result<SaveResult, CoreError> {
         let abs = self.abs(rel)?;
         let t = self.type_of_rel(rel)?;
+        if let Some(expected) = expected {
+            // 파일이 없으면(방금 지워졌거나 아직 안 만들어졌다) 막을 것이 없다 — 그냥 쓴다
+            if let Ok(on_disk) = fs::read_to_string(&abs) {
+                let now = fingerprint(&on_disk);
+                if now != expected {
+                    return Ok(SaveResult {
+                        stamp: now,
+                        conflict: true,
+                    });
+                }
+            }
+        }
         let mut fm = match frontmatter {
             Value::Object(m) => m,
             _ => Map::new(),
@@ -942,7 +1094,10 @@ impl Vault {
         self.snapshot_before(rel, Some(&content));
         self.atomic_write(&abs, &content)?;
         self.mark_index_stale(&t);
-        Ok(())
+        Ok(SaveResult {
+            stamp: fingerprint(&content),
+            conflict: false,
+        })
     }
 
     /// frontmatter 일부 필드만 갱신 (본문 유지) — 목록 뷰 인라인 편집용
@@ -2164,6 +2319,94 @@ mod tests {
         // 멀쩡한 상대경로는 그대로 통과해야 한다
         assert!(v.abs("Free/메모.md").is_ok());
         assert!(v.abs("Daily/2026/08/2026-08-05.md").is_ok());
+    }
+
+    /// 클라우드 동기화 폴더 안에서 저장할 때마다 노트 옆에 임시파일이 생겼다 사라지면
+    /// 동기화 클라이언트가 그 찰나의 파일까지 올린다. 노트 폴더는 건드리지 않는다.
+    #[test]
+    fn 임시파일은_노트_폴더_밖에_쓴다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "메모", json!({})).unwrap();
+        let dir = v.abs(&rel).unwrap().parent().unwrap().to_path_buf();
+
+        v.save_note(&rel, json!({}), "본문을 고친다").unwrap();
+
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "노트 폴더에 임시파일이 남았다: {leftovers:?}"
+        );
+        assert!(v.read_note(&rel).unwrap().body.contains("본문을 고친다"));
+    }
+
+    /// 저장이 늦게 반영되거나 다른 창이 그 사이에 저장해도, "내가 쓴 것"은
+    /// 시각이 아니라 **내용**으로 가린다.
+    #[test]
+    fn 자기가_쓴_내용을_알아본다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "메모", json!({})).unwrap();
+
+        v.save_note(&rel, json!({}), "내가 쓴 본문").unwrap();
+        assert!(v.is_self_write(&rel), "방금 쓴 것을 남의 것으로 봤다");
+
+        // 밖에서(다른 앱·다른 기기) 고친 파일은 내 것이 아니다
+        let abs = v.abs(&rel).unwrap();
+        let raw = fs::read_to_string(&abs).unwrap();
+        fs::write(&abs, format!("{raw}\n밖에서 덧붙인 줄")).unwrap();
+        assert!(!v.is_self_write(&rel), "남이 고친 것을 내 것으로 봤다");
+    }
+
+    /// 같은 저장소를 두 곳에서 열어 두면 나중에 저장한 쪽이 앞의 수정을 통째로 덮었다.
+    /// 이제 쓰기 직전에 파일 자신에게 다시 묻는다.
+    #[test]
+    fn 읽은_뒤_바뀐_파일은_덮어쓰지_않는다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "메모", json!({})).unwrap();
+
+        // A가 노트를 열었다 (이때의 지문을 들고 편집을 시작한다)
+        let opened = v.read_note(&rel).unwrap();
+
+        // 그 사이 B가 같은 파일을 저장했다
+        v.save_note(&rel, json!({}), "B가 쓴 본문").unwrap();
+
+        // A가 저장을 시도한다 → 막힌다. 파일은 B의 것 그대로여야 한다.
+        let r = v
+            .save_note_checked(&rel, opened.frontmatter.clone(), "A가 쓴 본문", Some(&opened.stamp))
+            .unwrap();
+        assert!(r.conflict, "덮어쓰기를 막지 못했다");
+        assert!(v.read_note(&rel).unwrap().body.contains("B가 쓴 본문"));
+
+        // 사용자가 "내 편집 유지"를 고르면(지문 없이) 일부러 덮어쓴다
+        let forced = v
+            .save_note_checked(&rel, opened.frontmatter, "A가 쓴 본문", None)
+            .unwrap();
+        assert!(!forced.conflict);
+        assert!(v.read_note(&rel).unwrap().body.contains("A가 쓴 본문"));
+    }
+
+    /// 저장하고 나면 그 결과 지문으로 이어서 저장할 수 있어야 한다 —
+    /// 아니면 자기가 방금 쓴 내용과 충돌한다.
+    #[test]
+    fn 저장이_돌려준_지문으로_이어서_저장한다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "메모", json!({})).unwrap();
+        let opened = v.read_note(&rel).unwrap();
+
+        let first = v
+            .save_note_checked(&rel, opened.frontmatter.clone(), "첫 번째", Some(&opened.stamp))
+            .unwrap();
+        assert!(!first.conflict);
+
+        let second = v
+            .save_note_checked(&rel, opened.frontmatter, "두 번째", Some(&first.stamp))
+            .unwrap();
+        assert!(!second.conflict, "방금 내가 쓴 내용을 남의 것으로 봤다");
+        assert!(v.read_note(&rel).unwrap().body.contains("두 번째"));
     }
 
     /// 강제 종료로 남은 임시파일은 걷되, **갓 만들어진 건 건드리지 않는다**

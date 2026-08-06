@@ -157,6 +157,12 @@ pub fn read_note(state: State<'_, AppState>, rel_path: String) -> Result<NoteCon
     with_ctx(&state, |c| c.vault.read_note(&rel_path))
 }
 
+/// 노트 저장.
+///
+/// `expected_stamp`은 이 내용을 읽어 올 때 받은 파일 지문이다. 주면 쓰기 직전에
+/// 파일이 그대로인지 확인하고, 그 사이에 누가 고쳤으면 **쓰지 않고** `conflict`로
+/// 돌려준다 — 같은 저장소를 두 곳에서 열어 둔 사이에 남의 수정을 조용히 덮는 것을
+/// 막는다. 사용자가 "내 편집 유지"를 골라 일부러 덮어쓸 때는 `null`을 준다.
 #[tauri::command]
 #[specta::specta]
 pub fn save_note(
@@ -164,10 +170,16 @@ pub fn save_note(
     rel_path: String,
     frontmatter: serde_json::Value,
     body: String,
-) -> Result<(), String> {
+    expected_stamp: Option<String>,
+) -> Result<yamcha_core::SaveResult, String> {
     with_ctx(&state, |c| {
-        c.vault.save_note(&rel_path, frontmatter, &body)?;
-        refresh_note(c, &rel_path)
+        let r = c
+            .vault
+            .save_note_checked(&rel_path, frontmatter, &body, expected_stamp.as_deref())?;
+        if !r.conflict {
+            refresh_note(c, &rel_path)?;
+        }
+        Ok(r)
     })
 }
 

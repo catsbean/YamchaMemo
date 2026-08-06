@@ -164,7 +164,9 @@ export default function BookInfoModal({
         .map((t) => t.trim())
         .filter(Boolean);
       const body = composeBookBody(introDraft, records);
-      await commands.saveNote(rel, nextFm, body);
+      // 충돌 검사 없음(null): 이 화면은 [저장]을 누른 그 순간의 폼을 그대로 쓴다.
+      // 검사에 막혀 조용히 안 써지는 쪽이 사용자에게 더 나쁘다.
+      await commands.saveNote(rel, nextFm, body, null);
 
       // 제목 변경 → 파일명·링크 갱신
       let finalRel = rel;

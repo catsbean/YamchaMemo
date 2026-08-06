@@ -70,7 +70,8 @@ export default function BookSearchDialog({ onClose }: { onClose: () => void }) {
       const cur = await commands.readNote(r.data);
       if (cur.status === "ok") {
         const body = `## 소개\n\n${intro}\n\n## 기록\n\n`;
-        await commands.saveNote(r.data, cur.data.frontmatter, body);
+        // 방금 만든 책에 소개를 채우는 자리다 — 충돌할 상대가 없다(null)
+        await commands.saveNote(r.data, cur.data.frontmatter, body, null);
       }
     }
     if (hit.thumbnail_url) {

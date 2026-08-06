@@ -2,17 +2,43 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 /** 저장 커맨드를 붙잡아 두는 손잡이 — 저장이 "도는 중"인 상태를 만들어 낸다 */
 let releaseSave: (() => void) | null = null;
-const saveCalls: { body: string }[] = [];
+const saveCalls: { body: string; expected: string | null }[] = [];
+/** 다음 저장이 "그 사이에 파일이 바뀌었다"고 답하게 한다 */
+let nextIsConflict = false;
 
 vi.mock("../bindings", () => ({
   commands: {
-    saveNote: (_rel: string, _fm: unknown, body: string) => {
-      saveCalls.push({ body });
+    saveNote: (
+      _rel: string,
+      _fm: unknown,
+      body: string,
+      expected: string | null,
+    ) => {
+      saveCalls.push({ body, expected });
+      const conflict = nextIsConflict;
+      nextIsConflict = false;
       return new Promise((resolve) => {
-        releaseSave = () => resolve({ status: "ok", data: null });
+        releaseSave = () =>
+          resolve({
+            status: "ok",
+            data: { stamp: conflict ? "남이-쓴-지문" : "새-지문", conflict },
+          });
       });
     },
+    readNote: async (rel: string) => ({
+      status: "ok",
+      data: {
+        rel_path: rel,
+        note_type: "free",
+        frontmatter: {},
+        body: "디스크에 있던 내용",
+        stamp: "디스크-지문",
+      },
+    }),
     listNotes: async () => ({ status: "ok", data: [] }),
+    noteSummary: async () => ({ status: "error", error: "없음" }),
+    auditVault: async () => ({ status: "ok", data: [] }),
+    flushIndexFiles: async () => ({ status: "ok", data: null }),
     autoTitleNote: async () => ({ status: "ok", data: "" }),
   },
 }));
@@ -45,9 +71,12 @@ function openNote(body: string) {
       note_type: "free",
       frontmatter: {},
       body,
+      stamp: "읽어온-지문",
     } as never,
     dirty: false,
     notes: [],
+    externalChanged: false,
+    forceOverwrite: false,
   });
 }
 
@@ -55,6 +84,7 @@ describe("saveCurrent — 저장 중 편집", () => {
   beforeEach(() => {
     releaseSave = null;
     saveCalls.length = 0;
+    nextIsConflict = false;
     useVault.setState({ error: null });
   });
 
@@ -113,5 +143,87 @@ describe("saveCurrent — 저장 중 편집", () => {
 
     expect(saveCalls[1].body).toBe("두 번째 편집");
     expect(useVault.getState().dirty).toBe(false);
+  });
+
+  /** 두 번째 저장이 첫 번째 저장 결과와 충돌하면 안 된다 —
+   *  방금 내가 쓴 내용을 남의 것으로 오인하는 셈이다. */
+  it("연달아 저장할 때 방금 쓴 지문을 들고 간다", async () => {
+    openNote("처음");
+    useVault.getState().setBody("첫 번째");
+
+    const first = useVault.getState().saveCurrent();
+    await vi.waitFor(() => expect(releaseSave).not.toBeNull());
+    releaseSave!();
+    await first;
+
+    useVault.getState().setBody("두 번째");
+    const second = useVault.getState().saveCurrent();
+    await vi.waitFor(() => expect(saveCalls.length).toBe(2));
+    releaseSave!();
+    await second;
+
+    expect(saveCalls[0].expected).toBe("읽어온-지문");
+    expect(saveCalls[1].expected).toBe("새-지문");
+  });
+});
+
+/** 같은 저장소를 두 곳에서 열어 두면 양쪽 다 화면에 든 본문을 통째로 써 넣는다.
+ *  파일 감시 알림이 늦거나 묻히면 진 쪽의 수정은 흔적도 없이 사라졌다.
+ *  이제 쓰기 직전에 파일 자신에게 다시 묻는다 — 알림에 기대지 않는 마지막 방어선. */
+describe("saveCurrent — 다른 곳에서 먼저 고쳤을 때", () => {
+  beforeEach(() => {
+    releaseSave = null;
+    saveCalls.length = 0;
+    nextIsConflict = false;
+    useVault.setState({ error: null });
+  });
+
+  it("충돌이면 덮어쓰지 않고 경고를 띄운 채 내 글자를 지킨다", async () => {
+    openNote("처음");
+    useVault.getState().setBody("내가 친 글자");
+
+    nextIsConflict = true;
+    const saving = useVault.getState().saveCurrent();
+    await vi.waitFor(() => expect(releaseSave).not.toBeNull());
+    releaseSave!();
+    await saving;
+
+    expect(useVault.getState().externalChanged).toBe(true);
+    // 저장이 안 됐으므로 아직 쓸 게 남았고, 친 글자도 그대로여야 한다
+    expect(useVault.getState().dirty).toBe(true);
+    expect(useVault.getState().current?.body).toBe("내가 친 글자");
+  });
+
+  it('"내 편집 유지"를 고르면 그다음 저장은 검사 없이 덮어쓴다', async () => {
+    openNote("처음");
+    useVault.getState().setBody("내가 친 글자");
+
+    nextIsConflict = true;
+    const first = useVault.getState().saveCurrent();
+    await vi.waitFor(() => expect(releaseSave).not.toBeNull());
+    releaseSave!();
+    await first;
+
+    useVault.getState().dismissExternalChange();
+    const second = useVault.getState().saveCurrent();
+    await vi.waitFor(() => expect(saveCalls.length).toBe(2));
+    releaseSave!();
+    await second;
+
+    // 검사를 건너뛰겠다는 뜻으로 지문을 주지 않는다
+    expect(saveCalls[1].expected).toBeNull();
+    expect(useVault.getState().dirty).toBe(false);
+    expect(useVault.getState().forceOverwrite).toBe(false);
+  });
+
+  it("다시 불러오면 새 지문으로 갈아타고 강제 덮어쓰기도 푼다", async () => {
+    openNote("처음");
+    useVault.getState().dismissExternalChange();
+    expect(useVault.getState().forceOverwrite).toBe(true);
+
+    await useVault.getState().reloadCurrent();
+
+    expect(useVault.getState().forceOverwrite).toBe(false);
+    expect(useVault.getState().externalChanged).toBe(false);
   });
 });

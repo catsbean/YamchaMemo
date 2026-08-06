@@ -142,6 +142,8 @@ interface VaultStore {
   mirrorReports: MirrorReport[];
   /** 열려 있는 노트가 외부에서 수정됨 (dirty 상태라 자동 리로드 못한 경우) */
   externalChanged: boolean;
+  /** "내 편집 유지"를 골랐다 — 다음 저장은 충돌 검사를 건너뛰고 일부러 덮어쓴다 */
+  forceOverwrite: boolean;
   /** 규격에서 벗어난 노트들 (외부 편집기로 만들어졌거나 고쳐진 파일) */
   issues: NoteIssue[];
   refreshIssues(): Promise<void>;
@@ -256,9 +258,28 @@ export const useVault = create<VaultStore>((set, get) => {
       const cur = get().current;
       if (!cur) return;
       await guard(async () => {
-        unwrap(
-          await commands.saveNote(cur.rel_path, cur.frontmatter, cur.body),
+        // 읽어 온 뒤에 파일이 바뀌었으면 쓰지 않는다 — 다른 창·다른 기기의 수정을
+        // 조용히 덮는 것을 막는다. "내 편집 유지"를 고른 뒤에는 일부러 덮어쓴다.
+        const result = unwrap(
+          await commands.saveNote(
+            cur.rel_path,
+            cur.frontmatter,
+            cur.body,
+            get().forceOverwrite ? null : cur.stamp,
+          ),
         );
+        if (result.conflict) {
+          // 아무것도 쓰지 않았다. 친 글자는 그대로 두고 사용자에게 고르게 한다.
+          resaveRequested = false;
+          set({ externalChanged: true });
+          return;
+        }
+        set({ forceOverwrite: false });
+        // 다음 저장이 자기 자신과 충돌하지 않도록 방금 쓴 내용의 지문으로 갈아 끼운다
+        const saved = get().current;
+        if (saved?.rel_path === cur.rel_path) {
+          set({ current: { ...saved, stamp: result.stamp } });
+        }
         // 저장이 도는 동안 더 친 글자가 있으면 dirty를 유지한다.
         // 무조건 false로 두면 그 글자들은 "저장됨" 표시 뒤에 메모리에만 남고,
         // 자동저장 타이머도 !dirty로 멈춰 화면을 옮기는 순간 사라진다.
@@ -487,6 +508,7 @@ export const useVault = create<VaultStore>((set, get) => {
     mirrors: [],
     mirrorReports: [],
     externalChanged: false,
+    forceOverwrite: false,
     issues: [],
     historyMax: 20,
     historyIntervalSecs: 300,
@@ -998,12 +1020,19 @@ export const useVault = create<VaultStore>((set, get) => {
       if (!cur) return;
       await guard(async () => {
         const note = unwrap(await commands.readNote(cur.rel_path));
-        set({ current: note, dirty: false, externalChanged: false });
+        set({
+          current: note,
+          dirty: false,
+          externalChanged: false,
+          forceOverwrite: false,
+        });
       });
     },
 
     dismissExternalChange() {
-      set({ externalChanged: false });
+      // 남의 수정을 알고도 내 것을 쓰겠다는 선택이다 — 다음 저장은 검사를 건너뛴다.
+      // (안 그러면 충돌 검사에 계속 막혀 경고만 되풀이된다)
+      set({ externalChanged: false, forceOverwrite: true });
     },
 
     async reindexAll() {

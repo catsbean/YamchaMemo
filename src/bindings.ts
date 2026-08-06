@@ -64,9 +64,17 @@ async readNote(relPath: string) : Promise<Result<NoteContent, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async saveNote(relPath: string, frontmatter: JsonValue, body: string) : Promise<Result<null, string>> {
+/**
+ * 노트 저장.
+ * 
+ * `expected_stamp`은 이 내용을 읽어 올 때 받은 파일 지문이다. 주면 쓰기 직전에
+ * 파일이 그대로인지 확인하고, 그 사이에 누가 고쳤으면 **쓰지 않고** `conflict`로
+ * 돌려준다 — 같은 저장소를 두 곳에서 열어 둔 사이에 남의 수정을 조용히 덮는 것을
+ * 막는다. 사용자가 "내 편집 유지"를 골라 일부러 덮어쓸 때는 `null`을 준다.
+ */
+async saveNote(relPath: string, frontmatter: JsonValue, body: string, expectedStamp: string | null) : Promise<Result<SaveResult, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("save_note", { relPath, frontmatter, body }) };
+    return { status: "ok", data: await TAURI_INVOKE("save_note", { relPath, frontmatter, body, expectedStamp }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1221,7 +1229,12 @@ section: string }
 /**
  * 편집기용 노트 전체 내용
  */
-export type NoteContent = { rel_path: string; note_type: string; frontmatter: JsonValue; body: string }
+export type NoteContent = { rel_path: string; note_type: string; frontmatter: JsonValue; body: string; 
+/**
+ * 이 내용을 읽어 온 시점의 파일 지문. 저장할 때 되돌려 주면
+ * 그 사이에 파일이 바뀌었는지 알 수 있다 (`save_note_checked`).
+ */
+stamp: string }
 /**
  * 점검 항목 한 건
  */
@@ -1278,6 +1291,19 @@ cover: string; kind_label: string; date: string; text: string }
  * 버전 확인 결과 — 자동 설치는 하지 않고 안내만 한다.
  */
 export type ReleaseCheck = { current: string; latest: string; newer: boolean; url: string }
+/**
+ * 저장 결과.
+ */
+export type SaveResult = { 
+/**
+ * 지금 디스크에 있는 내용의 지문 — 저장했으면 방금 쓴 내용의 것,
+ * 충돌이면 **남이 써 넣은** 내용의 것.
+ */
+stamp: string; 
+/**
+ * 우리가 읽은 뒤에 파일이 바뀌어 있어 **아무것도 쓰지 않았다**
+ */
+conflict: boolean }
 /**
  * 저장 결과 — `type_id`는 실제로 쓰인 분류다. 요청한 분류가 없어졌거나
  * (커스텀 분류 삭제 등) 책·데일리처럼 쓸 수 없는 분류면 자유노트로 대신

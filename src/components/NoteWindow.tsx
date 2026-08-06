@@ -43,6 +43,12 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
   const resaveRef = useRef(false);
   // 이벤트 리스너가 매번 재구독되지 않도록 dirty를 ref로도 들고 있는다
   const dirtyRef = useRef(false);
+  // "내 편집 유지"를 골랐다 — 다음 저장은 충돌 검사를 건너뛰고 일부러 덮어쓴다
+  const forceRef = useRef(false);
+  // 지금 편집 중인 내용이 어느 파일 상태에서 출발했는지 (충돌 검사용 지문).
+  // state가 아니라 ref인 이유: 연달아 저장이 돌 때 setState는 다음 렌더에나 반영돼서
+  // 두 번째 바퀴가 낡은 지문을 들고 **자기 저장과 충돌**한다.
+  const stampRef = useRef<string | null>(null);
   // 편집 횟수. 저장을 시작할 때 값을 붙잡아 뒀다가, 끝난 뒤에도 그대로면
   // "그 사이 더 친 글자가 없다"는 뜻이라 그때만 dirty를 내린다.
   // ref라 동기적으로 갱신되므로 await 사이에 낀 편집을 놓치지 않는다.
@@ -100,6 +106,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
     commands.readNote(relPath).then((r) => {
       if (r.status === "ok") {
         setNote(r.data);
+        stampRef.current = r.data.stamp;
         setBody(
           r.data.note_type === "book"
             ? splitBookBody(r.data.body).records
@@ -132,6 +139,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
           ? splitBookBody(r.data.body).records
           : r.data.body;
       setNote(r.data);
+      stampRef.current = r.data.stamp;
       // 내용이 같으면 그대로 둔다 (내 저장이 되돌아온 메아리 · 커서 튐 방지)
       setBody((cur) => (cur === next ? cur : next));
     }).then((fn) => {
@@ -154,11 +162,27 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
       if (!note) return;
       const rev = revRef.current;
       const full = isBook ? composeBookBody(intro, body) : body;
-      const r = await commands.saveNote(relPath, note.frontmatter, full);
+      // 읽어 온 뒤에 파일이 바뀌었으면 쓰지 않는다 — 메인 창이나 다른 기기의 수정을
+      // 조용히 덮는 것을 막는다. 파일 감시 알림이 늦게 와도 이 검사는 늦지 않는다.
+      const r = await commands.saveNote(
+        relPath,
+        note.frontmatter,
+        full,
+        forceRef.current ? null : stampRef.current,
+      );
       if (r.status !== "ok") {
         setError(r.error);
         return; // 실패했으면 같은 오류로 계속 돌지 않는다
       }
+      if (r.data.conflict) {
+        // 아무것도 쓰지 않았다. 친 글자는 그대로 두고 사용자에게 고르게 한다.
+        resaveRef.current = false;
+        setExternalChanged(true);
+        return;
+      }
+      forceRef.current = false;
+      // 다음 저장이 자기 자신과 충돌하지 않도록 방금 쓴 내용의 지문으로 갈아 끼운다
+      stampRef.current = r.data.stamp;
       // 저장하는 동안 더 친 글자가 있으면 dirty를 유지한다 (그래야 자동저장이 다시 돈다)
       if (revRef.current === rev) setDirty(false);
       // 메인 창이 목록·검색을 갱신하도록 알린다 (외부변경 이벤트 재사용)
@@ -212,6 +236,8 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
       return;
     }
     setNote(r.data);
+    stampRef.current = r.data.stamp;
+    forceRef.current = false;
     setBody(
       r.data.note_type === "book"
         ? splitBookBody(r.data.body).records
@@ -345,7 +371,12 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
             </button>
             <button
               className="rounded px-2 py-1 text-xs text-amber-600 hover:bg-amber-100"
-              onClick={() => setExternalChanged(false)}
+              onClick={() => {
+                // 남의 수정을 알고도 내 것을 쓰겠다는 선택이다 — 다음 저장은
+                // 충돌 검사를 건너뛴다 (안 그러면 경고만 되풀이된다)
+                forceRef.current = true;
+                setExternalChanged(false);
+              }}
             >
               내 편집 유지
             </button>
