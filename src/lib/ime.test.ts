@@ -88,6 +88,76 @@ describe("한글 조합 중 Ctrl+Enter", () => {
   });
 });
 
+/** 실제 앱(WebView2 디버깅 포트)에서 잡은 이벤트 순서를 그대로 옮긴 것.
+ *
+ *  이 IME는 `compositionstart/end`를 아예 내지 않는다 — 음절을 곧바로 확정해 넣고,
+ *  고쳐 쓸 때는 지웠다 다시 넣는다. Ctrl이 눌려 있으면 그 백스페이스가 브라우저에서
+ *  **단어 통째 지우기**가 되어 앞 글자까지 날아간다:
+ *
+ *      input insertText "록"        value="기록"
+ *      keydown Control              value="기록"
+ *      input deleteWordBackward     value=""      ← 단어가 통째로 사라진다
+ *      input insertText "록"        value="록"
+ *      keydown Ctrl+Enter           value="록"    ← 여기서 발사됐다
+ *
+ *  조합 상태만 보던 상태 기계에는 이 경로가 보이지 않았다. */
+describe("조합을 안 쓰는 IME — Ctrl에 단어를 삼킬 때", () => {
+  it('"기록"을 치고 Ctrl+Enter하면 "기록"이 간다', async () => {
+    const { field, sent } = mount("value-then-end");
+    field.commitSyllable("기");
+    field.commitSyllable("록");
+    expect(field.value).toBe("기록");
+
+    field.holdCtrl();
+    field.imeRevisionUnderCtrl("록");
+    expect(field.value).toBe("록"); // 입력창은 이 꼴이 된다
+
+    field.keydown(CTRL_ENTER);
+    await settle();
+    expect(sent).toEqual(["기록"]);
+  });
+
+  it("앞말이 있어도 그 단어만 되돌린다", async () => {
+    const { field, sent } = mount("value-then-end");
+    for (const ch of "오늘 ") field.typeAscii(ch);
+    field.commitSyllable("기");
+    field.commitSyllable("록");
+
+    field.holdCtrl();
+    field.imeRevisionUnderCtrl("록");
+    field.keydown(CTRL_ENTER);
+    await settle();
+    expect(sent).toEqual(["오늘 기록"]);
+  });
+
+  it("보내지 않고 Ctrl에서 손을 떼도 입력창이 성하다", async () => {
+    const { field } = mount("value-then-end");
+    field.commitSyllable("기");
+    field.commitSyllable("록");
+
+    field.holdCtrl();
+    field.imeRevisionUnderCtrl("록");
+    field.releaseCtrl();
+
+    expect(field.value).toBe("기록");
+  });
+
+  /** 사람이 일부러 누른 Ctrl+Backspace까지 되돌리면 안 된다.
+   *  둘은 "지운 자리에 곧바로 글자가 다시 들어오는가"로 갈린다. */
+  it("사람이 지운 단어는 되살리지 않는다", async () => {
+    const { field, sent } = mount("value-then-end");
+    for (const ch of "hello world") field.typeAscii(ch);
+
+    field.holdCtrl();
+    field.deleteWordBackward(); // 다시 넣지 않는다 — 사람이 지운 것
+    expect(field.value).toBe("hello ");
+
+    field.keydown(CTRL_ENTER);
+    await settle();
+    expect(sent).toEqual(["hello "]);
+  });
+});
+
 describe("조합이 아닐 때", () => {
   it("영문은 그 자리에서 보내고 줄바꿈을 막는다", async () => {
     const { field, sent } = mount("value-then-end");
@@ -136,7 +206,7 @@ describe("보낸 뒤 상태", () => {
 });
 
 describe("placeholder 깜빡임 방지", () => {
-  it("조합 중과 값이 있을 때만 감춘다", () => {
+  it("조합 중과 값이 있을 때만 감춘다", async () => {
     const { field, core } = mount("value-then-end");
     const hidden = () => field.classes.has("ime-composing");
 
@@ -147,7 +217,39 @@ describe("placeholder 깜빡임 방지", () => {
     field.finishComposition()?.();
     expect(hidden()).toBe(true); // 값이 남아 있으면 계속
     core.clear();
+    await settle();
     expect(hidden()).toBe(false); // 비우면 다시 보인다
+  });
+
+  /** 한글 IME는 음절을 고칠 때마다 글자를 지웠다 다시 넣는다. 첫 음절을 쓰는 동안에는
+   *  그 사이 값이 통째로 빈 칸이 된다 — 곧바로 안내 문구를 되살리면 글자마다 번쩍인다.
+   *  실측: `기록` 한 단어를 치는 동안 3번 되살아났다. */
+  it("글자를 지웠다 다시 넣는 사이에는 안내 문구가 돌아오지 않는다", async () => {
+    const { field } = mount("value-then-end");
+    const shown = () => !field.classes.has("ime-composing");
+
+    field.commitSyllable("ㄱ");
+    expect(shown()).toBe(false);
+
+    // IME가 고쳐 쓰려고 지운다 → 값이 잠깐 빈 칸
+    field.deleteBack();
+    expect(field.value).toBe("");
+    expect(shown()).toBe(false); // 여기서 되살아나면 깜빡인다
+
+    field.commitSyllable("기"); // 곧바로 다시 넣는다
+    await settle();
+    expect(shown()).toBe(false);
+    expect(field.value).toBe("기");
+  });
+
+  it("진짜로 다 지우면 안내 문구가 돌아온다", async () => {
+    const { field } = mount("value-then-end");
+    field.commitSyllable("기");
+    field.deleteBack();
+
+    expect(field.classes.has("ime-composing")).toBe(true); // 아직은 참는다
+    await settle();
+    expect(field.classes.has("ime-composing")).toBe(false); // 그대로 비어 있으면 돌아온다
   });
 });
 

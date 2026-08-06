@@ -7,7 +7,10 @@
  *  실제 앱(WebView2)에서 확인한 사실을 그대로 반영했다:
  *  - 조합 중 눌린 키는 `VK_PROCESSKEY`로 가려져 `key: "Process"`로 온다
  *  - 포커스가 빠지면 브라우저가 조합을 그 자리에서 확정한다
- *  - 그런데 IME 엔진은 자기 조합을 따로 들고 있어서, 겹치면 글자가 두 번 들어간다 */
+ *  - 그런데 IME 엔진은 자기 조합을 따로 들고 있어서, 겹치면 글자가 두 번 들어간다
+ *  - **조합 이벤트를 아예 안 내는 IME도 있다** — 음절을 곧바로 확정해 넣고, 고칠 때는
+ *    지웠다 다시 넣는다. Ctrl이 눌려 있으면 그 지우기가 단어 통째 지우기가 된다
+ *    (`commitSyllable` / `imeRevisionUnderCtrl`) */
 
 export type ImeOrder =
   /** 값이 먼저 들어오고 compositionend가 뒤 (흔한 순서) */
@@ -21,7 +24,8 @@ interface Handlers {
   ref: { current: unknown };
   onCompositionStart: () => void;
   onCompositionEnd: (e: { data: string }) => void;
-  onInput: () => void;
+  onInput: (e?: { nativeEvent?: { inputType?: string } }) => void;
+  onKeyUp: (e: Record<string, unknown>) => void;
   onKeyDown: (e: Record<string, unknown>) => void;
 }
 
@@ -42,6 +46,8 @@ export class FakeField {
   private composingText = "";
   /** IME 엔진이 아직 들고 있는 조합 글자 (브라우저 쪽 확정과 별개) */
   private imeOwned = "";
+  /** Ctrl이 눌려 있는가 — 이후 키 이벤트에 실린다 */
+  private ctrlHeld = false;
   private h!: Handlers;
 
   constructor(private order: ImeOrder = "value-then-end") {
@@ -67,13 +73,62 @@ export class FakeField {
     this.value += text;
     this.composingText = text;
     this.imeOwned = text;
-    this.h.onInput();
+    this.input("insertCompositionText");
   }
 
   /** 조합 없이 그냥 글자 입력 (영문) */
   typeAscii(ch: string) {
     this.value += ch;
-    this.h.onInput();
+    this.input("insertText");
+  }
+
+  private input(inputType: string) {
+    this.h.onInput({ nativeEvent: { inputType } });
+  }
+
+  // ── 조합 이벤트를 쓰지 않는 IME (실제 앱에서 관찰) ──
+  //
+  // 윈도우 한글 IME 중에는 `compositionstart/end`를 전혀 내지 않고 음절을 곧바로
+  // 확정해 넣는 것이 있다. 고쳐 쓸 때는 **지우고 다시 넣는다**. 평소에는 한 글자씩
+  // 지우니 티가 안 나는데, Ctrl이 눌려 있으면 그 백스페이스가 "단어 통째 지우기"가
+  // 되어 앞 글자까지 날아간다.
+
+  /** 조합 없이 음절 하나를 확정해 넣는다 */
+  commitSyllable(ch: string) {
+    this.value += ch;
+    this.input("insertText");
+  }
+
+  /** IME가 고쳐 쓰려고 한 글자 지운다 (Ctrl 없이 — 평소 타이핑) */
+  deleteBack() {
+    this.value = this.value.slice(0, -1);
+    this.input("deleteContentBackward");
+  }
+
+  /** Ctrl을 누른다 (이후 keydown·keyup에 ctrlKey가 실린다) */
+  holdCtrl() {
+    this.ctrlHeld = true;
+    this.keydown({ key: "Control" });
+  }
+
+  releaseCtrl() {
+    this.h.onKeyUp({ key: "Control", ctrlKey: false });
+    this.ctrlHeld = false;
+  }
+
+  /** 사람이 일부러 누른 Ctrl+Backspace — 앞 단어를 지운다. 다시 넣지 않는다. */
+  deleteWordBackward() {
+    this.keydown({ key: "Backspace" });
+    this.value = this.value.replace(/\S+\s*$/, "");
+    this.input("deleteWordBackward");
+  }
+
+  /** IME가 Ctrl을 쥔 채 조합을 고쳐 쓴다 — 단어를 삼키고 마지막 음절만 되돌려 넣는다.
+   *  `기록` → (단어 삭제) `` → (다시 넣기) `록` */
+  imeRevisionUnderCtrl(syllable: string) {
+    this.deleteWordBackward();
+    this.value += syllable;
+    this.input("insertText");
   }
 
   /** IME가 조합을 확정한다.
@@ -83,7 +138,7 @@ export class FakeField {
     const data = this.composingText;
     this.composingText = "";
     if (this.order === "value-then-end") {
-      this.h.onInput();
+      this.input("insertCompositionText");
       this.h.onCompositionEnd({ data });
       return null;
     }
@@ -92,7 +147,7 @@ export class FakeField {
     this.h.onCompositionEnd({ data });
     return () => {
       this.value += data;
-      this.h.onInput();
+      this.input("insertCompositionText");
     };
   }
 
@@ -129,7 +184,7 @@ export class FakeField {
     if (this.imeOwned) {
       this.value += this.imeOwned;
       this.imeOwned = "";
-      this.h.onInput();
+      this.input("insertText");
     }
   }
 
@@ -137,7 +192,7 @@ export class FakeField {
     this.defaultPrevented = false;
     this.h.onKeyDown({
       code: e.key === "Enter" ? "Enter" : undefined,
-      ctrlKey: false,
+      ctrlKey: this.ctrlHeld,
       metaKey: false,
       shiftKey: false,
       ...e,

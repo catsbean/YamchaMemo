@@ -44,7 +44,15 @@ export function isImeEnter(e: {
  *  확정시키는 키라서, 우리가 blur로 한 번 더 확정시키면 같은 음절이 두 번
  *  들어간다(마지막 글자가 하나 더 붙었다 사라지는 증상).
  *  그래서 blur 확정은 `input`이 끝내 오지 않을 때의 최후 수단으로만 쓴다 —
- *  [추가] 버튼이 멀쩡했던 이유(클릭 = 포커스 이동 = 확정)를 그때만 빌려 온다. */
+ *  [추가] 버튼이 멀쩡했던 이유(클릭 = 포커스 이동 = 확정)를 그때만 빌려 온다.
+ *
+ *  ## 규칙 4 — 조합 이벤트를 아예 안 쓰는 IME도 있다
+ *  위 규칙들은 모두 "조합 중"이라는 상태가 있다고 보고 세운 것이다. 그런데 윈도우
+ *  한글 IME 중에는 `compositionstart/end`를 한 번도 내지 않고 음절을 곧바로 확정해
+ *  넣는 것이 있다 — 고쳐 쓸 때는 **지웠다 다시 넣는다**. Ctrl이 눌려 있으면 그
+ *  백스페이스가 브라우저에서 "단어 통째 지우기"가 되어 앞 글자까지 날아간다
+ *  (`기록` + Ctrl+Enter → `록`만 저장). `isComposing`을 아무리 잘 봐도 이 경로는
+ *  안 보인다. 그래서 `repaired()`가 따로 지켜본다. */
 export function useImeInput<T extends InputEl = HTMLInputElement>(
   onSubmit: (value: string) => void,
   mode: "enter" | "ctrl-enter" = "enter",
@@ -80,9 +88,43 @@ export function createImeCore<T extends InputEl>(
     current: undefined,
   };
 
+  // ── Ctrl을 누른 채 IME가 단어를 삼키는 것 지켜보기 ──
+  // Ctrl을 누른 순간의 값. 이 뒤에 IME가 단어를 지웠다 다시 쓰면 여기로 되돌린다.
+  const ctrlValue: { current: string | null } = { current: null };
+  const ateWord = { current: false };
+  const reinserted = { current: false };
+
+  const forgetCtrl = () => {
+    ctrlValue.current = null;
+    ateWord.current = false;
+    reinserted.current = false;
+  };
+
+  /** IME가 삼킨 단어를 되돌린 값. 삼킨 적이 없으면 null.
+   *
+   *  ## 무엇을 되돌리는가
+   *  윈도우 한글 IME 중에는 조합 이벤트를 전혀 쓰지 않고 **지웠다 다시 넣는**
+   *  방식으로 음절을 고쳐 쓰는 것이 있다. 평소에는 한 글자씩 지우니 티가 안 난다.
+   *  그런데 Ctrl이 눌려 있으면 그 백스페이스가 브라우저에서 "단어 통째 지우기"
+   *  (`deleteWordBackward`)가 되어 **앞 글자까지 함께 날아간다**. 그러고 나서 IME는
+   *  자기가 들고 있던 마지막 음절 하나만 다시 넣는다.
+   *  `기록` + Ctrl+Enter → 입력창에 `록`만 남은 채로 발사된다.
+   *
+   *  ## 왜 막지 않고 되돌리는가
+   *  그 순간만 보면 IME가 보낸 백스페이스와 사람이 누른 Ctrl+Backspace가 완전히
+   *  똑같다 (`key: "Backspace"`, `ctrlKey: true`). 그 자리에서 막으면 사람이 일부러
+   *  누른 단어 지우기까지 함께 막힌다.
+   *  둘은 **그 다음**에 갈린다 — IME는 지운 자리에 곧바로 글자를 다시 넣고, 사람은
+   *  Ctrl을 쥔 채로 글자를 넣을 방법이 없다. 그래서 "지웠다 + 다시 넣었다"가 모두
+   *  보였을 때만 되돌린다. */
+  const repaired = (): string | null =>
+    ateWord.current && reinserted.current ? ctrlValue.current : null;
+
   const fire = () => {
     const el = ref.current;
-    if (el) getOpts().onSubmit(el.value);
+    if (!el) return;
+    getOpts().onSubmit(repaired() ?? el.value);
+    forgetCtrl();
   };
 
   /** 예약된 제출을 실행 (조합이 확정돼 값이 들어온 뒤) */
@@ -103,13 +145,36 @@ export function createImeCore<T extends InputEl>(
     if (refocus) el.focus();
   };
 
-  /** 조합 중에는 placeholder를 감춘다. 브라우저가 조합 글자를 지웠다 다시 넣는
-   *  사이사이 값을 빈 것으로 보고 placeholder를 깜빡이게 하는 걸 막는다.
-   *  (깜빡임은 화면만의 문제고 값 자체는 멀쩡하다)
+  /** 글자를 지웠다 다시 넣는 사이에 안내 문구가 되살아나지 않도록 기다리는 시간.
+   *  실측한 IME의 지우기→다시 넣기 간격은 30~40ms였다. 넉넉히 잡되, 진짜로 다 지웠을
+   *  때 문구가 돌아오는 게 굼떠 보이지 않을 만큼만. */
+  const PLACEHOLDER_GRACE_MS = 150;
+  const placeholderTimer: { current: ReturnType<typeof setTimeout> | undefined } =
+    { current: undefined };
+
+  /** 값이 있는 동안 placeholder를 감춘다.
+   *
+   *  ## 왜 되살릴 때만 뜸을 들이는가
+   *  한글 IME는 음절을 고칠 때마다 **글자를 지웠다 다시 넣는다**. 첫 음절을 쓰는
+   *  동안에는 그 사이 값이 통째로 빈 칸이 된다 — 실측: `기록` 한 단어에 3번, 매번
+   *  30~40ms. 그때마다 안내 문구를 곧바로 되살리면 글자마다 번쩍인다.
+   *  값이 생기는 쪽은 즉시 감추고(늦으면 문구와 글자가 겹쳐 보인다), 비는 쪽만
+   *  한 박자 기다렸다가 **그때도 여전히 비어 있을 때만** 되살린다.
+   *
    *  주의: 이 훅을 쓰는 입력창의 `className`은 고정 문자열이어야 한다. 값이
    *  바뀌면 React가 class를 통째로 다시 써서 여기서 붙인 표시가 날아간다. */
   const syncPlaceholder = (el: T) => {
-    el.classList.toggle(HIDE_PLACEHOLDER, composing.current || el.value !== "");
+    clearTimeout(placeholderTimer.current);
+    if (composing.current || el.value !== "") {
+      el.classList.toggle(HIDE_PLACEHOLDER, true);
+      return;
+    }
+    placeholderTimer.current = setTimeout(() => {
+      const now = ref.current;
+      if (now && !composing.current && now.value === "") {
+        now.classList.toggle(HIDE_PLACEHOLDER, false);
+      }
+    }, PLACEHOLDER_GRACE_MS);
   };
 
   return {
@@ -122,6 +187,7 @@ export function createImeCore<T extends InputEl>(
       el.value = "";
       settling.current = false;
       pending.current = false;
+      forgetCtrl();
       clearTimeout(timer.current);
       syncPlaceholder(el);
     },
@@ -140,13 +206,41 @@ export function createImeCore<T extends InputEl>(
         if (ref.current) syncPlaceholder(ref.current);
       },
       // 조합이 확정돼 글자가 실제로 들어온 순간 — 예약된 제출을 여기서 처리한다
-      onInput: () => {
+      onInput: (e?: { nativeEvent?: { inputType?: string } }) => {
         settling.current = false;
+        // Ctrl을 쥔 사이에 일어난 일만 본다 (평소 타이핑에는 아무 영향이 없다)
+        if (ctrlValue.current !== null) {
+          const how = e?.nativeEvent?.inputType;
+          if (how === "deleteWordBackward" || how === "deleteWordForward") {
+            ateWord.current = true;
+          } else if (ateWord.current && how === "insertText") {
+            reinserted.current = true;
+          }
+        }
         if (ref.current) syncPlaceholder(ref.current);
         if (pending.current) flush();
       },
+      // Ctrl에서 손을 뗄 때 — 보내지 않고 그냥 놓았어도 입력창은 성해야 한다
+      onKeyUp: (e: React.KeyboardEvent<T>) => {
+        if (e.key !== "Control" && e.key !== "Meta") return;
+        const el = ref.current;
+        const back = repaired();
+        if (el && back !== null && el.value !== back) {
+          el.value = back;
+          syncPlaceholder(el);
+        }
+        forgetCtrl();
+      },
       onKeyDown: (e: React.KeyboardEvent<T>) => {
         const { mode, onEscape } = getOpts();
+        // Ctrl을 누른 순간의 값을 붙잡아 둔다 (IME가 이 뒤에 단어를 삼킬 수 있다).
+        // 눌린 채 반복해서 들어오므로 첫 번째만 찍는다.
+        if (e.key === "Control" || e.key === "Meta") {
+          if (ctrlValue.current === null && ref.current) {
+            ctrlValue.current = ref.current.value;
+          }
+          return;
+        }
         if (e.key === "Escape" && onEscape) {
           e.preventDefault();
           onEscape();
