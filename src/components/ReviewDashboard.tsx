@@ -6,17 +6,11 @@ import {
   type ReadingEntry,
 } from "../bindings";
 import { kindByLabel, styleOf } from "../lib/callouts";
+import { dateOf, weekdayOf, ymd } from "../lib/date";
 import { bodyToHtml, wrapDocument } from "../lib/exportHtml";
 import { printHtml, saveTextAs } from "../lib/exportFile";
 import { useVault } from "../stores/vault";
 import NoteText from "./NoteText";
-
-const pad = (n: number) => String(n).padStart(2, "0");
-const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const WEEK = ["일", "월", "화", "수", "목", "금", "토"];
-
-/** `Daily/2026/07/2026-07-30.md` → `2026-07-30` */
-const dateOf = (rel: string) => rel.split("/").pop()?.replace(/\.md$/, "") ?? "";
 
 interface Day {
   date: string;
@@ -414,10 +408,6 @@ export default function ReviewDashboard() {
       </div>
     </div>
   );
-}
-
-function weekdayOf(date: string): string {
-  return WEEK[new Date(`${date}T00:00:00`).getDay()];
 }
 
 /** 기준 날짜가 속한 주(월~일) 또는 달의 범위 */

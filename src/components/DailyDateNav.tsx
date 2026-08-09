@@ -1,14 +1,6 @@
 import { useMemo, useState } from "react";
 import { useVault } from "../stores/vault";
-
-/** `Daily/2026/07/2026-07-30.md` → `2026-07-30` */
-function dateOf(relPath: string): string {
-  return relPath.split("/").pop()?.replace(/\.md$/, "") ?? "";
-}
-
-const pad = (n: number) => String(n).padStart(2, "0");
-const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const WEEK = ["일", "월", "화", "수", "목", "금", "토"];
+import { dateOf, isYmd, pad, WEEK, weekdayOf, ymd } from "../lib/date";
 
 /** 일지 노트 제목 자리에 놓이는 날짜 이동기.
  *
@@ -27,7 +19,7 @@ export default function DailyDateNav({ date }: { date: string }) {
     for (const n of notes) {
       if (n.note_type !== "daily") continue;
       const d = dateOf(n.rel_path);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) map.set(d, n.rel_path);
+      if (isYmd(d)) map.set(d, n.rel_path);
     }
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [notes]);
@@ -38,9 +30,7 @@ export default function DailyDateNav({ date }: { date: string }) {
   const today = ymd(new Date());
   const isToday = date === today;
 
-  const weekday = /^\d{4}-\d{2}-\d{2}$/.test(date)
-    ? WEEK[new Date(`${date}T00:00:00`).getDay()]
-    : "";
+  const weekday = weekdayOf(date);
 
   return (
     <span className="relative flex items-center gap-1">
@@ -139,7 +129,7 @@ function Calendar({
   onPick: (date: string) => void;
   onClose: () => void;
 }) {
-  const base = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : today;
+  const base = isYmd(date) ? date : today;
   // 열려 있는 날짜가 속한 달부터 보여 준다
   const [ym, setYm] = useState(() => ({
     year: Number(base.slice(0, 4)),
