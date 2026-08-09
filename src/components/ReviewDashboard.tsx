@@ -1,145 +1,178 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  commands,
-  type NoteBlock,
-  type NoteTodo,
-  type ReadingEntry,
-} from "../bindings";
+import { commands, type NoteTodo, type ReviewRange } from "../bindings";
 import { kindByLabel, styleOf } from "../lib/callouts";
-import { dateOf, weekdayOf, ymd } from "../lib/date";
+import { weekdayOf, ymd } from "../lib/date";
 import { bodyToHtml, wrapDocument } from "../lib/exportHtml";
 import { printHtml, saveTextAs } from "../lib/exportFile";
+import {
+  cardOfReading,
+  cardsOfDay,
+  DEFAULT_FILTER,
+  filterCards,
+  filterTodos,
+  groupByDate,
+  hasCardFilter,
+  rangeOf,
+  stepRange,
+  type ReviewCard,
+  type ReviewFilter,
+  type Span,
+} from "../lib/reviewFilter";
 import { useVault } from "../stores/vault";
 import NoteText from "./NoteText";
 
-interface Day {
+/** 화면에 그릴 날짜 한 칸 */
+interface Section {
   date: string;
+  /** 그 날 일지 경로 (독서기록만 있는 날은 빈 문자열) */
   rel: string;
-  blocks: NoteBlock[];
+  cards: ReviewCard[];
   todos: NoteTodo[];
 }
+
+const EMPTY: ReviewRange = { days: [], reading: [] };
 
 /** 주간·월간 회고 — 여러 날의 기록과 할 일을 한 화면에 모아 본다.
  *
  *  일지는 하루 단위로 쓰지만 돌아볼 때는 주·월 단위로 본다. 날짜를 하나씩
  *  열어 가며 훑는 대신 한 번에 펼쳐 놓는다. */
 export default function ReviewDashboard() {
-  const notes = useVault((s) => s.notes);
   const openNote = useVault((s) => s.openNote);
   const callouts = useVault((s) => s.callouts);
-  const [span, setSpan] = useState<"week" | "month">("week");
-  /** 기준점 — 이 날이 속한 주/달을 본다 */
-  const [anchor, setAnchor] = useState(() => ymd(new Date()));
-  const [days, setDays] = useState<Day[] | null>(null);
-  const [kindOff, setKindOff] = useState<Set<string>>(new Set());
   /** 독서기록도 함께 볼지 (설정에 남는다) */
   const showReading = useVault((s) => s.reviewShowReading);
   const toggleReading = useVault((s) => s.toggleReviewShowReading);
-  const [reading, setReading] = useState<ReadingEntry[]>([]);
 
-  const { from, to, label } = useMemo(() => range(span, anchor), [span, anchor]);
+  const [span, setSpan] = useState<Span>("week");
+  /** 기준점 — 이 날이 속한 주/달을 본다 */
+  const [anchor, setAnchor] = useState(() => ymd(new Date()));
+  const [custom, setCustom] = useState(() => {
+    const today = ymd(new Date());
+    return { from: today, to: today };
+  });
+  const [filter, setFilter] = useState<ReviewFilter>(DEFAULT_FILTER);
+  const [data, setData] = useState<ReviewRange | null>(null);
 
-  /** 기간 안의 일지 경로 (최신 날짜가 위로) */
-  const rels = useMemo(
-    () =>
-      notes
-        .filter((n) => n.note_type === "daily")
-        .map((n) => ({ date: dateOf(n.rel_path), rel: n.rel_path }))
-        .filter((d) => d.date >= from && d.date <= to)
-        .sort((a, b) => b.date.localeCompare(a.date)),
-    [notes, from, to],
+  const range = useMemo(
+    () => rangeOf(span, anchor, custom),
+    [span, anchor, custom],
   );
+  const { from, to, label } = range;
 
+  // 기간 전체를 한 번에 받는다. 좁히는 일은 전부 아래에서 — 칩 하나 누를 때마다
+  // 파일을 다시 읽을 이유가 없다.
+  //
+  // 스토어의 `notes`를 보지 않는 것이 중요하다. 일지를 자동저장할 때마다 그 배열의
+  // 신원이 바뀌는데, 그걸 의존성에 넣으면 회고가 몇 초마다 기간 전체를 다시 읽는다.
   useEffect(() => {
-    let alive = true;
-    setDays(null);
-    (async () => {
-      const out: Day[] = [];
-      for (const d of rels) {
-        const [b, t] = await Promise.all([
-          commands.noteBlocks(d.rel),
-          commands.noteTodos(d.rel),
-        ]);
-        out.push({
-          date: d.date,
-          rel: d.rel,
-          blocks: b.status === "ok" ? b.data : [],
-          todos: t.status === "ok" ? t.data : [],
-        });
-      }
-      if (alive) setDays(out);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [rels]);
-
-  // 독서기록은 책 노트에 흩어져 있어 한 번에 받아 기간으로 거른다
-  useEffect(() => {
-    if (!showReading) {
-      setReading([]);
+    if (from > to) {
+      setData(EMPTY);
       return;
     }
     let alive = true;
-    commands.listEntries().then((r) => {
-      if (!alive || r.status !== "ok") return;
-      setReading(r.data.filter((e) => e.date >= from && e.date <= to));
+    setData(null);
+    commands.reviewRange(from, to, showReading).then((r) => {
+      if (!alive) return;
+      setData(r.status === "ok" ? r.data : EMPTY);
     });
     return () => {
       alive = false;
     };
-  }, [showReading, from, to, notes]);
+  }, [from, to, showReading]);
 
-  const shift = (by: number) => setAnchor(step(span, anchor, by));
+  const shift = (by: number) => {
+    const next = stepRange(span, anchor, custom, by);
+    setAnchor(next.anchor);
+    setCustom(next.custom);
+  };
 
-  /** 날짜별로 묶은 독서기록 (일지와 같은 날짜 아래 붙여 보여 준다) */
-  const readingByDate = useMemo(() => {
-    const m = new Map<string, ReadingEntry[]>();
-    for (const e of reading) m.set(e.date, [...(m.get(e.date) ?? []), e]);
-    return m;
-  }, [reading]);
+  /** 기간 안의 모든 카드 (일지 기록 + 독서기록). 필터를 걸기 전 모수다 */
+  const allCards = useMemo(
+    () =>
+      data
+        ? [...data.days.flatMap(cardsOfDay), ...data.reading.map(cardOfReading)]
+        : [],
+    [data],
+  );
 
-  /** 일지가 없는 날에도 독서기록만 있으면 그 날을 보여 준다 */
-  const allDates = useMemo(() => {
-    const set = new Set<string>((days ?? []).map((d) => d.date));
-    for (const d of readingByDate.keys()) set.add(d);
-    return [...set].sort((a, b) => b.localeCompare(a));
-  }, [days, readingByDate]);
+  const shown = useMemo(() => filterCards(allCards, filter), [allCards, filter]);
 
-  // 기간 전체 집계
-  const stat = useMemo(() => {
-    const all = days ?? [];
-    const todos = all.flatMap((d) => d.todos);
-    const entries = all.flatMap((d) =>
-      d.blocks.filter((b) => b.kind === "callout"),
+  const sections = useMemo<Section[]>(() => {
+    if (!data) return [];
+    const relOf = new Map(data.days.map((d) => [d.date, d.rel_path]));
+    const todosOf = new Map(
+      data.days.map((d) => [d.date, filterTodos(d.todos, d.date, filter)]),
     );
+    const cardsOf = new Map(
+      groupByDate(shown, filter).map((g) => [g.date, g.cards]),
+    );
+
+    const dates = new Set<string>(cardsOf.keys());
+    // 필터가 없으면 할 일만 적은 날도 그대로 보여 준다 (예전부터 그랬다).
+    // 필터가 걸렸을 때만 "조건에 맞는 게 없는 날"로 보고 접는다.
+    if (!hasCardFilter(filter))
+      for (const [d, ts] of todosOf) if (ts.length > 0) dates.add(d);
+
+    return [...dates]
+      .sort((a, b) =>
+        filter.order === "old" ? a.localeCompare(b) : b.localeCompare(a),
+      )
+      .map((date) => ({
+        date,
+        rel: relOf.get(date) ?? "",
+        cards: cardsOf.get(date) ?? [],
+        todos: todosOf.get(date) ?? [],
+      }));
+  }, [data, shown, filter]);
+
+  const stat = useMemo(() => {
+    const todos = sections.flatMap((s) => s.todos);
+    // 종류 칩의 개수는 **거르기 전** 기준이다 — 거른 뒤로 세면 고른 종류만
+    // 남고 나머지 칩이 사라져 되돌릴 수가 없다
     const byKind = new Map<string, number>();
-    for (const e of entries)
-      byKind.set(e.kind_label, (byKind.get(e.kind_label) ?? 0) + 1);
+    for (const c of allCards)
+      byKind.set(c.kindLabel, (byKind.get(c.kindLabel) ?? 0) + 1);
     return {
-      일수: all.length,
-      기록: entries.length,
+      일수: sections.length,
+      기록: shown.length,
+      전체기록: allCards.length,
       끝낸할일: todos.filter((t) => t.done).length,
       남은할일: todos.filter((t) => !t.done).length,
       종류별: [...byKind.entries()].sort((a, b) => b[1] - a[1]),
     };
-  }, [days]);
+  }, [sections, shown, allCards]);
 
-  const visible = (kind: string) => !kindOff.has(kind);
+  const kindOf = (labelName: string) =>
+    kindByLabel(
+      labelName,
+      callouts.map((c) => ({
+        label: c.label,
+        icon: c.icon ?? "",
+        color: c.color as never,
+      })),
+    );
+
+  const toggleKind = (k: string) =>
+    setFilter((f) => ({
+      ...f,
+      kinds: f.kinds.includes(k)
+        ? f.kinds.filter((x) => x !== k)
+        : [...f.kinds, k],
+    }));
 
   /** 지금 보고 있는 회고를 문서 한 장으로 */
   function buildHtml(): string {
-    const md = (days ?? [])
-      .map((d) => {
-        const head = `## ${d.date} (${weekdayOf(d.date)})`;
-        const todo = d.todos.length
-          ? d.todos
-              .map((t) => `- [${t.done ? "x" : " "}] ${t.text}`)
-              .join("\n")
-          : "";
-        const rec = d.blocks
-          .filter((b) => b.kind === "callout" && visible(b.kind_label))
-          .map((b) => `> [!${b.kind_label}] ${b.date}\n> ${b.text.split("\n").join("\n> ")}`)
+    const md = sections
+      .map((s) => {
+        const head = `## ${s.date} (${weekdayOf(s.date)})`;
+        const todo = s.todos
+          .map((t) => `- [${t.done ? "x" : " "}] ${t.text}`)
+          .join("\n");
+        const rec = s.cards
+          .map(
+            (c) =>
+              `> [!${c.kindLabel}] ${c.time || c.date}\n> ${c.text.split("\n").join("\n> ")}`,
+          )
           .join("\n\n");
         return [head, todo, rec].filter(Boolean).join("\n\n");
       })
@@ -147,6 +180,8 @@ export default function ReviewDashboard() {
     const meta = `${label} · 기록 ${stat.기록}건 · 끝낸 할 일 ${stat.끝낸할일}건`;
     return wrapDocument(`회고 ${label}`, bodyToHtml(md), meta);
   }
+
+  const loading = data === null;
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -210,7 +245,7 @@ export default function ReviewDashboard() {
           </button>
           <button
             className="rounded border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 hover:border-neutral-500 disabled:opacity-40"
-            disabled={!days || days.length === 0}
+            disabled={sections.length === 0}
             onClick={() => printHtml(buildHtml())}
             title="인쇄 창에서 PDF로 저장할 수 있습니다"
           >
@@ -218,7 +253,7 @@ export default function ReviewDashboard() {
           </button>
           <button
             className="rounded border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 hover:border-neutral-500 disabled:opacity-40"
-            disabled={!days || days.length === 0}
+            disabled={sections.length === 0}
             onClick={() => saveTextAs(`회고 ${label}`, "html", "HTML 문서", buildHtml())}
           >
             ⬇ HTML
@@ -233,6 +268,9 @@ export default function ReviewDashboard() {
         </span>
         <span>
           기록 <b className="text-neutral-800">{stat.기록}</b>건
+          {stat.기록 !== stat.전체기록 && (
+            <span className="ml-1 text-neutral-400">(전체 {stat.전체기록}건 중)</span>
+          )}
         </span>
         <span>
           끝낸 할 일 <b className="text-emerald-600">{stat.끝낸할일}</b>
@@ -243,30 +281,17 @@ export default function ReviewDashboard() {
         {stat.종류별.length > 0 && (
           <span className="ml-auto flex flex-wrap gap-1">
             {stat.종류별.map(([kind, n]) => {
-              const k = kindByLabel(
-                kind,
-                callouts.map((c) => ({
-                  label: c.label,
-                  icon: c.icon ?? "",
-                  color: c.color as never,
-                })),
-              );
-              const on = visible(kind);
+              const k = kindOf(kind);
+              // 아무것도 안 고른 상태가 "전부 보기"다
+              const on = filter.kinds.length === 0 || filter.kinds.includes(kind);
               return (
                 <button
                   key={kind}
                   className={`rounded-full border border-current/10 px-2 py-0.5 ${
                     on ? styleOf(k.color).active : "bg-neutral-100 text-neutral-400"
                   }`}
-                  onClick={() =>
-                    setKindOff((s) => {
-                      const next = new Set(s);
-                      if (next.has(kind)) next.delete(kind);
-                      else next.add(kind);
-                      return next;
-                    })
-                  }
-                  title={on ? "이 종류 숨기기" : "다시 보기"}
+                  onClick={() => toggleKind(kind)}
+                  title="이 종류만 보기"
                 >
                   {k.icon} {kind} {n}
                 </button>
@@ -277,54 +302,42 @@ export default function ReviewDashboard() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
-        {days === null && (
+        {loading && (
           <p className="mt-16 text-center text-sm text-neutral-400">불러오는 중…</p>
         )}
-        {days !== null && allDates.length === 0 && (
+        {!loading && from > to && (
           <p className="mt-16 text-center text-sm text-neutral-400">
-            이 {span === "week" ? "주" : "달"}에는 쓴 것이 없습니다.
+            시작이 끝보다 뒤입니다 — 기간을 다시 골라 주세요.
           </p>
         )}
-        {days !== null &&
-          allDates.map((date) => {
-          const d = days.find((x) => x.date === date);
-          const recs = (d?.blocks ?? []).filter(
-            (b) => b.kind === "callout" && visible(b.kind_label),
-          );
-          const todos = d?.todos ?? [];
-          const done = todos.filter((t) => t.done);
-          const open = todos.filter((t) => !t.done);
-          const books = readingByDate.get(date) ?? [];
-          if (recs.length === 0 && todos.length === 0 && books.length === 0)
-            return null;
-          return (
-            <section key={date} className="mb-6">
+        {!loading && from <= to && sections.length === 0 && (
+          <p className="mt-16 text-center text-sm text-neutral-400">
+            이 {span === "month" ? "달" : "기간"}에는 쓴 것이 없습니다.
+          </p>
+        )}
+        {!loading &&
+          sections.map((s) => (
+            <section key={s.date} className="mb-6">
               <button
                 className="mb-2 flex items-baseline gap-2 rounded px-1 hover:bg-neutral-100 disabled:hover:bg-transparent"
-                disabled={!d}
-                onClick={() => d && openNote(d.rel)}
-                title={d ? "이 날 일지 열기" : "이 날은 일지가 없습니다"}
+                disabled={!s.rel}
+                onClick={() => s.rel && openNote(s.rel)}
+                title={s.rel ? "이 날 일지 열기" : "이 날은 일지가 없습니다"}
               >
-                <h2 className="text-sm font-bold">{date}</h2>
-                <span className="text-2xs text-neutral-400">
-                  ({weekdayOf(date)})
-                </span>
-                {done.length > 0 && (
+                <h2 className="text-sm font-bold">{s.date}</h2>
+                <span className="text-2xs text-neutral-400">({weekdayOf(s.date)})</span>
+                {s.todos.some((t) => t.done) && (
                   <span className="text-2xs text-emerald-600">
-                    ✅ {done.length}
+                    ✅ {s.todos.filter((t) => t.done).length}
                   </span>
                 )}
               </button>
 
-              {open.length + done.length > 0 && (
+              {s.todos.length > 0 && (
                 <ul className="mb-2 flex flex-col gap-0.5">
-                  {[...open, ...done].map((t) => (
+                  {[...s.todos].sort((a, b) => Number(a.done) - Number(b.done)).map((t) => (
                     <li key={t.index} className="flex gap-1.5 text-sm">
-                      <span
-                        className={
-                          t.done ? "text-emerald-600" : "text-neutral-400"
-                        }
-                      >
+                      <span className={t.done ? "text-emerald-600" : "text-neutral-400"}>
                         {t.done ? "☑" : "☐"}
                       </span>
                       <span
@@ -340,101 +353,47 @@ export default function ReviewDashboard() {
               )}
 
               <div className="flex flex-col gap-1.5">
-                {recs.map((b, i) => {
-                  const k = kindByLabel(
-                    b.kind_label,
-                    callouts.map((c) => ({
-                      label: c.label,
-                      icon: c.icon ?? "",
-                      color: c.color as never,
-                    })),
+                {s.cards.map((c, i) => {
+                  const k = kindOf(c.kindLabel);
+                  const head = (
+                    <div className="mb-0.5 flex items-baseline gap-1.5 text-2xs">
+                      {c.source === "book" && (
+                        <span className="rounded bg-amber-100 px-1 text-amber-700">
+                          📖 {c.bookTitle}
+                        </span>
+                      )}
+                      <span className="font-semibold opacity-70">
+                        {k.icon} {c.kindLabel}
+                      </span>
+                      {c.time && <span className="opacity-70">{c.time}</span>}
+                    </div>
                   );
-                  return (
-                    <div
+                  const body = (
+                    <NoteText text={c.text} className="whitespace-pre-wrap text-sm" />
+                  );
+                  const cls = `rounded-md border px-3 py-2 ${styleOf(k.color).card}`;
+                  // 독서기록은 누르면 그 책으로 간다 — 일지 기록은 위 날짜 단추가 그 일을 한다
+                  return c.source === "book" ? (
+                    <button
                       key={i}
-                      className={`rounded-md border px-3 py-2 ${styleOf(k.color).card}`}
+                      className={`${cls} text-left`}
+                      onClick={() => openNote(c.rel)}
+                      title="이 책 열기"
                     >
-                      <div className="mb-0.5 text-2xs font-semibold opacity-70">
-                        {k.icon} {b.kind_label}
-                        {b.date && <span className="ml-1.5 font-normal">{b.date}</span>}
-                      </div>
-                      <NoteText
-                        text={b.text}
-                        className="whitespace-pre-wrap text-sm"
-                      />
+                      {head}
+                      {body}
+                    </button>
+                  ) : (
+                    <div key={i} className={cls}>
+                      {head}
+                      {body}
                     </div>
                   );
                 })}
               </div>
-
-              {books.length > 0 && (
-                <div className="mt-1.5 flex flex-col gap-1.5">
-                  {books.map((e, i) => {
-                    const k = kindByLabel(
-                      e.kind_label,
-                      callouts.map((c) => ({
-                        label: c.label,
-                        icon: c.icon ?? "",
-                        color: c.color as never,
-                      })),
-                    );
-                    return (
-                      <button
-                        key={`b${i}`}
-                        className={`rounded-md border px-3 py-2 text-left ${styleOf(k.color).card}`}
-                        onClick={() => openNote(e.book_rel)}
-                        title="이 책 열기"
-                      >
-                        <div className="mb-0.5 flex items-baseline gap-1.5 text-2xs">
-                          <span className="rounded bg-amber-100 px-1 text-amber-700">
-                            📖 {e.book_title}
-                          </span>
-                          <span className="font-semibold opacity-70">
-                            {k.icon} {e.kind_label}
-                          </span>
-                        </div>
-                        <NoteText
-                          text={e.text}
-                          className="whitespace-pre-wrap text-sm"
-                        />
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
             </section>
-          );
-        })}
+          ))}
       </div>
     </div>
   );
-}
-
-/** 기준 날짜가 속한 주(월~일) 또는 달의 범위 */
-function range(span: "week" | "month", anchor: string) {
-  const d = new Date(`${anchor}T00:00:00`);
-  if (span === "month") {
-    const first = new Date(d.getFullYear(), d.getMonth(), 1);
-    const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-    return {
-      from: ymd(first),
-      to: ymd(last),
-      label: `${first.getFullYear()}년 ${first.getMonth() + 1}월`,
-    };
-  }
-  // 월요일 시작
-  const wd = (d.getDay() + 6) % 7;
-  const mon = new Date(d.getFullYear(), d.getMonth(), d.getDate() - wd);
-  const sun = new Date(d.getFullYear(), d.getMonth(), d.getDate() - wd + 6);
-  return {
-    from: ymd(mon),
-    to: ymd(sun),
-    label: `${ymd(mon)} ~ ${ymd(sun)}`,
-  };
-}
-
-function step(span: "week" | "month", anchor: string, by: number): string {
-  const d = new Date(`${anchor}T00:00:00`);
-  if (span === "month") return ymd(new Date(d.getFullYear(), d.getMonth() + by, 1));
-  return ymd(new Date(d.getFullYear(), d.getMonth(), d.getDate() + by * 7));
 }
