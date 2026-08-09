@@ -4,6 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { join } from "@tauri-apps/api/path";
 import { notifyOtherWindows } from "../lib/windowSync";
+import { normalizeFilter, type ReviewFilter } from "../lib/reviewFilter";
 import {
   DEFAULT_CAPTURE_SHORTCUT,
   disableCapture,
@@ -102,6 +103,13 @@ interface VaultStore {
    *  회고를 열 때마다 책 폴더를 훑는 값을 물지 않도록. */
   reviewShowReading: boolean;
   setReviewShowReading(v: boolean): Promise<void>;
+  /** 회고에서 **마지막으로 걸었던** 필터.
+   *
+   *  회고를 열 때 자동으로 적용하지는 않는다 — 어제 걸어 둔 조건 때문에 기록이
+   *  안 보이면 사라진 줄 안다. 대신 "↺ 마지막 필터"로 사용자가 불러온다.
+   *  기간은 담지 않는다 (보던 주가 3주 전으로 튀면 놀란다). */
+  reviewLastFilter: ReviewFilter | null;
+  setReviewLastFilter(f: ReviewFilter): Promise<void>;
   /** 검색에서 오타·초성을 견딜지 (검색창 토글) */
   searchFuzzy: boolean;
   toggleSearchFuzzy(): Promise<void>;
@@ -428,6 +436,12 @@ export const useVault = create<VaultStore>((set, get) => {
       const store = await settings();
       await store.set("reviewShowReading", v);
     },
+    reviewLastFilter: null,
+    async setReviewLastFilter(f) {
+      set({ reviewLastFilter: f });
+      const store = await settings();
+      await store.set("reviewLastFilter", f);
+    },
     searchFuzzy: false,
     async toggleSearchFuzzy() {
       const v = !get().searchFuzzy;
@@ -566,6 +580,9 @@ export const useVault = create<VaultStore>((set, get) => {
         const scrapType = (await store.get<string>("scrapType")) ?? "free";
         const reviewShowReading =
           (await store.get<boolean>("reviewShowReading")) ?? false;
+        // 예전 판이 남긴 값이 섞여 있어도 앱이 깨지지 않게 한 번 다듬는다
+        const savedFilter = await store.get<unknown>("reviewLastFilter");
+        const reviewLastFilter = savedFilter ? normalizeFilter(savedFilter) : null;
         const searchFuzzy = (await store.get<boolean>("searchFuzzy")) ?? false;
         const searchInFiles = (await store.get<boolean>("searchInFiles")) ?? false;
         const dailyKindOrder =
@@ -597,6 +614,7 @@ export const useVault = create<VaultStore>((set, get) => {
           quickCaptureShortcut,
           scrapType,
           reviewShowReading,
+          reviewLastFilter,
           searchFuzzy,
           searchInFiles,
           dailyKindOrder,

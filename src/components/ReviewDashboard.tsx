@@ -44,6 +44,8 @@ export default function ReviewDashboard() {
   const openNote = useVault((s) => s.openNote);
   const callouts = useVault((s) => s.callouts);
   const setShowReading = useVault((s) => s.setReviewShowReading);
+  const savedFilter = useVault((s) => s.reviewLastFilter);
+  const setSavedFilter = useVault((s) => s.setReviewLastFilter);
 
   const [span, setSpan] = useState<Span>("week");
   /** 기준점 — 이 날이 속한 주/달을 본다 */
@@ -96,6 +98,15 @@ export default function ReviewDashboard() {
   useEffect(() => {
     void setShowReading(withReading);
   }, [withReading, setShowReading]);
+
+  // 지금 건 조건을 설정에 남긴다 — 다음에 "↺ 마지막 필터"로 되부를 수 있게.
+  // 늦게 쓰는 이유는 autoSave 저장소라서다. 그대로 두면 포함어를 칠 때
+  // 글자마다 settings.json이 디스크에 쓰인다.
+  useEffect(() => {
+    if (filterCount(filter) === 0) return; // 빈 필터는 되부를 값이 없다
+    const t = setTimeout(() => void setSavedFilter(filter), 400);
+    return () => clearTimeout(t);
+  }, [filter, setSavedFilter]);
 
   const shift = (by: number) => {
     const next = stepRange(span, anchor, custom, by);
@@ -291,8 +302,8 @@ export default function ReviewDashboard() {
         setCustom={setCustom}
         cards={allCards}
         kindOf={kindOf}
-        saved={null}
-        onLoadSaved={() => {}}
+        saved={savedFilter}
+        onLoadSaved={() => savedFilter && setFilter(savedFilter)}
       />
 
       {/* 기간 집계 */}
