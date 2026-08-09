@@ -97,9 +97,11 @@ interface VaultStore {
    *  그 결과를 받아 이 값도 free로 되돌린다 — 다음에도 계속 실패하지 않도록. */
   scrapType: string;
   setScrapType(id: string): Promise<void>;
-  /** 회고에 독서기록도 함께 볼지 (회고 화면 토글) */
+  /** 회고를 열 때 독서기록도 처음부터 불러올지.
+   *  회고 필터의 "출처" 초깃값이 여기서 온다 — 독서기록을 안 보는 사람이
+   *  회고를 열 때마다 책 폴더를 훑는 값을 물지 않도록. */
   reviewShowReading: boolean;
-  toggleReviewShowReading(): Promise<void>;
+  setReviewShowReading(v: boolean): Promise<void>;
   /** 검색에서 오타·초성을 견딜지 (검색창 토글) */
   searchFuzzy: boolean;
   toggleSearchFuzzy(): Promise<void>;
@@ -420,8 +422,8 @@ export const useVault = create<VaultStore>((set, get) => {
       await store.set("scrapType", id);
     },
     reviewShowReading: false,
-    async toggleReviewShowReading() {
-      const v = !get().reviewShowReading;
+    async setReviewShowReading(v) {
+      if (get().reviewShowReading === v) return;
       set({ reviewShowReading: v });
       const store = await settings();
       await store.set("reviewShowReading", v);
