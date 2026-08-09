@@ -32,6 +32,7 @@ pub(crate) use kyobo::{kyobo_hit_to_doc, kyobo_meta, kyobo_search, KyoboMeta};
 pub(crate) use net::{
     effective_key, html_unescape, http_client, net_err, quick_http_client, BROWSER_UA,
 };
+pub(crate) use notes::{blocks_of_body, todos_of_body, NoteBlock, NoteTodo};
 
 /// vault + 인덱스 + 검색엔진 묶음
 pub struct Ctx {
