@@ -5,7 +5,7 @@
 // 이미지 · 위키링크 · 표(그대로 통과). 그래서 짧고 예측 가능하다.
 // (경계가 많은 곳이라 `exportHtml.test.ts`가 지킨다)
 
-import { kindByLabel } from "./callouts";
+import { calloutColors, kindByLabel, type CalloutSource } from "./callouts";
 
 const ESC: Record<string, string> = {
   "&": "&amp;",
@@ -66,8 +66,12 @@ export function inlineToHtml(text: string): string {
 const LIST = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
 const CHECK = /^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$/;
 
-/** 본문(frontmatter 제외) → HTML 조각 */
-export function bodyToHtml(body: string): string {
+/** 본문(frontmatter 제외) → HTML 조각.
+ *
+ *  `callouts`는 사용자가 설정에서 만든 종류(`useVault(s => s.callouts)`).
+ *  아이콘이 여기서 나온다 — 안 넘기면 그 종류는 앱이 모르는 콜아웃과 똑같이
+ *  💬로 나가서, 화면에서 보던 아이콘과 인쇄물이 어긋난다. */
+export function bodyToHtml(body: string, callouts: CalloutSource[] = []): string {
   const out: string[] = [];
   const lines = body.split("\n");
   let i = 0;
@@ -116,13 +120,14 @@ export function bodyToHtml(body: string): string {
         inner.push(lines[i].replace(/^\s*>\s?/, ""));
         i++;
       }
-      const icon = kindByLabel(name).icon;
+      // 등록된 종류인데 아이콘이 '없음'이면 붙이지 않는다 (화면과 같은 규칙)
+      const icon = kindByLabel(name, callouts).icon;
       out.push(
         `<div class="callout co-${slug(name)}">` +
-          `<div class="co-head">${icon} ${esc(name)}` +
+          `<div class="co-head">${[icon, esc(name)].filter(Boolean).join(" ")}` +
           (meta ? ` <span class="co-meta">${esc(meta)}</span>` : "") +
           `</div>` +
-          bodyToHtml(inner.join("\n")) +
+          bodyToHtml(inner.join("\n"), callouts) +
           `</div>`,
       );
       continue;
@@ -135,7 +140,9 @@ export function bodyToHtml(body: string): string {
         inner.push(lines[i].replace(/^\s*>\s?/, ""));
         i++;
       }
-      out.push(`<blockquote>${bodyToHtml(inner.join("\n"))}</blockquote>`);
+      out.push(
+        `<blockquote>${bodyToHtml(inner.join("\n"), callouts)}</blockquote>`,
+      );
       continue;
     }
 
@@ -174,18 +181,6 @@ function slug(name: string): string {
   return [...name].map((c) => c.codePointAt(0)!.toString(36)).join("");
 }
 
-/** 콜아웃 이름 → 테두리 색 (인쇄해도 구분되도록 실제 색을 박아 넣는다) */
-const CALLOUT_COLOR: Record<string, string> = {
-  기록: "#0284c7",
-  느낌: "#d97706",
-  발췌: "#d97706",
-  생각: "#0284c7",
-  요약: "#059669",
-  질문: "#7c3aed",
-};
-
-/** 혼자 다닐 수 있는 HTML 문서 한 장으로 감싼다.
- *  스타일을 안에 박아 넣어 어디서 열어도 같은 모양이고, 인쇄용 규칙도 함께 넣는다. */
 /** 여러 편을 한 문서로 묶는다 (책 여러 권을 한 번에 내보낼 때).
  *  편마다 새 페이지에서 시작해 인쇄물에서 서로 섞이지 않는다. */
 export function joinSections(
@@ -202,12 +197,19 @@ export function joinSections(
     .join("\n");
 }
 
+/** 혼자 다닐 수 있는 HTML 문서 한 장으로 감싼다.
+ *  스타일을 안에 박아 넣어 어디서 열어도 같은 모양이고, 인쇄용 규칙도 함께 넣는다. */
 export function wrapDocument(
   title: string,
   bodyHtml: string,
   meta?: string,
+  /** 사용자가 설정에서 만든 콜아웃 종류 (`useVault(s => s.callouts)`).
+   *  안 넘기면 그 종류는 인쇄물에서 기본 회색 테두리가 된다 — 사용자 정의
+   *  종류만 골라 인쇄하면 문서가 통째로 회색이 되어 구분이 사라진다. */
+  callouts?: CalloutSource[],
 ): string {
-  const calloutCss = Object.entries(CALLOUT_COLOR)
+  // 색은 클래스가 아니라 실제 값으로 박아 넣는다 (내보낸 문서는 혼자 다닌다)
+  const calloutCss = Object.entries(calloutColors(callouts))
     .map(([name, color]) => `.co-${slug(name)}{border-left-color:${color}}
 .co-${slug(name)} .co-head{color:${color}}`)
     .join("\n");

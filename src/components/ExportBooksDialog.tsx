@@ -5,6 +5,7 @@ import { printHtml, saveTextAs } from "../lib/exportFile";
 import { joinSections, wrapDocument } from "../lib/exportHtml";
 import { buildNoteDoc, type NoteDoc } from "../lib/exportNote";
 import { toCsv, toMarkdownTable, type Column } from "../lib/exportTable";
+import { useVault } from "../stores/vault";
 import Modal from "./Modal";
 
 /** 고를 수 있는 항목. 순서가 곧 표의 열 순서다. */
@@ -197,6 +198,7 @@ function BookContentTab({
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const callouts = useVault((s) => s.callouts);
 
   const chosen = books.filter((b) => picked.has(b.rel_path));
   const allOn = picked.size === books.length && books.length > 0;
@@ -216,12 +218,12 @@ function BookContentTab({
     for (const b of chosen) {
       const r = await commands.readNote(b.rel_path);
       if (r.status !== "ok") throw new Error(r.error);
-      docs.push(buildNoteDoc(r.data));
+      docs.push(buildNoteDoc(r.data, callouts));
     }
     const name = docs.length === 1 ? docs[0].title : `책 기록 ${docs.length}권`;
     return {
       name,
-      html: wrapDocument(name, joinSections(docs), ""),
+      html: wrapDocument(name, joinSections(docs), "", callouts),
       text: docs.map((d) => d.text).join("\n\n\n"),
     };
   }

@@ -101,6 +101,30 @@ describe("본문 덩어리", () => {
     expect(bodyToHtml("> [!회의] 14:00\n> 내용")).toContain("회의");
   });
 
+  it("사용자가 만든 콜아웃 아이콘도 화면과 같이 나온다", () => {
+    // 안 넘기면 앱이 모르는 콜아웃과 똑같이 💬로 나가 화면과 어긋난다
+    const html = bodyToHtml("> [!메모] 09:30\n> 내용", [
+      { label: "메모", icon: "📝", color: "rose" },
+    ]);
+    expect(html).toContain("📝 메모");
+    expect(html).not.toContain("💬");
+  });
+
+  it("아이콘을 '없음'으로 둔 종류는 이름만 쓴다", () => {
+    const html = bodyToHtml("> [!메모] 09:30\n> 내용", [
+      { label: "메모", icon: "", color: "rose" },
+    ]);
+    expect(html).toContain('<div class="co-head">메모');
+  });
+
+  it("인용 안에 든 콜아웃도 같은 종류표를 본다", () => {
+    // 종류표를 재귀에 흘려보내지 않으면 안쪽만 💬가 된다
+    const html = bodyToHtml("> 겉 인용\n> > [!메모] 10:00\n> > 안쪽", [
+      { label: "메모", icon: "📝", color: "rose" },
+    ]);
+    expect(html).toContain("📝 메모");
+  });
+
   it("콜아웃이 아닌 인용은 인용으로", () => {
     expect(bodyToHtml("> 그냥 인용")).toBe(
       "<blockquote><p>그냥 인용</p></blockquote>",
@@ -124,6 +148,39 @@ describe("문서 한 장으로 감싸기", () => {
 
   it("제목에 들어간 꺾쇠도 막는다", () => {
     expect(wrapDocument("<b>제목", "", undefined)).toContain("&lt;b&gt;제목");
+  });
+
+  it("기본 콜아웃 색은 실제 색으로 박힌다", () => {
+    // 기록 = sky
+    expect(wrapDocument("일지", "", undefined)).toContain("border-left-color:#0284c7");
+  });
+
+  it("사용자가 만든 콜아웃 색도 CSS에 들어간다", () => {
+    // 이게 빠지면 그 종류만 골라 인쇄했을 때 문서가 통째로 회색이 된다
+    const body = bodyToHtml("> [!메모] 09:30\n> 내용");
+    const cls = body.match(/class="callout (co-[0-9a-z]+)"/)![1];
+    const doc = wrapDocument("일지", body, undefined, [
+      { label: "메모", icon: "📝", color: "rose" },
+    ]);
+    expect(doc).toContain(`.${cls}{border-left-color:#e11d48}`);
+    expect(doc).toContain(`.${cls} .co-head{color:#e11d48}`);
+  });
+
+  it("팔레트에 없는 색 이름은 회색으로 (손으로 고친 _callouts.json)", () => {
+    const doc = wrapDocument("일지", "", undefined, [
+      { label: "메모", icon: "📝", color: "무지개" },
+    ]);
+    expect(doc).toContain("border-left-color:#525252");
+  });
+
+  it("기본 종류와 이름이 겹치면 사용자가 고친 색이 이긴다", () => {
+    const body = bodyToHtml("> [!기록] 09:30\n> 내용");
+    const cls = body.match(/class="callout (co-[0-9a-z]+)"/)![1];
+    const doc = wrapDocument("일지", body, undefined, [
+      { label: "기록", icon: "🕘", color: "rose" },
+    ]);
+    expect(doc).toContain(`.${cls}{border-left-color:#e11d48}`);
+    expect(doc).not.toContain(`.${cls}{border-left-color:#0284c7}`);
   });
 });
 

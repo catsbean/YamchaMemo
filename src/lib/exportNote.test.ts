@@ -45,6 +45,14 @@ describe("독서기록 내보내기", () => {
     expect(d.html).toContain("&lt;b&gt;책");
     expect(d.html).not.toContain("<b>책");
   });
+
+  it("사용자가 만든 종류의 아이콘·색이 문서까지 내려간다", () => {
+    const d = buildReadingDoc([entry({ kind_label: "메모" })], [
+      { label: "메모", icon: "📝", color: "rose" },
+    ]);
+    expect(d.html).toContain("📝 메모");
+    expect(d.html).not.toContain("💬");
+  });
 });
 
 describe("책 노트 내보내기", () => {
@@ -61,6 +69,14 @@ describe("책 노트 내보내기", () => {
     expect(d.html).toContain("<h2>소개</h2>");
     expect(d.html).toContain("<h2>기록</h2>");
     expect(d.text).toContain("## 기록");
+  });
+
+  it("본문에 든 사용자 정의 콜아웃도 제 아이콘으로 나온다", () => {
+    const d = buildNoteDoc(
+      { ...(book as object), body: "## 기록\n\n> [!메모] 09:00\n> 한 줄" } as never,
+      [{ label: "메모", icon: "📝", color: "rose" }],
+    );
+    expect(d.html).toContain("📝 메모");
   });
 });
 

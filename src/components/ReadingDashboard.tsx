@@ -46,7 +46,7 @@ function daysAgo(n: number): string {
 /** 독서기록 대시보드 — 책이 아니라 **기록 한 줄 한 줄**을 모아 본다.
  *  쌓아 두기만 하고 다시 꺼내 볼 화면이 없으면 기록할 이유가 사라지기 때문이다. */
 export default function ReadingDashboard() {
-  const { vaultPath, notes, openNote } = useVault();
+  const { vaultPath, notes, openNote, callouts } = useVault();
   const [entries, setEntries] = useState<ReadingEntry[] | null>(null);
   const [picking, setPicking] = useState(false);
 
@@ -163,8 +163,8 @@ export default function ReadingDashboard() {
 
   /** 지금 화면에 보이는 기록을 그대로 문서로 — 필터·정렬이 곧 내보낼 범위다 */
   function readingDoc() {
-    const d = buildReadingDoc(shown);
-    return { ...d, wrapped: wrapDocument(d.title, d.html, d.meta) };
+    const d = buildReadingDoc(shown, callouts);
+    return { ...d, wrapped: wrapDocument(d.title, d.html, d.meta, callouts) };
   }
 
   const exportItems: MenuItem[] = [

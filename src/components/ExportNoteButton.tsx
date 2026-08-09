@@ -4,6 +4,7 @@ import { wrapDocument } from "../lib/exportHtml";
 import { buildNoteDoc } from "../lib/exportNote";
 import { printHtml, saveTextAs } from "../lib/exportFile";
 import { useContextMenu, type MenuItem } from "../lib/contextMenu";
+import { useVault } from "../stores/vault";
 import ContextMenu from "./ContextMenu";
 
 /** 노트 한 편을 "화면에 보이는 모양"으로 내보낸다.
@@ -12,13 +13,14 @@ import ContextMenu from "./ContextMenu";
  *  모양이므로, 스타일이 박힌 HTML 한 장으로 만들고 PDF는 인쇄를 거친다. */
 export default function ExportNoteButton({ note }: { note: NoteContent }) {
   const menu = useContextMenu();
+  const callouts = useVault((s) => s.callouts);
   const [error, setError] = useState("");
 
   function document(): { name: string; html: string; text: string } {
-    const d = buildNoteDoc(note);
+    const d = buildNoteDoc(note, callouts);
     return {
       name: d.title,
-      html: wrapDocument(d.title, d.html, d.meta),
+      html: wrapDocument(d.title, d.html, d.meta, callouts),
       text: d.text,
     };
   }

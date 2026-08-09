@@ -151,7 +151,12 @@ export default function ReviewDashboard() {
       })
       .join("\n\n");
     const meta = `${label} · 기록 ${stat.기록}건 · 끝낸 할 일 ${stat.끝낸할일}건`;
-    return wrapDocument(`회고 ${label}`, bodyToHtml(md), meta);
+    return wrapDocument(
+      `회고 ${label}`,
+      bodyToHtml(md, callouts),
+      meta,
+      callouts,
+    );
   }
 
   return (
@@ -249,14 +254,7 @@ export default function ReviewDashboard() {
         {stat.종류별.length > 0 && (
           <span className="ml-auto flex flex-wrap gap-1">
             {stat.종류별.map(([kind, n]) => {
-              const k = kindByLabel(
-                kind,
-                callouts.map((c) => ({
-                  label: c.label,
-                  icon: c.icon ?? "",
-                  color: c.color as never,
-                })),
-              );
+              const k = kindByLabel(kind, callouts);
               const on = visible(kind);
               return (
                 <button
@@ -347,14 +345,7 @@ export default function ReviewDashboard() {
 
               <div className="flex flex-col gap-1.5">
                 {recs.map((b, i) => {
-                  const k = kindByLabel(
-                    b.kind_label,
-                    callouts.map((c) => ({
-                      label: c.label,
-                      icon: c.icon ?? "",
-                      color: c.color as never,
-                    })),
-                  );
+                  const k = kindByLabel(b.kind_label, callouts);
                   return (
                     <div
                       key={i}
@@ -376,14 +367,7 @@ export default function ReviewDashboard() {
               {books.length > 0 && (
                 <div className="mt-1.5 flex flex-col gap-1.5">
                   {books.map((e, i) => {
-                    const k = kindByLabel(
-                      e.kind_label,
-                      callouts.map((c) => ({
-                        label: c.label,
-                        icon: c.icon ?? "",
-                        color: c.color as never,
-                      })),
-                    );
+                    const k = kindByLabel(e.kind_label, callouts);
                     return (
                       <button
                         key={`b${i}`}

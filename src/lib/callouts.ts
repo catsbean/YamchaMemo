@@ -133,6 +133,51 @@ export function styleOf(color: PaletteColor) {
   return STYLES[color] ?? STYLES.neutral;
 }
 
+/** 팔레트 이름 → 실제 hex.
+ *
+ *  Tailwind 클래스를 쓸 수 없는 곳 — 내보낸 HTML 한 장, 인쇄물 — 이 볼 표다.
+ *  STYLES와 떨어뜨려 두면 팔레트에 색을 더할 때 한쪽만 고치게 되고 화면과
+ *  인쇄물의 색이 갈라진다. 그래서 나란히 둔다.
+ *  (화면은 테두리 500·글자 700을 쓰지만 인쇄물은 그 사이 600 하나로 간다) */
+const HEX: Record<PaletteColor, string> = {
+  amber: "#d97706",
+  orange: "#ea580c",
+  yellow: "#ca8a04",
+  lime: "#65a30d",
+  emerald: "#059669",
+  teal: "#0d9488",
+  sky: "#0284c7",
+  blue: "#2563eb",
+  indigo: "#4f46e5",
+  violet: "#7c3aed",
+  fuchsia: "#c026d3",
+  rose: "#e11d48",
+  stone: "#57534e",
+  red: "#dc2626",
+  black: "#171717",
+  neutral: "#525252",
+};
+
+/** vault의 `_callouts.json`에서 온 종류 정의 그대로의 모양 (`CalloutDef`).
+ *
+ *  색이 `PaletteColor`가 아니라 그냥 문자열이다 — 파일에서 읽은 값이라 팔레트에
+ *  없는 이름이 들어 있을 수 있다. 이 모양으로 받아 두면 호출처마다 `as never`로
+ *  억지로 맞추지 않아도 된다. */
+export interface CalloutSource {
+  label: string;
+  icon: string;
+  color: string;
+}
+
+/** 팔레트에 없는 이름(손으로 고친 `_callouts.json`)은 회색으로 눌러 담는다 */
+function asPalette(color: string): PaletteColor {
+  return color in HEX ? (color as PaletteColor) : "neutral";
+}
+
+export function hexOf(color: string): string {
+  return HEX[asPalette(color)];
+}
+
 /** 독서기록 기본 종류 */
 export const BOOK_KINDS: CalloutKind[] = [
   { label: "발췌", icon: "📌", color: "amber" },
@@ -152,12 +197,24 @@ const FALLBACK: CalloutKind = { label: "", icon: "💬", color: "neutral" };
 /** 이름으로 종류 찾기 — 모르는 이름(외부 편집기에서 넣은 것)은 기본값 */
 export function kindByLabel(
   label: string,
-  extra: CalloutKind[] = [],
+  extra: CalloutSource[] = [],
 ): CalloutKind {
-  return (
-    [...BOOK_KINDS, ...DAILY_KINDS, ...extra].find((k) => k.label === label) ?? {
-      ...FALLBACK,
-      label,
-    }
+  const found = [...BOOK_KINDS, ...DAILY_KINDS, ...extra].find(
+    (k) => k.label === label,
   );
+  return found
+    ? { label: found.label, icon: found.icon, color: asPalette(found.color) }
+    : { ...FALLBACK, label };
+}
+
+/** 콜아웃 이름 → hex 표 — 내보내기가 `.co-<이름>` CSS를 만들 때 쓴다.
+ *  사용자 정의를 나중에 얹어, 기본 종류와 이름이 겹치면 사용자 쪽이 이긴다. */
+export function calloutColors(
+  extra: CalloutSource[] = [],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of [...BOOK_KINDS, ...DAILY_KINDS, ...extra]) {
+    out[k.label] = hexOf(k.color);
+  }
+  return out;
 }

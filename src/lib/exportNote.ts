@@ -1,5 +1,6 @@
 import type { NoteContent, ReadingEntry } from "../bindings";
 import { splitBookBody } from "./book";
+import type { CalloutSource } from "./callouts";
 import { bodyToHtml } from "./exportHtml";
 import { BOOK_STATUS_LABELS, fmStr } from "./note";
 
@@ -13,8 +14,12 @@ export interface NoteDoc {
 
 /** 노트 한 편을 내보낼 문서로. 종류에 따라 제목·부제·본문 구성이 다르다.
  *
- *  버튼과 대화상자 양쪽이 이걸 쓴다 — 같은 노트가 어디서 내보내든 같은 모양이어야 한다. */
-export function buildNoteDoc(note: NoteContent): NoteDoc {
+ *  버튼과 대화상자 양쪽이 이걸 쓴다 — 같은 노트가 어디서 내보내든 같은 모양이어야 한다.
+ *  `callouts`는 콜아웃 아이콘을 화면과 맞추려고 그대로 흘려보낸다. */
+export function buildNoteDoc(
+  note: NoteContent,
+  callouts: CalloutSource[] = [],
+): NoteDoc {
   const fm = note.frontmatter as Record<string, unknown> | null;
   const stem = note.rel_path.split("/").pop()?.replace(/\.md$/, "") ?? "";
   const title = fmStr(fm, "title") || stem;
@@ -35,8 +40,8 @@ export function buildNoteDoc(note: NoteContent): NoteDoc {
       title,
       meta,
       html:
-        (intro.trim() ? `<h2>소개</h2>\n${bodyToHtml(intro)}\n` : "") +
-        `<h2>기록</h2>\n${bodyToHtml(records)}`,
+        (intro.trim() ? `<h2>소개</h2>\n${bodyToHtml(intro, callouts)}\n` : "") +
+        `<h2>기록</h2>\n${bodyToHtml(records, callouts)}`,
       text: [
         title,
         meta,
@@ -53,7 +58,7 @@ export function buildNoteDoc(note: NoteContent): NoteDoc {
   return {
     title: t,
     meta,
-    html: bodyToHtml(note.body),
+    html: bodyToHtml(note.body, callouts),
     text: [t, meta, "", note.body.trim()].join("\n"),
   };
 }
@@ -61,7 +66,10 @@ export function buildNoteDoc(note: NoteContent): NoteDoc {
 /** 독서기록 목록(지금 화면에 보이는 것)을 내보낼 문서로.
  *
  *  화면과 같은 순서·묶음으로 낸다 — 책별로 묶어야 나중에 읽을 때 맥락이 산다. */
-export function buildReadingDoc(entries: ReadingEntry[]): NoteDoc {
+export function buildReadingDoc(
+  entries: ReadingEntry[],
+  callouts: CalloutSource[] = [],
+): NoteDoc {
   const byBook = new Map<string, ReadingEntry[]>();
   for (const e of entries) {
     byBook.set(e.book_rel, [...(byBook.get(e.book_rel) ?? []), e]);
@@ -79,7 +87,12 @@ export function buildReadingDoc(entries: ReadingEntry[]): NoteDoc {
     textParts.push(`## ${head.book_title}${sub ? ` (${sub})` : ""}`);
     for (const e of list) {
       const label = [e.kind_label, e.date].filter(Boolean).join(" · ");
-      htmlParts.push(bodyToHtml(`> [!${e.kind_label}] ${e.date}\n> ${e.text.replace(/\n/g, "\n> ")}`));
+      htmlParts.push(
+        bodyToHtml(
+          `> [!${e.kind_label}] ${e.date}\n> ${e.text.replace(/\n/g, "\n> ")}`,
+          callouts,
+        ),
+      );
       textParts.push(`- [${label}] ${e.text.replace(/\n/g, "\n  ")}`);
     }
     textParts.push("");
