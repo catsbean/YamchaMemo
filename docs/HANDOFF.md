@@ -37,8 +37,12 @@
 **주요 파일 지도**:
 - `src/App.tsx` — 진입, 레이아웃 3종, vault 선택 화면, 전역 에러 토스트, Ctrl+K
 - `src/stores/vault.ts` — 모든 액션(`init/openNote/saveCurrent/createNote/updateFrontmatter/…`), `guard()` 에러 수집
-- `src/components/` — `Bookshelf`(책장 그리드/목록), `BookView`(독서기록 화면), `BookInfoModal`, `BookCreateDialog`, `BookSearchDialog`, `EnrichDialog`(일괄 자동채우기), `SettingsModal`, `NewNoteDialog`, `EditorPane`, `SearchModal`, `BookPickerDialog`, `CustomTypeDialog`
+- `src/components/` — `Bookshelf`(책장 그리드/목록), `BookView`(독서기록 화면), `BookInfoModal`, `BookCreateDialog`, `BookSearchDialog`, `EnrichDialog`(일괄 자동채우기), `SettingsModal`, `NewNoteDialog`, `EditorPane`, `SearchModal`, `BookPickerDialog`, `CustomTypeDialog`, `ReviewDashboard`+`ReviewFilterPanel`(회고와 고급 필터)
+- `src/lib/date.ts` — `ymd`/`dateOf`/`weekdayOf`/`addDays`/`daysBetween`. 날짜는 앱 전체에서 `YYYY-MM-DD` **문자열**이라 기간 비교가 곧 사전순 비교다
+- `src/lib/reviewFilter.ts` — 회고 필터 판정 전부(순수 함수). 일지 콜아웃과 독서기록을 `ReviewCard` 하나로 정규화한다 — **일지 콜아웃 헤더에는 시각(`15:17`), 독서기록에는 날짜(`2026-07-18`)가 들어 있어** 정규화 없이는 시간대 필터·정렬이 조용히 틀린다
+- `src/lib/exportReview.ts` — 회고를 `NoteDoc`으로. 화면 칩과 문서 머리 줄이 `activeChips()` 하나를 공유한다
 - `src-tauri/src/commands.rs` — 전 커맨드 + 카카오/교보 API 클라이언트 + 파서 + 테스트
+- `src-tauri/src/commands/dashboard.rs` — 모아 보는 화면들의 커맨드. `review_range(from,to,with_reading)`는 회고 기간을 **한 번에** 준다 (날짜마다 `note_blocks`+`note_todos`를 부르면 한 달에 62번이 오간다). 필터는 일부러 백엔드에서 걸지 않는다 — 칩 하나 누를 때마다 파일을 다시 읽을 이유가 없다
 - `src-tauri/src/lib.rs` — `collect_commands![]` 등록부 (커맨드 추가 시 여기도 추가)
 - `src-tauri/src/watcher.rs` — vault 파일 감시, 자기쓰기 억제(전역 타임스탬프 2.5초)
 - `crates/yamcha-core/src/vault.rs` — 파일 CRUD, 휴지통(`.yamcha/trash`), 템플릿, 미러

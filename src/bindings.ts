@@ -168,8 +168,6 @@ async appendDailyEntry(relPath: string, kind: DailyKind, text: string) : Promise
 },
 /**
  * 보기 화면용 블록 목록.
- * `## 기록`은 콜아웃/원문을 순서대로, 그 밖의 섹션은 원문 블록으로 덧붙인다 —
- * 화면이 파일 내용을 조용히 숨기지 않도록.
  */
 async noteBlocks(relPath: string) : Promise<Result<NoteBlock[], string>> {
     try {
@@ -546,6 +544,23 @@ async dailyDigest(date: string) : Promise<Result<DailyDigest, string>> {
 async listOpenTodos(limit: number) : Promise<Result<TodoItem[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("list_open_todos", { limit }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 회고 기간 전체를 한 번에 읽는다. `from`·`to`는 `YYYY-MM-DD`(양끝 포함).
+ * 
+ * 날짜마다 `note_blocks`·`note_todos`를 부르면 한 달에 62번이 오간다 —
+ * 기간을 사용자가 직접 정할 수 있게 되면서 그 수가 수백까지 늘 수 있어 한 번으로 묶었다.
+ * 
+ * **필터는 일부러 여기서 걸지 않는다.** 종류 칩 하나를 껐다 켤 때마다 파일을
+ * 다시 읽을 이유가 없다 — 백엔드는 기간을 주고, 좁히는 일은 화면이 한다.
+ */
+async reviewRange(from: string, to: string, withReading: boolean) : Promise<Result<ReviewRange, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("review_range", { from, to, withReading }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1291,6 +1306,26 @@ cover: string; kind_label: string; date: string; text: string }
  * 버전 확인 결과 — 자동 설치는 하지 않고 안내만 한다.
  */
 export type ReleaseCheck = { current: string; latest: string; newer: boolean; url: string }
+/**
+ * 회고 화면이 날짜 섹션 하나를 그리는 데 필요한 전부.
+ */
+export type ReviewDay = { date: string; rel_path: string; 
+/**
+ * 소속 일지의 태그 — 회고의 태그 필터가 본문 인라인 `#태그`와 **함께** 본다
+ */
+tags: string[]; blocks: NoteBlock[]; todos: NoteTodo[] }
+/**
+ * 회고 기간 하나를 통째로.
+ */
+export type ReviewRange = { 
+/**
+ * 최신 날짜가 앞 (화면 기본 정렬과 같게)
+ */
+days: ReviewDay[]; 
+/**
+ * 기간 안의 독서기록만. `with_reading`이 false면 빈 목록
+ */
+reading: ReadingEntry[] }
 /**
  * 저장 결과.
  */

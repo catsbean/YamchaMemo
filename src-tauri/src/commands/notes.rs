@@ -306,23 +306,30 @@ pub struct NoteTodo {
     pub text: String,
 }
 
+/// 노트 본문 → 할 일 목록 (`## 할 일` 섹션, 없으면 본문 전체).
+///
+/// 커맨드와 회고의 기간 읽기가 **같은 함수**를 봐야 한다 — 두 벌로 갈리면
+/// 노트를 열면 보이는데 회고에서만 사라지는 할 일이 생긴다.
+pub(crate) fn todos_of_body(body: &str) -> Vec<NoteTodo> {
+    let scope =
+        yamcha_core::template::section_text(body, "## 할 일").unwrap_or_else(|| body.to_string());
+    yamcha_core::template::parse_todos(&scope)
+        .into_iter()
+        .enumerate()
+        .map(|(i, t)| NoteTodo {
+            index: i as u32,
+            done: t.done,
+            text: t.text,
+        })
+        .collect()
+}
+
 /// 일지의 할 일 목록 (`## 할 일` 섹션, 없으면 본문 전체). 완료·미완료 모두.
 #[tauri::command]
 #[specta::specta]
 pub fn note_todos(state: State<'_, AppState>, rel_path: String) -> Result<Vec<NoteTodo>, String> {
     with_ctx(&state, |c| {
-        let note = c.vault.read_note(&rel_path)?;
-        let scope = yamcha_core::template::section_text(&note.body, "## 할 일")
-            .unwrap_or_else(|| note.body.clone());
-        Ok(yamcha_core::template::parse_todos(&scope)
-            .into_iter()
-            .enumerate()
-            .map(|(i, t)| NoteTodo {
-                index: i as u32,
-                done: t.done,
-                text: t.text,
-            })
-            .collect())
+        Ok(todos_of_body(&c.vault.read_note(&rel_path)?.body))
     })
 }
 
@@ -456,60 +463,65 @@ pub struct NoteBlock {
     pub section: String,
 }
 
-/// 보기 화면용 블록 목록.
+/// 노트 본문 → 보기 블록들.
 /// `## 기록`은 콜아웃/원문을 순서대로, 그 밖의 섹션은 원문 블록으로 덧붙인다 —
 /// 화면이 파일 내용을 조용히 숨기지 않도록.
-#[tauri::command]
-#[specta::specta]
-pub fn note_blocks(state: State<'_, AppState>, rel_path: String) -> Result<Vec<NoteBlock>, String> {
+///
+/// `todos_of_body`와 같은 이유로 자유 함수다 — 노트 보기와 회고가 같은 눈으로 봐야 한다.
+pub(crate) fn blocks_of_body(body: &str) -> Vec<NoteBlock> {
     use yamcha_core::template::{parse_record_blocks, sections, RecordBlock};
-    with_ctx(&state, |c| {
-        let note = c.vault.read_note(&rel_path)?;
-        let mut out: Vec<NoteBlock> = Vec::new();
+    let mut out: Vec<NoteBlock> = Vec::new();
 
-        let records =
-            yamcha_core::template::section_text(&note.body, "## 기록").unwrap_or_default();
-        for b in parse_record_blocks(&records) {
-            out.push(match b {
-                RecordBlock::Callout { index, entry } => NoteBlock {
-                    kind: "callout".into(),
-                    entry_index: Some(index as u32),
-                    kind_label: entry.kind_label,
-                    date: entry.date,
-                    text: entry.text,
-                    section: String::new(),
-                },
-                RecordBlock::Raw(text) => NoteBlock {
-                    kind: "raw".into(),
-                    entry_index: None,
-                    kind_label: String::new(),
-                    date: String::new(),
-                    text,
-                    section: String::new(),
-                },
-            });
-        }
-
-        // 보기 화면이 따로 그려 주는 섹션은 건너뛴다 (기록=위 목록, 할 일=하단 영역, 소개=정보 화면)
-        let handled = ["## 기록", "## 할 일", "## 소개"];
-        for (name, body) in sections(&note.body) {
-            if handled.contains(&name.as_str()) || body.trim().is_empty() {
-                continue;
-            }
-            out.push(NoteBlock {
+    let records = yamcha_core::template::section_text(body, "## 기록").unwrap_or_default();
+    for b in parse_record_blocks(&records) {
+        out.push(match b {
+            RecordBlock::Callout { index, entry } => NoteBlock {
+                kind: "callout".into(),
+                entry_index: Some(index as u32),
+                kind_label: entry.kind_label,
+                date: entry.date,
+                text: entry.text,
+                section: String::new(),
+            },
+            RecordBlock::Raw(text) => NoteBlock {
                 kind: "raw".into(),
                 entry_index: None,
                 kind_label: String::new(),
                 date: String::new(),
-                text: body,
-                section: if name.is_empty() {
-                    "(머리말)".into()
-                } else {
-                    name
-                },
-            });
+                text,
+                section: String::new(),
+            },
+        });
+    }
+
+    // 보기 화면이 따로 그려 주는 섹션은 건너뛴다 (기록=위 목록, 할 일=하단 영역, 소개=정보 화면)
+    let handled = ["## 기록", "## 할 일", "## 소개"];
+    for (name, section_body) in sections(body) {
+        if handled.contains(&name.as_str()) || section_body.trim().is_empty() {
+            continue;
         }
-        Ok(out)
+        out.push(NoteBlock {
+            kind: "raw".into(),
+            entry_index: None,
+            kind_label: String::new(),
+            date: String::new(),
+            text: section_body,
+            section: if name.is_empty() {
+                "(머리말)".into()
+            } else {
+                name
+            },
+        });
+    }
+    out
+}
+
+/// 보기 화면용 블록 목록.
+#[tauri::command]
+#[specta::specta]
+pub fn note_blocks(state: State<'_, AppState>, rel_path: String) -> Result<Vec<NoteBlock>, String> {
+    with_ctx(&state, |c| {
+        Ok(blocks_of_body(&c.vault.read_note(&rel_path)?.body))
     })
 }
 

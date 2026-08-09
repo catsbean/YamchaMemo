@@ -19,6 +19,33 @@ pub struct ReadingEntry {
     pub text: String,
 }
 
+/// 책 노트 한 편에서 기록 엔트리를 평탄화한다.
+/// 독서기록 목록과 회고가 같은 모양을 보도록 한 곳에 둔다.
+fn entries_of_book(n: &NoteSummary, body: &str) -> Vec<ReadingEntry> {
+    let fm = |k: &str| {
+        n.frontmatter
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let (_, records) = yamcha_core::template::split_book_body(body);
+    yamcha_core::template::parse_entries(&records)
+        .into_iter()
+        .map(|e| ReadingEntry {
+            book_rel: n.rel_path.clone(),
+            book_title: n.title.clone(),
+            book_author: fm("author"),
+            genre: fm("genre"),
+            tags: n.tags.clone(),
+            cover: fm("cover"),
+            kind_label: e.kind_label,
+            date: e.date,
+            text: e.text,
+        })
+        .collect()
+}
+
 /// 전체 책의 기록을 엔트리 단위로 펼쳐 반환한다 (정렬·필터는 화면에서).
 #[tauri::command]
 #[specta::specta]
@@ -32,27 +59,7 @@ pub fn list_entries(state: State<'_, AppState>) -> Result<Vec<ReadingEntry>, Str
             let Ok(note) = c.vault.read_note(&n.rel_path) else {
                 continue;
             };
-            let fm = |k: &str| {
-                n.frontmatter
-                    .get(k)
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string()
-            };
-            let (_, records) = yamcha_core::template::split_book_body(&note.body);
-            for e in yamcha_core::template::parse_entries(&records) {
-                out.push(ReadingEntry {
-                    book_rel: n.rel_path.clone(),
-                    book_title: n.title.clone(),
-                    book_author: fm("author"),
-                    genre: fm("genre"),
-                    tags: n.tags.clone(),
-                    cover: fm("cover"),
-                    kind_label: e.kind_label,
-                    date: e.date,
-                    text: e.text,
-                });
-            }
+            out.extend(entries_of_book(&n, &note.body));
         }
         Ok(out)
     })
@@ -188,4 +195,136 @@ pub fn daily_digest(state: State<'_, AppState>, date: String) -> Result<DailyDig
         d.today_entries.sort_by_key(|e| std::cmp::Reverse(e.count));
         Ok(d)
     })
+}
+
+/// 회고 화면이 날짜 섹션 하나를 그리는 데 필요한 전부.
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone)]
+pub struct ReviewDay {
+    pub date: String,
+    pub rel_path: String,
+    /// 소속 일지의 태그 — 회고의 태그 필터가 본문 인라인 `#태그`와 **함께** 본다
+    pub tags: Vec<String>,
+    pub blocks: Vec<NoteBlock>,
+    pub todos: Vec<NoteTodo>,
+}
+
+/// 회고 기간 하나를 통째로.
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone)]
+pub struct ReviewRange {
+    /// 최신 날짜가 앞 (화면 기본 정렬과 같게)
+    pub days: Vec<ReviewDay>,
+    /// 기간 안의 독서기록만. `with_reading`이 false면 빈 목록
+    pub reading: Vec<ReadingEntry>,
+}
+
+/// 일지가 가리키는 날짜.
+///
+/// 파일 이름이 곧 날짜라는 것이 일지의 규칙이고 화면도 그렇게 읽는다.
+/// frontmatter는 외부 편집기에서 어긋날 수 있으니 이름이 날짜꼴이 아닐 때만 믿는다.
+fn day_date(rel_path: &str, fm_date: &str) -> String {
+    let stem = rel_path
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(".md");
+    if is_ymd(stem) {
+        stem.to_string()
+    } else if is_ymd(fm_date) {
+        fm_date.to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// `YYYY-MM-DD` 꼴인가. 고정폭이라 기간 비교를 문자열 그대로 할 수 있다.
+fn is_ymd(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && [0, 1, 2, 3, 5, 6, 8, 9]
+            .iter()
+            .all(|&i| b[i].is_ascii_digit())
+}
+
+/// 회고 기간 전체를 한 번에 읽는다. `from`·`to`는 `YYYY-MM-DD`(양끝 포함).
+///
+/// 날짜마다 `note_blocks`·`note_todos`를 부르면 한 달에 62번이 오간다 —
+/// 기간을 사용자가 직접 정할 수 있게 되면서 그 수가 수백까지 늘 수 있어 한 번으로 묶었다.
+///
+/// **필터는 일부러 여기서 걸지 않는다.** 종류 칩 하나를 껐다 켤 때마다 파일을
+/// 다시 읽을 이유가 없다 — 백엔드는 기간을 주고, 좁히는 일은 화면이 한다.
+#[tauri::command]
+#[specta::specta]
+pub fn review_range(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    with_reading: bool,
+) -> Result<ReviewRange, String> {
+    with_ctx(&state, |c| {
+        let mut days: Vec<ReviewDay> = Vec::new();
+        for n in c.vault.list_notes_of_type(Builtin::Daily.id())? {
+            let date = day_date(&n.rel_path, &n.date);
+            if date.is_empty() || date < from || date > to {
+                continue;
+            }
+            // 한 편을 못 읽었다고 기간 전체를 실패시키지 않는다
+            let Ok(note) = c.vault.read_note(&n.rel_path) else {
+                continue;
+            };
+            days.push(ReviewDay {
+                date,
+                rel_path: n.rel_path.clone(),
+                tags: n.tags.clone(),
+                blocks: blocks_of_body(&note.body),
+                todos: todos_of_body(&note.body),
+            });
+        }
+        days.sort_by(|a, b| b.date.cmp(&a.date));
+
+        let mut reading: Vec<ReadingEntry> = Vec::new();
+        if with_reading {
+            for n in c.vault.list_notes_of_type(Builtin::Book.id())? {
+                let Ok(note) = c.vault.read_note(&n.rel_path) else {
+                    continue;
+                };
+                // 기간 밖은 여기서 버린다 — 안 그러면 vault 전체 기록이 화면까지 건너온다
+                reading.extend(
+                    entries_of_book(&n, &note.body)
+                        .into_iter()
+                        .filter(|e| e.date >= from && e.date <= to),
+                );
+            }
+        }
+        Ok(ReviewRange { days, reading })
+    })
+}
+
+#[cfg(test)]
+mod review_range_tests {
+    use super::*;
+
+    #[test]
+    fn 파일_이름이_날짜면_그걸_믿는다() {
+        assert_eq!(
+            day_date("Daily/2026/07/2026-07-30.md", "2026-01-01"),
+            "2026-07-30"
+        );
+    }
+
+    #[test]
+    fn 이름이_날짜꼴이_아니면_frontmatter를_본다() {
+        assert_eq!(day_date("Daily/메모.md", "2026-07-30"), "2026-07-30");
+        assert_eq!(day_date("Daily/메모.md", ""), "");
+    }
+
+    #[test]
+    fn 날짜꼴은_고정폭만_받는다() {
+        assert!(is_ymd("2026-07-30"));
+        assert!(!is_ymd("2026-7-30"));
+        assert!(!is_ymd("2026-07-30a"));
+        assert!(!is_ymd("무제"));
+        assert!(!is_ymd("20260730--"));
+    }
 }
