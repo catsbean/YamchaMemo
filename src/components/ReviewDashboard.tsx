@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { commands, type NoteTodo, type ReviewRange } from "../bindings";
 import { kindByLabel, styleOf } from "../lib/callouts";
 import { addDays, daysBetween, weekdayOf, ymd } from "../lib/date";
-import { bodyToHtml, wrapDocument } from "../lib/exportHtml";
+import { wrapDocument } from "../lib/exportHtml";
 import { printHtml, saveTextAs } from "../lib/exportFile";
+import { buildReviewDoc } from "../lib/exportReview";
+import { useContextMenu, type MenuItem } from "../lib/contextMenu";
 import {
   cardOfReading,
   cardsOfDay,
@@ -14,6 +16,7 @@ import {
   filterTodos,
   groupByDate,
   hasCardFilter,
+  rangeFileLabel,
   rangeOf,
   stepRange,
   type ReviewCard,
@@ -21,6 +24,7 @@ import {
   type Span,
 } from "../lib/reviewFilter";
 import { useVault } from "../stores/vault";
+import ContextMenu from "./ContextMenu";
 import NoteText from "./NoteText";
 import ReviewFilterPanel from "./ReviewFilterPanel";
 import Segmented from "./Segmented";
@@ -193,26 +197,33 @@ export default function ReviewDashboard() {
     setSpan(v);
   };
 
-  /** 지금 보고 있는 회고를 문서 한 장으로 */
-  function buildHtml(): string {
-    const md = sections
-      .map((s) => {
-        const head = `## ${s.date} (${weekdayOf(s.date)})`;
-        const todo = s.todos
-          .map((t) => `- [${t.done ? "x" : " "}] ${t.text}`)
-          .join("\n");
-        const rec = s.cards
-          .map(
-            (c) =>
-              `> [!${c.kindLabel}] ${c.time || c.date}\n> ${c.text.split("\n").join("\n> ")}`,
-          )
-          .join("\n\n");
-        return [head, todo, rec].filter(Boolean).join("\n\n");
-      })
-      .join("\n\n");
-    const meta = `${label} · 기록 ${stat.기록}건 · 끝낸 할 일 ${stat.끝낸할일}건`;
-    return wrapDocument(`회고 ${label}`, bodyToHtml(md), meta);
+  const exportMenu = useContextMenu();
+
+  /** 지금 화면에 보이는 회고를 그대로 문서로 — 필터가 곧 내보낼 범위다 */
+  function reviewDoc() {
+    const d = buildReviewDoc(sections, { label, filter });
+    return { ...d, wrapped: wrapDocument(d.title, d.html, d.meta) };
   }
+
+  const fileName = `회고 ${rangeFileLabel(range)}`;
+  const exportItems: MenuItem[] = [
+    {
+      label: "🖨️ 인쇄 · PDF로 저장",
+      hint: "인쇄 창에서 PDF 선택",
+      onClick: () => printHtml(reviewDoc().wrapped),
+    },
+    {
+      label: "📄 텍스트로 저장",
+      hint: "글자만 — 어디에나 붙여넣기",
+      onClick: () => void saveTextAs(fileName, "txt", "텍스트", reviewDoc().text),
+    },
+    {
+      label: "🖼️ HTML로 저장",
+      hint: "스타일까지 한 파일",
+      onClick: () =>
+        void saveTextAs(fileName, "html", "HTML 문서", reviewDoc().wrapped),
+    },
+  ];
 
   const loading = data === null;
 
@@ -276,18 +287,17 @@ export default function ReviewDashboard() {
           </button>
           <button
             className="rounded border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 hover:border-neutral-500 disabled:opacity-40"
-            disabled={sections.length === 0}
-            onClick={() => printHtml(buildHtml())}
-            title="인쇄 창에서 PDF로 저장할 수 있습니다"
+            disabled={shown.length === 0 && sections.length === 0}
+            onClick={(ev) => {
+              const r = ev.currentTarget.getBoundingClientRect();
+              exportMenu.open(
+                { clientX: r.right - 180, clientY: r.bottom + 2, preventDefault: () => {} },
+                exportItems,
+              );
+            }}
+            title="지금 화면에 보이는 것을 그대로 문서로 냅니다"
           >
-            🖨️ 인쇄
-          </button>
-          <button
-            className="rounded border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 hover:border-neutral-500 disabled:opacity-40"
-            disabled={sections.length === 0}
-            onClick={() => saveTextAs(`회고 ${label}`, "html", "HTML 문서", buildHtml())}
-          >
-            ⬇ HTML
+            ⬇ 내보내기
           </button>
         </div>
       </header>
@@ -439,6 +449,10 @@ export default function ReviewDashboard() {
             </section>
           ))}
       </div>
+
+      {exportMenu.menu && (
+        <ContextMenu state={exportMenu.menu} onClose={exportMenu.close} />
+      )}
     </div>
   );
 }
