@@ -5,6 +5,7 @@ import App from "./App";
 import ErrorBoundary from "./components/ErrorBoundary";
 import CaptureWindow from "./components/CaptureWindow";
 import NoteWindow from "./components/NoteWindow";
+import PrintWindow from "./components/PrintWindow";
 import TodoWindow from "./components/TodoWindow";
 import TrashWindow from "./components/TrashWindow";
 import { applyTheme, useVault, type ThemeMode } from "./stores/vault";
@@ -14,6 +15,7 @@ import "./styles.css";
 //   ?view=trash            → 휴지통
 //   ?view=note&rel=<경로>  → 노트 한 편
 //   ?view=capture          → 빠른 담기 (전역 단축키로 뜨는 작은 창)
+//   ?view=print            → 인쇄 미리보기
 const params = new URLSearchParams(window.location.search);
 const view = params.get("view");
 const rel = params.get("rel") ?? "";
@@ -21,6 +23,7 @@ const rel = params.get("rel") ?? "";
 function Root() {
   if (view === "capture") return <CaptureWindow />;
   if (view === "trash") return <TrashWindow />;
+  if (view === "print") return <PrintWindow />;
   if (view === "note" && rel) return <NoteWindow relPath={rel} />;
   if (view === "todos" && rel) return <TodoWindow relPath={rel} />;
   return <App />;

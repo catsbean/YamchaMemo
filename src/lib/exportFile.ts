@@ -1,4 +1,6 @@
 import { save } from "@tauri-apps/plugin-dialog";
+import { emitTo } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { commands } from "../bindings";
 
 /** 저장 대화상자를 띄우고 고른 자리에 글을 쓴다. 취소하면 false. */
@@ -23,60 +25,47 @@ export function safeName(s: string): string {
   return (s.replace(/[\\/:*?"<>|]/g, "_").trim() || "내보내기").slice(0, 80);
 }
 
-const PRINT_FRAME_ID = "yamcha-print-frame";
-
-/** 인쇄 미리보기가 떠 있는 동안 true */
-let printing = false;
-
-/** 인쇄 미리보기가 떠 있는가.
+/** 인쇄할 문서를 넘겨 두는 자리.
  *
- *  창 닫기 핸들러가 이걸 본다. 미리보기는 앱 화면 위에 겹쳐 뜨는데, 그걸 닫는
- *  동작이 창 닫기 요청으로 번져 **메모앱이 통째로 닫히는** 일이 있었다.
- *  인쇄 중에는 닫기 요청을 무시해 그 사고를 막는다. */
-export function isPrinting(): boolean {
-  return printing;
-}
+ *  창끼리 주소(`data:`)로 넘기지 않는 이유는 두 가지다. CSP가 `default-src 'self'`라
+ *  웹뷰를 `data:` 주소로 보낼 수 없고, 한글이 섞인 문서는 `btoa`에 실리지도 않는다.
+ *  두 창은 같은 origin이므로 localStorage가 그대로 공유된다. */
+export const PRINT_DOC_KEY = "yamcha-print-doc";
+/** 이미 떠 있는 인쇄 창에 "새 문서가 왔다"고 알리는 이름 */
+export const PRINT_DOC_EVENT = "yamcha-print-doc";
+const PRINT_LABEL = "print";
 
-/** 지금 창을 건드리지 않고 HTML만 인쇄한다.
+/** 인쇄 미리보기를 **별도 창**으로 띄운다.
  *
- *  숨긴 iframe에 문서를 넣고 그것만 인쇄하면 앱 화면은 그대로 있고
- *  인쇄 대화상자의 "PDF로 저장"으로 PDF까지 만들 수 있다.
- *  (앱에 PDF 렌더러를 넣는 대신 고른 방식 — 용량과 유지비를 아낀다) */
-export function printHtml(html: string): void {
-  // 앞서 띄운 인쇄 프레임이 남아 있으면 치운다. 겹쳐 두면 미리보기가 어느 쪽을
-  // 그리는지 엉키고, 닫아도 반응하지 않는 창이 남는다.
-  document.getElementById(PRINT_FRAME_ID)?.remove();
+ *  예전에는 앱 화면에 숨긴 iframe을 얹어 인쇄했다. 미리보기가 본 창 위에 겹쳐 떠서
+ *  닫는 단추가 어느 창의 것인지 헷갈렸고, 본 창 X를 눌러도 아무 반응이 없었다.
+ *  창 자체를 나누면 그 혼동이 사라진다 — 인쇄 창을 닫아도 앱은 그대로다. */
+export async function printHtml(html: string): Promise<void> {
+  try {
+    localStorage.setItem(PRINT_DOC_KEY, html);
+  } catch {
+    // 저장 공간을 넘길 만큼 긴 문서 — 왜 안 되는지는 알려 준다
+    throw new Error(
+      "인쇄할 문서가 너무 깁니다 — 기간을 좁히거나 HTML로 저장해 주세요.",
+    );
+  }
 
-  const frame = document.createElement("iframe");
-  frame.id = PRINT_FRAME_ID;
-  frame.setAttribute("aria-hidden", "true");
-  // 화면 밖에 두되 **종이 크기 그대로** 만든다. 예전처럼 1px짜리로 두면
-  // 미리보기가 그 1px을 기준으로 그려져 조작이 먹지 않는다.
-  frame.style.cssText =
-    "position:fixed;left:-10000px;top:0;width:210mm;height:297mm;border:0";
-  document.body.appendChild(frame);
+  // 인쇄를 여러 번 해도 창이 쌓이지 않게, 떠 있으면 그 창에 새 문서를 넘긴다
+  const existing = await WebviewWindow.getByLabel(PRINT_LABEL);
+  if (existing) {
+    await emitTo(PRINT_LABEL, PRINT_DOC_EVENT);
+    await existing.setFocus();
+    return;
+  }
 
-  let finished = false;
-  const done = () => {
-    if (finished) return;
-    finished = true;
-    printing = false;
-    // 인쇄 대화상자가 닫힌 뒤에 치운다 (너무 일찍 지우면 인쇄가 취소된다)
-    setTimeout(() => frame.remove(), 1000);
-  };
-
-  frame.onload = () => {
-    const w = frame.contentWindow;
-    if (!w) return done();
-    w.addEventListener("afterprint", done);
-    // 글꼴·이미지가 자리를 잡은 뒤에 부른다
-    setTimeout(() => {
-      printing = true;
-      w.focus();
-      w.print();
-      // afterprint를 안 주는 웹뷰를 위한 안전망
-      setTimeout(done, 60_000);
-    }, 250);
-  };
-  frame.srcdoc = html;
+  const w = new WebviewWindow(PRINT_LABEL, {
+    url: "index.html?view=print",
+    title: "인쇄 미리보기 — YamchaMemo",
+    width: 900,
+    height: 900,
+    minWidth: 420,
+    minHeight: 320,
+    resizable: true,
+  });
+  w.once("tauri://error", (e) => console.error("인쇄 창 열기 실패", e));
 }

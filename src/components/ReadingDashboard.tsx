@@ -171,7 +171,7 @@ export default function ReadingDashboard() {
     {
       label: "🖨️ 인쇄 · PDF로 저장",
       hint: "인쇄 창에서 PDF 선택",
-      onClick: () => printHtml(readingDoc().wrapped),
+      onClick: () => void printHtml(readingDoc().wrapped),
     },
     {
       label: "📄 텍스트로 저장",

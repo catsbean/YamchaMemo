@@ -8,7 +8,6 @@ import Sidebar from "./components/Sidebar";
 import { commands, type StorageDir } from "./bindings";
 import { useSuppressNativeContextMenu } from "./lib/contextMenu";
 import { useShortcut } from "./lib/shortcuts";
-import { isPrinting } from "./lib/exportFile";
 import { useVault } from "./stores/vault";
 
 export default function App() {
@@ -57,12 +56,6 @@ export default function App() {
     let disposed = false;
     getCurrentWindow()
       .onCloseRequested(async (e) => {
-        // 인쇄 미리보기는 앱 화면 위에 겹쳐 뜬다. 그걸 닫는 동작이 창 닫기 요청으로
-        // 번져 메모앱이 통째로 닫히는 일이 있었다 — 인쇄 중에는 닫지 않는다.
-        if (isPrinting()) {
-          e.preventDefault();
-          return;
-        }
         e.preventDefault();
         try {
           if (useVault.getState().dirty) {

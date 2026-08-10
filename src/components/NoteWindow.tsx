@@ -17,7 +17,6 @@ import { useContextMenu, useSuppressNativeContextMenu } from "../lib/contextMenu
 import { splitBookBody, composeBookBody } from "../lib/book";
 import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
 import { notifyOtherWindows } from "../lib/windowSync";
-import { isPrinting } from "../lib/exportFile";
 import { fmObject } from "../stores/vault";
 import ContextMenu from "./ContextMenu";
 import DailyEntryBar from "./DailyEntryBar";
@@ -263,11 +262,6 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
     let disposed = false;
     getCurrentWindow()
       .onCloseRequested(async (e) => {
-        // 인쇄 미리보기를 닫는 동작이 창 닫기로 번지지 않게 (App.tsx와 같은 이유)
-        if (isPrinting()) {
-          e.preventDefault();
-          return;
-        }
         if (!dirty) return;
         e.preventDefault();
         try {

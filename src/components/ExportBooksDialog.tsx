@@ -235,7 +235,7 @@ function BookContentTab({
     try {
       const d = await build();
       if (how === "print") {
-        printHtml(d.html);
+        await printHtml(d.html);
         onClose();
         return;
       }

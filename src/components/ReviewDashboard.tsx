@@ -202,7 +202,7 @@ export default function ReviewDashboard() {
     {
       label: "🖨️ 인쇄 · PDF로 저장",
       hint: "인쇄 창에서 PDF 선택",
-      onClick: () => printHtml(reviewDoc().wrapped),
+      onClick: () => void printHtml(reviewDoc().wrapped),
     },
     {
       label: "📄 텍스트로 저장",

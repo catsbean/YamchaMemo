@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the main window, the trash window, per-note windows (note-*), and the quick capture window",
-  "windows": ["main", "trash", "note-*", "todos-*", "capture"],
+  "description": "Default capability for the main window, the trash window, per-note windows (note-*), the quick capture window, and the print preview window",
+  "windows": ["main", "trash", "note-*", "todos-*", "capture", "print"],
   "permissions": [
     "core:default",
     "core:webview:allow-create-webview-window",
