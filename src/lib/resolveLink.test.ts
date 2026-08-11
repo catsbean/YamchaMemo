@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { NoteSummary } from "../bindings";
 import {
   aliasesOf,
+  aliasShadowedBy,
   linkNamesOf,
   linkOptions,
   linkReaches,
@@ -140,6 +141,29 @@ describe("만든 글이 그 링크에 닿는가", () => {
     const 새글 = note("Free/회의 3월.md", "회의 3월", { aliases: ["딴이름"] });
     const 먼저 = note("회의록/딴이름.md", "딴이름");
     expect(linkReaches([새글, 먼저], "딴이름", "Free/회의 3월.md")).toBe(false);
+  });
+});
+
+describe("쓰이지 않는 별칭 가려내기", () => {
+  const 다른글 = note("Free/비비풀.md", "비비풀");
+
+  it("같은 이름의 글이 있으면 그 글의 이름을 돌려준다", () => {
+    expect(aliasShadowedBy([다른글], "비비풀")).toBe("비비풀");
+  });
+
+  it("제목이 없으면 파일명으로 알려 준다", () => {
+    const 무제 = note("Free/파일명뿐.md", "");
+    expect(aliasShadowedBy([무제], "파일명뿐")).toBe("파일명뿐");
+  });
+
+  it("가리는 글이 없으면 null", () => {
+    expect(aliasShadowedBy([다른글], "안 겹치는 이름")).toBeNull();
+  });
+
+  /** 다른 글이 같은 별칭을 쓰는 것은 가리는 게 아니다 — 그때는 고르는 창이 뜬다 */
+  it("별칭끼리 겹치는 것은 가리는 것이 아니다", () => {
+    const 별칭만 = note("Free/딴글.md", "딴글", { aliases: ["비비풀"] });
+    expect(aliasShadowedBy([별칭만], "비비풀")).toBeNull();
   });
 });
 

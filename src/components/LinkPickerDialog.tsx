@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import type { TypeDef } from "../bindings";
+import { isImeEnter } from "../lib/ime";
 import type { LinkHit } from "../lib/resolveLink";
 import { useVault } from "../stores/vault";
 import Modal from "./Modal";
@@ -48,6 +50,36 @@ export function LinkPicker({
   onPick: (relPath: string) => void;
   onClose: () => void;
 }) {
+  const [active, setActive] = useState(0);
+
+  // 링크는 글을 쓰는 흐름 한가운데서 눌린다 — 손을 마우스로 옮기게 하지 않는다.
+  // (Esc는 Modal이 맡는다.) capture 단계에서 잡아 뒤쪽 화면의 단축키로 새지 않게 한다.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const n = hits.length;
+      if (e.key === "ArrowDown") {
+        setActive((i) => (i + 1) % n);
+      } else if (e.key === "ArrowUp") {
+        setActive((i) => (i - 1 + n) % n);
+      } else if (e.key === "Enter") {
+        // 조합 중 Enter는 한글을 확정하려는 것이다 (다른 칸에 포커스가 있을 수 있다)
+        if (isImeEnter({ nativeEvent: e, key: e.key })) return;
+        setActive((i) => {
+          onPick(hits[i].note.rel_path);
+          return i;
+        });
+      } else if (/^[1-9]$/.test(e.key) && Number(e.key) <= n) {
+        onPick(hits[Number(e.key) - 1].note.rel_path);
+      } else {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [hits, onPick]);
+
   return (
     <Modal onClose={onClose} panelClassName="w-96 rounded-lg p-5 shadow-xl">
       <h2 className="text-base font-bold">
@@ -56,17 +88,28 @@ export function LinkPicker({
         <span className="text-neutral-500">]]</span>
       </h2>
       <p className="mt-1 text-xs text-neutral-500">
-        같은 이름의 글이 {hits.length}개 있습니다. 열 글을 고르세요.
+        같은 이름의 글이 {hits.length}개 있습니다. 열 글을 고르세요 — ↑↓·Enter
+        또는 번호키.
       </p>
 
       <ul className="mt-3 flex flex-col gap-1">
-        {hits.map(({ note, via, alias }) => (
+        {hits.map(({ note, via, alias }, i) => (
           <li key={note.rel_path}>
             <button
-              className="flex w-full flex-col items-start rounded-md border border-neutral-200 px-3 py-2 text-left hover:border-neutral-400 hover:bg-neutral-50"
+              className={`flex w-full flex-col items-start rounded-md border px-3 py-2 text-left ${
+                i === active
+                  ? "border-neutral-800 bg-neutral-50"
+                  : "border-neutral-200 hover:border-neutral-400 hover:bg-neutral-50"
+              }`}
+              onMouseEnter={() => setActive(i)}
               onClick={() => onPick(note.rel_path)}
             >
               <span className="flex w-full items-center gap-2">
+                {i < 9 && (
+                  <span className="shrink-0 text-2xs text-neutral-400">
+                    {i + 1}
+                  </span>
+                )}
                 <span className="truncate text-sm">
                   {note.title || note.rel_path}
                 </span>

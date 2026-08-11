@@ -11,7 +11,7 @@ import {
 import { fmObject, useVault } from "../stores/vault";
 import { composeBookBody } from "../lib/book";
 import { coverSrc, fmStr } from "../lib/note";
-import { aliasesOf } from "../lib/resolveLink";
+import { aliasesOf, aliasShadowedBy } from "../lib/resolveLink";
 import { pastFieldValues } from "./FrontmatterForm";
 import Modal from "./Modal";
 
@@ -366,6 +366,18 @@ export default function BookInfoModal({
             value={aliasDraft}
             onChange={(e) => setAliasDraft(e.target.value)}
           />
+          {/* 다른 글의 이름에 가려 쓰이지 않는 별칭을 그 자리에서 알린다 */}
+          {aliasDraft
+            .split(",")
+            .map((a) => a.trim())
+            .filter(Boolean)
+            .map((a) => [a, aliasShadowedBy(notes, a)] as const)
+            .filter((p): p is readonly [string, string] => p[1] !== null)
+            .map(([alias, owner]) => (
+              <span key={alias} className="text-2xs text-amber-600">
+                '{alias}'은(는) '{owner}' 글의 이름이라 이 별칭으로는 오지 않습니다
+              </span>
+            ))}
         </label>
 
         <label className="mt-3 flex flex-col gap-0.5">

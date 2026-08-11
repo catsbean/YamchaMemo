@@ -6,6 +6,7 @@ import type {
   TagSuggestion,
   TypeDef,
 } from "../bindings";
+import { aliasShadowedBy } from "../lib/resolveLink";
 import TagSuggestionRow from "./TagSuggestionRow";
 
 type FmObject = { [key: string]: JsonValue | undefined };
@@ -104,9 +105,42 @@ export default function FrontmatterForm({
           tagSuggestions={f.name === "tags" ? tagSuggestions : undefined}
           onAddTag={f.name === "tags" ? onAddTag : undefined}
           options={NO_SUGGEST.has(f.name) ? undefined : options[f.name]}
+          shadowedBy={
+            f.name === "aliases" && notes
+              ? (alias) => aliasShadowedBy(notes, alias)
+              : undefined
+          }
         />
       ))}
     </div>
+  );
+}
+
+/** 적어 넣었지만 다른 글에 가려 쓰이지 않는 별칭을 그 자리에서 알린다.
+ *
+ *  별칭이 제목·파일명에게 지는 것은 옳은 규칙이지만(그래야 남의 링크를 가로채지
+ *  않는다), 적은 사람에게는 아무 일도 안 일어난 것처럼 보인다. 조용히 무시하는
+ *  대신 왜 안 되는지를 밝힌다. 막지는 않는다 — 가리던 글이 나중에 사라지면
+ *  그때부터 이 별칭이 살아난다. */
+function ShadowedAliases({
+  items,
+  shadowedBy,
+}: {
+  items: string[];
+  shadowedBy: (alias: string) => string | null;
+}) {
+  const dead = items
+    .map((a) => [a, shadowedBy(a)] as const)
+    .filter((p): p is readonly [string, string] => p[1] !== null);
+  if (dead.length === 0) return null;
+  return (
+    <span className="mt-0.5 text-2xs text-amber-600">
+      {dead.map(([alias, owner]) => (
+        <span key={alias} className="block">
+          '{alias}'은(는) '{owner}' 글의 이름이라 이 별칭으로는 오지 않습니다
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -119,6 +153,7 @@ function Field({
   tagSuggestions,
   onAddTag,
   options,
+  shadowedBy,
 }: {
   def: FieldDef;
   typeId: string;
@@ -128,6 +163,8 @@ function Field({
   tagSuggestions?: TagSuggestion[];
   onAddTag?: (tag: string) => void;
   options?: string[];
+  /** 별칭 칸에서만 — 이 값이 다른 이름에 가려 쓰이지 않으면 그 글의 이름 */
+  shadowedBy?: (alias: string) => string | null;
 }) {
   // 필수 표시(*)를 붙이지 않는다 — 비워 둬도 저장되므로 지키지 않는 약속이었다
   const label = (
@@ -215,6 +252,7 @@ function Field({
           {onAddTag && (
             <TagSuggestionRow suggestions={suggestions} onAdd={onAddTag} />
           )}
+          {shadowedBy && <ShadowedAliases items={items} shadowedBy={shadowedBy} />}
         </label>
       );
     }
