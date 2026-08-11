@@ -1,9 +1,8 @@
 import { useMemo, useState } from "react";
 import { useVault } from "../stores/vault";
 import { openTrashWindow } from "../lib/trashWindow";
-import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
+import { shortcutTextOf, useModKeyHeld, useShortcut } from "../lib/shortcuts";
 import CustomTypeDialog from "./CustomTypeDialog";
-import ShortcutHint from "./ShortcutHint";
 
 const BUILTIN_ICONS: Record<string, string> = {
   book: "📚",
@@ -22,9 +21,20 @@ export default function Sidebar({
   onSearch: () => void;
   onOpenSettings: () => void;
 }) {
-  const { vaultPath, schemas, notes, nav, current, issues, setNav, openToday } =
-    useVault();
+  const {
+    vaultPath,
+    schemas,
+    notes,
+    nav,
+    current,
+    issues,
+    shortcutsOff,
+    setNav,
+    openToday,
+  } = useVault();
   const [addingType, setAddingType] = useState(false);
+  // Ctrl(⌘)을 붙들고 있는 동안 메뉴마다 자기 번호를 보여 준다
+  const modHeld = useModKeyHeld();
 
   const counts = new Map<string, number>();
   for (const n of notes) {
@@ -59,8 +69,13 @@ export default function Sidebar({
     setNav(id);
   });
 
+  const navHintOn = modHeld && !shortcutsOff.includes("nav");
+
   function MenuItem({ id, label, icon }: { id: string; label: string; icon: string }) {
     const active = nav === id && !current;
+    // 1~9번까지만 단축키가 있다 — 그 뒤 메뉴에는 번호를 붙이지 않는다
+    const order = navIds.indexOf(id);
+    const num = navHintOn && order >= 0 && order < 9 ? order + 1 : null;
     return (
       <button
         className={`mb-1 flex w-full items-center justify-between rounded-md px-3 py-2 text-sm ${
@@ -76,12 +91,18 @@ export default function Sidebar({
           <span className="mr-2">{icon}</span>
           {label}
         </span>
-        {counts.has(id) && (
-          <span
-            className={`text-xs ${active ? "text-neutral-300" : "text-neutral-400"}`}
-          >
-            {counts.get(id)}
-          </span>
+        {num !== null ? (
+          <kbd className="shrink-0 rounded border border-neutral-400 bg-white px-1.5 py-0.5 font-mono text-2xs font-bold text-neutral-700 shadow-sm">
+            {num}
+          </kbd>
+        ) : (
+          counts.has(id) && (
+            <span
+              className={`text-xs ${active ? "text-neutral-300" : "text-neutral-400"}`}
+            >
+              {counts.get(id)}
+            </span>
+          )
         )}
       </button>
     );
@@ -177,8 +198,6 @@ export default function Sidebar({
       </div>
 
       {addingType && <CustomTypeDialog onClose={() => setAddingType(false)} />}
-
-      <ShortcutHint />
     </aside>
   );
 }

@@ -4,6 +4,7 @@ import Dashboard from "./components/Dashboard";
 import EditorPane from "./components/EditorPane";
 import SearchModal from "./components/SearchModal";
 import SettingsModal from "./components/SettingsModal";
+import ShortcutHint from "./components/ShortcutHint";
 import Sidebar from "./components/Sidebar";
 import { commands, type StorageDir } from "./bindings";
 import { useSuppressNativeContextMenu } from "./lib/contextMenu";
@@ -170,6 +171,8 @@ export default function App() {
           )}
         </div>
       )}
+
+      <ShortcutHint />
 
       {searchOpen && <SearchModal onClose={() => setSearchOpen(false)} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
