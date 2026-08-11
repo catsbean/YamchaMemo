@@ -385,6 +385,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
           value={fm}
           onChange={setFrontmatter}
           onPickImage={pickImage}
+          notes={notes}
         />
       )}
 

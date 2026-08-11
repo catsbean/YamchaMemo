@@ -359,6 +359,7 @@ export default function EditorPane() {
         onPickImage={pickImage}
         tagSuggestions={tagSuggestions}
         onAddTag={addSuggestedTag}
+        notes={notes}
       />
 
       {/* 일지 보기 모드: 입력 → 기록 → 할 일. 원문 편집으로 넘어가면 통째로 감춘다 */}

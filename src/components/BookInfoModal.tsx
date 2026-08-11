@@ -1,11 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { load } from "@tauri-apps/plugin-store";
-import { commands, type JsonValue, type NoteContent } from "../bindings";
+import {
+  commands,
+  type JsonValue,
+  type NoteContent,
+  type NoteSummary,
+} from "../bindings";
 import { fmObject, useVault } from "../stores/vault";
 import { composeBookBody } from "../lib/book";
 import { coverSrc, fmStr } from "../lib/note";
+import { aliasesOf } from "../lib/resolveLink";
+import { pastFieldValues } from "./FrontmatterForm";
 import Modal from "./Modal";
 
 const STATUSES: [string, string][] = [
@@ -35,7 +42,7 @@ export default function BookInfoModal({
   records: string;
   onClose: () => void;
 }) {
-  const { vaultPath, refresh, openNote } = useVault();
+  const { vaultPath, refresh, openNote, notes } = useVault();
   const fm0 = fmObject(note) as Record<string, unknown>;
   const [f, setF] = useState({
     title: fmStr(fm0, "title") || note.rel_path.split("/").pop()?.replace(/\.md$/, "") || "",
@@ -53,6 +60,12 @@ export default function BookInfoModal({
     ? ((fm0 as { tags?: string[] }).tags ?? []).join(", ")
     : "";
   const [tagsDraft, setTagsDraft] = useState(initialTags);
+  // 별칭 — `[[비비풀]]`처럼 다른 이름으로도 이 책에 닿게 한다 (태그와 같은 쉼표 입력)
+  const [aliasDraft, setAliasDraft] = useState(
+    aliasesOf({ frontmatter: fm0 } as unknown as NoteSummary).join(", "),
+  );
+  // 저자·출판사·분야는 같은 값을 되풀이해 넣는 칸이라 지난 값을 골라 쓸 수 있게 한다
+  const bookOptions = useMemo(() => pastFieldValues(notes, "book"), [notes]);
   const [introDraft, setIntroDraft] = useState(intro);
   const [pendingCover, setPendingCover] = useState<
     { kind: "file"; path: string } | { kind: "paste"; b64: string; ext: string } | null
@@ -163,6 +176,13 @@ export default function BookInfoModal({
         .split(",")
         .map((t) => t.trim())
         .filter(Boolean);
+      // 별칭이 없으면 키 자체를 지운다 — 빈 `aliases: []`로 frontmatter를 어지럽히지 않는다
+      const aliases = aliasDraft
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      if (aliases.length > 0) nextFm.aliases = aliases;
+      else delete nextFm.aliases;
       const body = composeBookBody(introDraft, records);
       // 충돌 검사 없음(null): 이 화면은 [저장]을 누른 그 순간의 폼을 그대로 쓴다.
       // 검사에 막혀 조용히 안 써지는 쪽이 사용자에게 더 나쁘다.
@@ -252,6 +272,7 @@ export default function BookInfoModal({
               <span className="text-xs text-neutral-500">저자</span>
               <input
                 className={inputCls}
+                list="book-opt-author"
                 value={f.author}
                 onChange={(e) => setF({ ...f, author: e.target.value })}
               />
@@ -260,6 +281,7 @@ export default function BookInfoModal({
               <span className="text-xs text-neutral-500">출판사</span>
               <input
                 className={inputCls}
+                list="book-opt-publisher"
                 value={f.publisher}
                 onChange={(e) => setF({ ...f, publisher: e.target.value })}
               />
@@ -268,10 +290,19 @@ export default function BookInfoModal({
               <span className="text-xs text-neutral-500">분야</span>
               <input
                 className={inputCls}
+                list="book-opt-genre"
                 value={f.genre}
                 onChange={(e) => setF({ ...f, genre: e.target.value })}
               />
             </label>
+            {/* 지금까지 다른 책에 넣은 값들 — 표기가 갈리지 않게 골라 쓴다 */}
+            {(["author", "publisher", "genre"] as const).map((k) => (
+              <datalist key={k} id={`book-opt-${k}`}>
+                {(bookOptions[k] ?? []).map((v) => (
+                  <option key={v} value={v} />
+                ))}
+              </datalist>
+            ))}
             <label className="flex flex-col gap-0.5">
               <span className="text-xs text-neutral-500">ISBN</span>
               <input
@@ -326,6 +357,16 @@ export default function BookInfoModal({
             </label>
           </div>
         </div>
+
+        <label className="mt-3 flex flex-col gap-0.5">
+          <span className="text-xs text-neutral-500">별칭 (쉼표로 구분)</span>
+          <input
+            className={inputCls}
+            placeholder="예: 비비풀 — 이 이름으로 [[링크]]해도 이 책이 열립니다"
+            value={aliasDraft}
+            onChange={(e) => setAliasDraft(e.target.value)}
+          />
+        </label>
 
         <label className="mt-3 flex flex-col gap-0.5">
           <span className="text-xs text-neutral-500">태그 (쉼표로 구분)</span>

@@ -263,7 +263,8 @@ export default function NewNoteDialog({ noteType, onClose }: Props) {
                   <input
                     key={f.name}
                     className={inputCls}
-                    placeholder={`${f.label}${f.required ? " *" : " (선택)"}`}
+                    // 만들 때는 어느 칸도 강제하지 않는다 — 제목만 있으면 만들어진다
+                    placeholder={`${f.label} (선택)`}
                     value={values[f.name] ?? ""}
                     onChange={(e) =>
                       setValues((v) => ({ ...v, [f.name]: e.target.value }))
