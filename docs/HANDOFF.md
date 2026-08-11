@@ -39,7 +39,7 @@
 - `src/stores/vault.ts` — 모든 액션(`init/openNote/saveCurrent/createNote/updateFrontmatter/…`), `guard()` 에러 수집
 - `src/components/` — `Bookshelf`(책장 그리드/목록), `BookView`(독서기록 화면), `BookInfoModal`, `BookCreateDialog`, `BookSearchDialog`, `EnrichDialog`(일괄 자동채우기), `SettingsModal`, `NewNoteDialog`, `EditorPane`, `SearchModal`, `BookPickerDialog`, `CustomTypeDialog`, `ReviewDashboard`+`ReviewFilterPanel`(회고와 고급 필터)
 - `src/lib/date.ts` — `ymd`/`dateOf`/`weekdayOf`/`addDays`/`daysBetween`. 날짜는 앱 전체에서 `YYYY-MM-DD` **문자열**이라 기간 비교가 곧 사전순 비교다
-- `src/lib/resolveLink.ts` — `[[…]]` 하나가 어느 노트를 가리키는지 정하는 **유일한 자리**. 겹 순서는 경로(`[[Free/중복노트]]`) → 제목 → 파일명 → 별칭(frontmatter `aliases`)이고, **앞 겹에 하나라도 걸리면 뒤 겹은 보지 않는다**(글이 별칭을 이긴다). 한 겹에서 여럿이 걸리면 전부 돌려주고 `LinkPickerDialog`가 고르게 한다. 자동완성 후보(`linkOptions`)도 여기서 나오며, 이름이 겹치는 후보는 폴더까지 넣어 준다. **대소문자를 가린다** — 백링크를 세는 SQLite `=`와 어긋나면 열리기는 하는데 백링크에는 안 잡히는 링크가 생긴다. 짝이 되는 백엔드는 `Indexer::link_names`(`indexer.rs`)로, 같은 "글이 별칭을 이긴다" 규칙을 SQL로 확인한다
+- `src/lib/resolveLink.ts` — `[[…]]` 하나가 어느 노트를 가리키는지 정하는 **유일한 자리**. 링크를 여는 곳(스토어·별도 노트 창)·자동완성·중복 선택 창·별칭 경고가 모두 여기를 본다. 겹 순서는 경로(`[[Free/중복노트]]`) → 제목 → 파일명 → 별칭(frontmatter `aliases`)이고, **앞 겹에 하나라도 걸리면 뒤 겹은 보지 않는다**(글이 별칭을 이긴다). 한 겹에서 여럿이 걸리면 전부 돌려주고 `LinkPickerDialog`가 고르게 한다. 자동완성 후보(`linkOptions`)도 여기서 나오며, 이름이 겹치는 후보는 폴더까지 넣어 준다. **대소문자를 가린다** — 백링크를 세는 SQLite `=`와 어긋나면 열리기는 하는데 백링크에는 안 잡히는 링크가 생긴다. 짝이 되는 백엔드는 `Indexer::link_names`(`indexer.rs`)로, 같은 "글이 별칭을 이긴다" 규칙을 SQL로 확인한다
 - `src/lib/reviewFilter.ts` — 회고 필터 판정 전부(순수 함수). 일지 콜아웃과 독서기록을 `ReviewCard` 하나로 정규화한다 — **일지 콜아웃 헤더에는 시각(`15:17`), 독서기록에는 날짜(`2026-07-18`)가 들어 있어** 정규화 없이는 시간대 필터·정렬이 조용히 틀린다
 - `src/lib/exportReview.ts` — 회고를 `NoteDoc`으로. 화면 칩과 문서 머리 줄이 `activeChips()` 하나를 공유한다
 - `src-tauri/src/commands.rs` — 전 커맨드 + 카카오/교보 API 클라이언트 + 파서 + 테스트
@@ -344,6 +344,19 @@ npx tsc --noEmit -p tsconfig.json
     별칭 칸에 자동 태그 제안이 딸려 들어간다.
 25. **`WikiLinkSuggest.refresh`는 keyup마다 돈다.** 후보 목록을 거기서 만들면 링크를 치는 내내
     vault 전체를 훑는다. `useMemo`로 노트 목록이 바뀔 때만 만든다.
+26. **`create_note`가 돌려주는 글의 제목은 넘긴 제목이 아니다.** 파일명 규칙으로 다듬고
+    (`회의: 3월` → `회의 3월`) 제목 머릿글을 앞에 붙인다(`2026-08-11 장보기`). 그래서
+    "없는 링크에서 만들기"는 만들어 놓고도 그 링크로 못 닿을 수 있었다 — 누를 때마다
+    글이 하나씩 더 생겼다. 만든 뒤 `linkReaches`로 확인하고 안 닿으면 타깃을 별칭으로
+    심는다. 제목 문자열만 견주면 안 된다: 같은 이름의 글이 따로 있으면 별칭을 심어도
+    소용없는데 고쳤다고 착각하게 된다.
+27. **퍼지 검증(`fuzzy_score`)은 tantivy에 STORED로 넣은 값만 본다.** 색인만 하고 저장하지
+    않은 필드로 건진 후보는 검증 단계에서 전부 버려진다 — 색인만 부풀고 되는 건 없다.
+    자모·초성 필드에 여러 값을 넣을 때는 **값을 따로** 넣어야 한다(이어 붙이면 n그램이
+    경계를 넘어 없는 말을 만든다).
+28. **별도 창(`?view=`)은 zustand 스토어를 초기화하지 않는다.** 스토어를 직접 보는
+    컴포넌트는 거기서 못 쓴다. 두 창이 함께 쓸 UI는 표현 전용으로 갈라 두고(예:
+    `LinkPicker`) 데이터는 부르는 쪽이 넣는다.
 
 ---
 
