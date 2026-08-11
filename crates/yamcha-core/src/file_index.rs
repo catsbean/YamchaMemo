@@ -132,6 +132,7 @@ fn index_doc(
         stem: file_name(rel),
         date: date.to_string(),
         tags: vec![],
+        aliases: vec![],
         links: vec![],
         body: text.to_string(),
         frontmatter_json: "{}".into(),

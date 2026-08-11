@@ -252,19 +252,58 @@ impl Indexer {
         Ok(out)
     }
 
-    /// 어떤 노트를 가리키는 링크들 (타깃 = 해당 노트의 제목 또는 파일명 stem)
+    /// 이 노트에 닿는 `[[…]]` 타깃 문자열 전부 — 제목·파일명·별칭·폴더까지 적은 경로.
+    ///
+    /// **별칭은 같은 이름의 진짜 글이 없을 때만 센다.** 별칭 '비비풀'을 달아 둔 노트가
+    /// 있어도 '비비풀'이라는 제목의 글이 따로 있으면 `[[비비풀]]`은 그 글로 가지, 이
+    /// 노트로 오지 않는다 — 화면에서 열리는 곳과 백링크가 어긋나면 안 된다.
+    fn link_names(&self, parsed: &crate::vault::ParsedNote) -> Result<Vec<String>, CoreError> {
+        let rel = &parsed.rel_path;
+        let mut names = vec![
+            parsed.title.clone(),
+            parsed.stem.clone(),
+            rel.trim_end_matches(".md").to_string(),
+            rel.clone(),
+        ];
+        let mut taken = self.conn.prepare(
+            "SELECT 1 FROM notes WHERE (title = ?1 OR stem = ?1) AND path != ?2 LIMIT 1",
+        )?;
+        for a in &parsed.aliases {
+            if !taken.exists(params![a, rel])? {
+                names.push(a.clone());
+            }
+        }
+        names.retain(|s| !s.is_empty());
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
+    /// 어떤 노트를 가리키는 링크들 (타깃 = 제목·파일명 stem·별칭·경로)
     pub fn backlinks(&self, vault: &Vault, rel_path: &str) -> Result<Vec<NoteRef>, CoreError> {
         let parsed = vault.parse_full(rel_path)?;
-        let mut stmt = self.conn.prepare(
+        self.backlinks_for(&parsed)
+    }
+
+    fn backlinks_for(
+        &self,
+        parsed: &crate::vault::ParsedNote,
+    ) -> Result<Vec<NoteRef>, CoreError> {
+        let names = self.link_names(parsed)?;
+        let holes = (1..=names.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut stmt = self.conn.prepare(&format!(
             "SELECT DISTINCT n.path, n.type, n.title, n.date
              FROM links l JOIN notes n ON n.path = l.src
-             WHERE (l.target = ?1 OR l.target = ?2) AND l.src != ?3
+             WHERE l.target IN ({holes}) AND l.src != ?{}
              ORDER BY n.date DESC",
-        )?;
-        let rows = stmt.query_map(
-            params![parsed.title, parsed.stem, rel_path],
-            Self::note_ref_row,
-        )?;
+            names.len() + 1
+        ))?;
+        let mut args = names;
+        args.push(parsed.rel_path.clone());
+        let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), Self::note_ref_row)?;
         collect_refs(rows)
     }
 
@@ -279,12 +318,16 @@ impl Indexer {
     ) -> Result<Vec<Backlink>, CoreError> {
         let parsed = vault.parse_full(rel_path)?;
         let title = parsed.title.clone();
-        let stem = parsed.stem.clone();
-        let linked = self.backlinks(vault, rel_path)?;
+        let linked = self.backlinks_for(&parsed)?;
         let linked_paths: Vec<String> = linked.iter().map(|n| n.rel_path.clone()).collect();
 
-        // 링크 문법 그대로 찾는다 — `[[제목]]`, `[[제목|별칭]]`, `[[제목#섹션]]`
-        let link_needles = [format!("[[{title}"), format!("[[{stem}")];
+        // 링크 문법 그대로 찾는다 — `[[제목]]`, `[[제목|표시]]`, `[[제목#섹션]]`.
+        // 별칭·경로로 적은 링크도 이 노트를 가리키므로 함께 찾는다.
+        let link_needles: Vec<String> = self
+            .link_names(&parsed)?
+            .iter()
+            .map(|n| format!("[[{n}"))
+            .collect();
         let needles: Vec<&str> = link_needles.iter().map(|s| s.as_str()).collect();
 
         let mut out: Vec<Backlink> = Vec::new();
@@ -617,6 +660,67 @@ mod tests {
         let paths: Vec<_> = bl.iter().map(|r| r.rel_path.as_str()).collect();
         assert!(paths.contains(&free.as_str()));
         assert!(paths.contains(&daily.as_str()));
+    }
+
+    /// 별칭으로 건 링크도 백링크에 잡힌다 — 폴더까지 적은 링크도 마찬가지.
+    #[test]
+    fn 별칭과_경로로_건_링크도_백링크다() {
+        let (_d, v, mut idx) = setup();
+        let target = v
+            .create_note(
+                "free",
+                "프로헥사디온 칼슘",
+                json!({"aliases": ["비비풀", "BB"]}),
+            )
+            .unwrap();
+        let memo = v.create_note("free", "메모", json!({})).unwrap();
+        v.save_note(&memo, json!({}), "[[비비풀]] 살포 / [[Free/프로헥사디온 칼슘]] 참고")
+            .unwrap();
+
+        for rel in [&target, &memo] {
+            idx.upsert(&v.parse_full(rel).unwrap()).unwrap();
+        }
+
+        let paths: Vec<String> = idx
+            .backlinks(&v, &target)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.rel_path)
+            .collect();
+        assert_eq!(paths, vec![memo.clone()], "별칭·경로 링크를 놓쳤다");
+
+        // 문맥도 함께 — 별칭으로 쓴 줄이 나와야 한다
+        let detailed = idx.backlinks_detailed(&v, &target).unwrap();
+        let b = detailed.iter().find(|b| b.note.rel_path == memo).unwrap();
+        assert!(!b.unlinked);
+        assert!(!b.contexts.is_empty(), "별칭 링크의 문맥을 못 찾았다");
+    }
+
+    /// **같은 이름의 진짜 글이 있으면 별칭은 진다.** 화면에서 열리는 글과
+    /// 백링크가 어긋나면 사용자는 링크를 믿을 수 없게 된다.
+    #[test]
+    fn 같은_이름의_글이_있으면_별칭은_백링크를_못_가져간다() {
+        let (_d, v, mut idx) = setup();
+        let real = v.create_note("free", "비비풀", json!({})).unwrap();
+        let aliased = v
+            .create_note("free", "프로헥사디온 칼슘", json!({"aliases": ["비비풀"]}))
+            .unwrap();
+        let memo = v.create_note("free", "메모", json!({})).unwrap();
+        v.save_note(&memo, json!({}), "[[비비풀]] 살포").unwrap();
+
+        for rel in [&real, &aliased, &memo] {
+            idx.upsert(&v.parse_full(rel).unwrap()).unwrap();
+        }
+
+        assert_eq!(
+            idx.backlinks(&v, &real).unwrap().len(),
+            1,
+            "제목이 같은 진짜 글이 백링크를 못 받았다"
+        );
+        assert!(
+            idx.backlinks(&v, &aliased).unwrap().is_empty(),
+            "별칭이 남의 링크를 가로챘다"
+        );
     }
 
     #[test]

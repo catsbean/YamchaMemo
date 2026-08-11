@@ -76,6 +76,20 @@ fn format_trash_stamp(stamp: &str) -> String {
 /// 사용자 정의 타입 정의 파일 (vault 루트, 미러링 대상에 포함)
 const TYPES_FILE: &str = "_types.json";
 
+/// 필드 목록에 별칭 칸이 없으면 태그 바로 뒤에 끼워 넣는다 (있으면 그대로 둔다).
+/// 자리를 태그 뒤로 잡는 이유는 내장 분류의 칸 순서와 맞추기 위해서다.
+fn ensure_aliases_field(fields: &mut Vec<crate::schema::FieldDef>) {
+    if fields.iter().any(|f| f.name == "aliases") {
+        return;
+    }
+    let at = fields
+        .iter()
+        .position(|f| f.name == "tags")
+        .map(|i| i + 1)
+        .unwrap_or(fields.len());
+    fields.insert(at, crate::schema::aliases_field());
+}
+
 /// 클라우드 동기화·백신이 파일을 **잠깐** 붙들고 있어서 나는 오류인가.
 /// 윈도우: 5 ACCESS_DENIED · 32 SHARING_VIOLATION · 33 LOCK_VIOLATION.
 /// 권한이 아예 없거나 디스크가 찬 것과는 다르다 — 그건 기다려 봐야 소용없다.
@@ -182,6 +196,9 @@ pub struct ParsedNote {
     pub date: String,
     /// frontmatter tags + 본문 인라인 #태그 (중복 제거)
     pub tags: Vec<String>,
+    /// frontmatter `aliases` — 이 노트를 부르는 다른 이름들.
+    /// `[[별칭]]`도 이 노트로 이어지고, 백링크에도 함께 잡힌다.
+    pub aliases: Vec<String>,
     /// 본문 + frontmatter 문자열 값에서 추출한 위키링크 타깃
     pub links: Vec<String>,
     pub body: String,
@@ -231,6 +248,10 @@ impl Vault {
             if let Ok(customs) = serde_json::from_str::<Vec<TypeDef>>(&raw) {
                 for mut c in customs {
                     c.builtin = false;
+                    // 별칭은 나중에 생긴 칸이라 예전 `_types.json`에는 없다.
+                    // 없으면 여기서 끼워 넣는다 — 안 그러면 사용자가 만든 분류만
+                    // 별칭을 못 쓰는, 설명할 수 없는 차이가 생긴다.
+                    ensure_aliases_field(&mut c.fields);
                     if !types.iter().any(|t| t.id == c.id || t.folder == c.folder) {
                         types.push(c);
                     }
@@ -404,13 +425,15 @@ impl Vault {
                 "이미 존재하는 분류이거나 타입 ID입니다: {label}"
             )));
         }
-        // 공통 필드(date/tags)를 앞에 보장
+        // 공통 필드(date/tags/aliases)를 앞에 보장
         let mut all_fields = vec![
             crate::schema::FieldDef::new("date", "날짜", crate::schema::FieldKind::Date, true),
             crate::schema::FieldDef::new("tags", "태그", crate::schema::FieldKind::Tags, true),
+            crate::schema::aliases_field(),
         ];
         for f in fields {
-            if f.name != "date" && f.name != "tags" && f.name != "type" && !f.name.is_empty() {
+            if !matches!(f.name.as_str(), "date" | "tags" | "aliases" | "type") && !f.name.is_empty()
+            {
                 all_fields.push(f);
             }
         }
@@ -1581,6 +1604,8 @@ impl Vault {
             }
         }
 
+        let aliases = crate::parse::extract_aliases(&fm);
+
         Ok(ParsedNote {
             rel_path: rel.to_string(),
             note_type: note.note_type,
@@ -1588,6 +1613,7 @@ impl Vault {
             stem,
             date,
             tags,
+            aliases,
             links,
             body: note.body,
             frontmatter_json: Value::Object(fm).to_string(),

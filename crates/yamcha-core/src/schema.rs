@@ -206,8 +206,19 @@ fn common_fields() -> Vec<FieldDef> {
     ]
 }
 
+/// 별칭 칸의 정의. `[[프로헥사디온 칼슘]]`을 '비비풀'로도 부르는 사람이
+/// `[[비비풀]]`이라 써도 같은 글에 닿게 한다. 태그와 같은 위젯(쉼표 구분)을 쓴다.
+///
+/// **일지에는 붙이지 않는다** — 날짜가 곧 이름이라 다른 이름으로 부를 일이 없다.
+pub fn aliases_field() -> FieldDef {
+    FieldDef::new("aliases", "별칭", FieldKind::Tags, false)
+}
+
 fn builtin_fields(b: Builtin) -> Vec<FieldDef> {
     let mut f = common_fields();
+    if !matches!(b, Builtin::Daily) {
+        f.push(aliases_field());
+    }
     match b {
         Builtin::Book => {
             f.push(FieldDef::new("title", "제목", FieldKind::Text, true));
@@ -300,6 +311,23 @@ mod tests {
         let defs = builtin_defs();
         assert_eq!(defs.len(), 4);
         assert!(defs.iter().all(|d| d.builtin));
+    }
+
+    /// 별칭은 일지 빼고 어디에나 있어야 한다 (일지는 날짜가 곧 이름이다)
+    #[test]
+    fn 별칭_칸은_일지만_빼고_있다() {
+        for d in builtin_defs() {
+            let has = d.fields.iter().any(|f| f.name == "aliases");
+            assert_eq!(has, d.id != "daily", "{}의 별칭 칸이 잘못됐다", d.id);
+        }
+    }
+
+    /// 별칭이 없는 노트에 `aliases: []`를 심지 않는다 — frontmatter가 지저분해진다
+    #[test]
+    fn normalize_does_not_add_empty_aliases() {
+        let mut fm = Map::new();
+        normalize_frontmatter(&mut fm, "free", "2026-08-11");
+        assert!(!fm.contains_key("aliases"));
     }
 
     #[test]

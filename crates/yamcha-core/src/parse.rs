@@ -85,6 +85,33 @@ pub fn extract_wikilinks(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// frontmatter `aliases`에서 별칭 목록을 뽑는다.
+///
+/// 배열(`aliases: [비비풀, BB]`)과 한 줄 문자열(`aliases: 비비풀`)을 모두 받는다 —
+/// 폼으로 쓰면 배열이지만, 다른 편집기에서 손으로 쓴 파일은 어느 쪽이든 될 수 있다.
+/// 빈 값과 중복은 버린다.
+pub fn extract_aliases(fm: &Map<String, Value>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |s: &str| {
+        let s = s.trim();
+        if !s.is_empty() && !out.iter().any(|a| a == s) {
+            out.push(s.to_string());
+        }
+    };
+    match fm.get("aliases") {
+        Some(Value::Array(list)) => {
+            for v in list {
+                if let Some(s) = v.as_str() {
+                    push(s);
+                }
+            }
+        }
+        Some(Value::String(s)) => push(s),
+        _ => {}
+    }
+    out
+}
+
 /// 본문에서 인라인 태그 추출: `#태그` (한글/영문/숫자/슬래시/하이픈/언더스코어)
 pub fn extract_inline_tags(text: &str) -> Vec<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -193,6 +220,20 @@ mod tests {
     fn wikilinks() {
         let links = extract_wikilinks("[[클린 코드]]와 [[함께 자라기|자라기]] 그리고 [[책#챕터1]]");
         assert_eq!(links, vec!["클린 코드", "함께 자라기", "책"]);
+    }
+
+    #[test]
+    fn aliases_from_array_and_string() {
+        let arr = parse_frontmatter("aliases:\n  - 비비풀\n  - ' BB '\n  - ''\n  - 비비풀\n").unwrap();
+        assert_eq!(extract_aliases(&arr), vec!["비비풀", "BB"]);
+
+        // 손으로 쓴 한 줄 표기도 받는다
+        let one = parse_frontmatter("aliases: 비비풀\n").unwrap();
+        assert_eq!(extract_aliases(&one), vec!["비비풀"]);
+
+        // 없거나 엉뚱한 타입이면 빈 목록
+        assert!(extract_aliases(&parse_frontmatter("title: 무언가\n").unwrap()).is_empty());
+        assert!(extract_aliases(&parse_frontmatter("aliases: 12\n").unwrap()).is_empty());
     }
 
     #[test]
