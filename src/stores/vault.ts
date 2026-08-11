@@ -235,6 +235,10 @@ interface VaultStore {
   moveCurrent(newTypeId: string): Promise<void>;
   /** 열지 않은 노트를 다른 분류로 옮긴다 (목록 우클릭 메뉴) */
   moveNoteTo(relPath: string, newTypeId: string): Promise<void>;
+  /** 방금 옮긴 노트 — 되돌릴 수 있게 잠깐 들고 있는다 */
+  moveUndo: { rel: string; toTypeId: string; fromTypeId: string } | null;
+  undoMove(): Promise<void>;
+  dismissMoveUndo(): void;
   addMirror(): Promise<void>;
   removeMirror(path: string): Promise<void>;
   syncMirrors(): Promise<void>;
@@ -1040,11 +1044,13 @@ export const useVault = create<VaultStore>((set, get) => {
     async moveCurrent(newTypeId) {
       const cur = get().current;
       if (!cur) return;
+      const fromTypeId = cur.note_type;
       if (get().dirty) await get().saveCurrent();
       await guard(async () => {
         const newRel = unwrap(await commands.moveNote(cur.rel_path, newTypeId));
         await get().refresh();
         await get().openNote(newRel);
+        set({ moveUndo: { rel: newRel, toTypeId: newTypeId, fromTypeId } });
       });
     },
 
@@ -1054,9 +1060,38 @@ export const useVault = create<VaultStore>((set, get) => {
         await get().moveCurrent(newTypeId);
         return;
       }
+      const fromTypeId = get().notes.find((n) => n.rel_path === relPath)?.note_type;
       await guard(async () => {
-        unwrap(await commands.moveNote(relPath, newTypeId));
+        const newRel = unwrap(await commands.moveNote(relPath, newTypeId));
         await get().refresh();
+        if (fromTypeId) {
+          set({ moveUndo: { rel: newRel, toTypeId: newTypeId, fromTypeId } });
+        }
+      });
+    },
+
+    moveUndo: null,
+    dismissMoveUndo() {
+      set({ moveUndo: null });
+    },
+
+    /** 방금 한 이동을 되돌린다.
+     *
+     *  우클릭 메뉴에서 [새 창으로 열기] 바로 아래가 이동 항목이라 한 칸 어긋나
+     *  눌리기 쉽다. 파일이 말없이 다른 폴더로 가 버리는데 어디로 갔는지도 안 알려
+     *  주면, 그 글은 사실상 사라진 것이 된다.
+     *
+     *  원래 파일명이 그새 다른 글에 쓰이고 있으면 `(2)`가 붙어 돌아온다 —
+     *  자리는 되돌려도 이름까지 되돌린다고 약속하지는 않는다. */
+    async undoMove() {
+      const u = get().moveUndo;
+      if (!u) return;
+      set({ moveUndo: null });
+      await guard(async () => {
+        const wasOpen = get().current?.rel_path === u.rel;
+        const back = unwrap(await commands.moveNote(u.rel, u.fromTypeId));
+        await get().refresh();
+        if (wasOpen) await get().openNote(back);
       });
     },
 

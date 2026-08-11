@@ -4,6 +4,7 @@ import Dashboard from "./components/Dashboard";
 import EditorPane from "./components/EditorPane";
 import LinkPickerDialog from "./components/LinkPickerDialog";
 import MissingLinkToast from "./components/MissingLinkToast";
+import MoveUndoToast from "./components/MoveUndoToast";
 import SearchModal from "./components/SearchModal";
 import SettingsModal from "./components/SettingsModal";
 import ShortcutHint from "./components/ShortcutHint";
@@ -180,6 +181,7 @@ export default function App() {
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       <LinkPickerDialog />
       <MissingLinkToast />
+      <MoveUndoToast />
       {startupNotice && (
         <StartupNoticeBanner
           message={startupNotice}
