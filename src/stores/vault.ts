@@ -6,7 +6,12 @@ import { join } from "@tauri-apps/api/path";
 import { notifyOtherWindows } from "../lib/windowSync";
 import { canMoveType } from "../lib/note";
 import { normalizeFilter, type ReviewFilter } from "../lib/reviewFilter";
-import { linkTargetOf, resolveLink, type LinkHit } from "../lib/resolveLink";
+import {
+  linkReaches,
+  linkTargetOf,
+  resolveLink,
+  type LinkHit,
+} from "../lib/resolveLink";
 import {
   DEFAULT_CAPTURE_SHORTCUT,
   disableCapture,
@@ -986,11 +991,23 @@ export const useVault = create<VaultStore>((set, get) => {
       set({ missingLink: null });
     },
 
+    /** 없는 링크에서 그 이름의 글을 만든다.
+     *
+     *  **만들었다고 이어진 것은 아니다.** 제목은 파일명 규칙으로 다듬어지고
+     *  (`회의: 3월` → `회의 3월`) 제목 머릿글이 앞에 붙는다. 그러면 방금 만든
+     *  글인데도 원래 링크로는 못 열리고, 누를 때마다 새 글이 하나씩 더 생긴다.
+     *  닿지 않으면 사용자가 쓴 이름을 별칭으로 심어 잇는다. */
     async createMissingLink() {
       const m = get().missingLink;
       if (!m) return;
       set({ missingLink: null });
       await get().createNote(m.typeId, m.target, {});
+      const rel = get().current?.rel_path;
+      if (!rel || linkReaches(get().notes, m.target, rel)) return;
+      await get().updateFrontmatter(rel, { aliases: [m.target] });
+      // 편집기가 들고 있는 frontmatter에는 방금 심은 별칭이 없다.
+      // 다시 읽지 않으면 다음 자동저장이 그대로 덮어 지운다.
+      await get().reloadCurrent();
     },
 
     createOnMissingLink: true,

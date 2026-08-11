@@ -4,6 +4,7 @@ import {
   aliasesOf,
   linkNamesOf,
   linkOptions,
+  linkReaches,
   linkTargetOf,
   resolveLink,
 } from "./resolveLink";
@@ -107,6 +108,38 @@ describe("위키링크 해석", () => {
   it("경로로 못 찾으면 이름으로 다시 본다 (제목에 슬래시가 든 글)", () => {
     const s = note("Free/앞뒤.md", "앞/뒤");
     expect(flat(resolveLink([s], "앞/뒤"))).toEqual(["Free/앞뒤.md(title)"]);
+  });
+});
+
+describe("만든 글이 그 링크에 닿는가", () => {
+  it("제목이 그대로면 닿는다", () => {
+    const n = note("Free/장보기.md", "장보기");
+    expect(linkReaches([n], "장보기", "Free/장보기.md")).toBe(true);
+  });
+
+  /** 파일명 금지문자가 다듬어진 경우 — `회의: 3월`이 `회의 3월`이 된다 */
+  it("제목이 다듬어졌으면 못 닿는다", () => {
+    const n = note("Free/회의 3월.md", "회의 3월");
+    expect(linkReaches([n], "회의: 3월", "Free/회의 3월.md")).toBe(false);
+  });
+
+  /** 제목 머릿글을 켜 둔 경우 — 모든 링크가 이렇게 된다 */
+  it("제목 머릿글이 붙었으면 못 닿는다", () => {
+    const n = note("Free/2026-08-11 장보기.md", "2026-08-11 장보기");
+    expect(linkReaches([n], "장보기", "Free/2026-08-11 장보기.md")).toBe(false);
+  });
+
+  it("별칭을 심으면 다시 닿는다", () => {
+    const n = note("Free/회의 3월.md", "회의 3월", { aliases: ["회의: 3월"] });
+    expect(linkReaches([n], "회의: 3월", "Free/회의 3월.md")).toBe(true);
+  });
+
+  /** 같은 이름의 글이 따로 있으면 별칭을 심어도 그 글로 간다 —
+   *  이때는 별칭이 소용없으므로 '닿는다'고 답하면 안 된다 */
+  it("같은 이름의 글이 있으면 별칭을 심어도 못 닿는다", () => {
+    const 새글 = note("Free/회의 3월.md", "회의 3월", { aliases: ["딴이름"] });
+    const 먼저 = note("회의록/딴이름.md", "딴이름");
+    expect(linkReaches([새글, 먼저], "딴이름", "Free/회의 3월.md")).toBe(false);
   });
 });
 
