@@ -15,13 +15,19 @@ import EditorToolbar from "./EditorToolbar";
 import { editorMenuItems } from "../editor/editorMenu";
 import { useContextMenu, useSuppressNativeContextMenu } from "../lib/contextMenu";
 import { splitBookBody, composeBookBody } from "../lib/book";
-import { linkOptions } from "../lib/resolveLink";
+import {
+  linkOptions,
+  resolveLink,
+  type LinkHit,
+} from "../lib/resolveLink";
+import { openNoteWindow } from "../lib/trashWindow";
 import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
 import { notifyOtherWindows } from "../lib/windowSync";
 import { fmObject } from "../stores/vault";
 import ContextMenu from "./ContextMenu";
 import DailyEntryBar from "./DailyEntryBar";
 import FrontmatterForm from "./FrontmatterForm";
+import { LinkPicker } from "./LinkPickerDialog";
 
 /** 노트 한 편만 띄우는 별도 창 — 두 글을 나란히 놓고 쓰거나 참고하며 쓸 때 쓴다.
  *  메인 창과 다른 webview지만 백엔드 vault는 프로세스 전역이라 그대로 읽고 쓴다. */
@@ -36,6 +42,12 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   // 서식 툴바가 명령을 실행하려면 CodeMirror 뷰가 필요하다
   const [editorView, setEditorView] = useState<EditorView | null>(null);
+  // 이름이 겹쳐 고르게 해야 하는 링크 / 가리키는 글이 없는 링크
+  const [linkChoice, setLinkChoice] = useState<{
+    target: string;
+    hits: LinkHit[];
+  } | null>(null);
+  const [missingLink, setMissingLink] = useState<string | null>(null);
   const ctx = useContextMenu();
   // 진행 중인 저장 (없으면 null). 겹친 요청은 이 약속을 함께 기다린다.
   const savingRef = useRef<Promise<void> | null>(null);
@@ -306,6 +318,28 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
     markEdited();
   }
 
+  /** `[[링크]]` 따라가기 — 해석 규칙은 메인 창과 같은 함수를 쓴다.
+   *
+   *  이 창은 노트 한 편을 위한 창이라 **그 자리에서 갈아끼우지 않고** 대상의 창을
+   *  연다(같은 글의 창이 이미 있으면 앞으로 나온다). 곁에 두고 참고하려고 띄운
+   *  창인데 내용이 바뀌어 버리면 원래 보던 글을 잃는다.
+   *
+   *  없는 글에서 곧바로 만들기는 **일부러 넣지 않았다** — 만드는 쪽은 제목이
+   *  다듬어졌는지 확인해 별칭을 심는 절차가 딸려 있어서(스토어의 createMissingLink),
+   *  여기 옮겨 적으면 두 벌이 갈라진다. 메인 창에서 만들라고 안내한다. */
+  function navigate(target: string) {
+    const hits = resolveLink(notes, target);
+    if (hits.length === 1) {
+      openNoteWindow(hits[0].note.rel_path);
+      return;
+    }
+    if (hits.length > 1) {
+      setLinkChoice({ target, hits });
+      return;
+    }
+    setMissingLink(target);
+  }
+
   /** image 필드 [찾아보기] — 메인 창과 같은 규칙(책 표지는 여기서 다루지 않는다: 책은 기록만 편집) */
   async function pickImage(fieldName: string) {
     const src = await openDialog({
@@ -402,7 +436,10 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
             setBody(v);
             markEdited();
           }}
-          onContextMenu={(e, view) => ctx.open(e, editorMenuItems(view))}
+          onNavigate={navigate}
+          onContextMenu={(e, view) =>
+            ctx.open(e, editorMenuItems(view, [], { event: e, onNavigate: navigate }))
+          }
           getLinkOptions={() => linkOptions(notes)}
         />
       </div>
@@ -412,6 +449,50 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
       </div>
 
       {ctx.menu && <ContextMenu state={ctx.menu} onClose={ctx.close} />}
+
+      {linkChoice && (
+        <LinkPicker
+          target={linkChoice.target}
+          hits={linkChoice.hits}
+          schemas={schemas}
+          onPick={(rel) => {
+            setLinkChoice(null);
+            openNoteWindow(rel);
+          }}
+          onClose={() => setLinkChoice(null)}
+        />
+      )}
+      {missingLink && (
+        <MissingLinkNotice
+          target={missingLink}
+          onDone={() => setMissingLink(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** 이 창에서 없는 글로 이어진 링크를 눌렀을 때 — 잠깐 알리고 사라진다.
+ *  메인 창의 알림과 달리 [만들기]가 없다(위 `navigate` 주석 참고). */
+function MissingLinkNotice({
+  target,
+  onDone,
+}: {
+  target: string;
+  onDone: () => void;
+}) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 4000);
+    return () => clearTimeout(t);
+  }, [target, onDone]);
+
+  return (
+    <div className="fixed bottom-3 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-neutral-800 px-4 py-2 text-center text-xs text-white shadow-lg">
+      <span className="font-medium">{target}</span>
+      <span className="text-neutral-300"> — 아직 없는 글입니다</span>
+      <span className="block text-2xs text-neutral-400">
+        메인 창에서 링크를 누르면 그 자리에서 만들 수 있습니다
+      </span>
     </div>
   );
 }

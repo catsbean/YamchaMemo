@@ -1,12 +1,9 @@
+import type { TypeDef } from "../bindings";
+import type { LinkHit } from "../lib/resolveLink";
 import { useVault } from "../stores/vault";
 import Modal from "./Modal";
 
-/** 이름이 겹치는 `[[링크]]`에서 어느 글인지 고르는 창.
- *
- *  자유노트와 회의록에 '중복노트'가 하나씩 있으면 `[[중복노트]]`만으로는 어느
- *  쪽인지 알 수 없다. 예전에는 목록에서 먼저 걸린 하나를 말없이 열었는데, 그건
- *  둘 중 하나를 몰래 고르는 것이라 사용자가 틀린 글을 보고 있어도 알 수가 없다.
- *  분류와 폴더 경로를 나란히 보여 주고 사람이 고르게 한다. */
+/** 메인 창용 — 스토어에 걸린 겹치는 링크가 있으면 고르는 창을 띄운다. */
 export default function LinkPickerDialog() {
   const linkChoice = useVault((s) => s.linkChoice);
   const clearLinkChoice = useVault((s) => s.clearLinkChoice);
@@ -14,13 +11,45 @@ export default function LinkPickerDialog() {
   const schemas = useVault((s) => s.schemas);
 
   if (!linkChoice) return null;
-  const { target, hits } = linkChoice;
-
   return (
-    <Modal
+    <LinkPicker
+      target={linkChoice.target}
+      hits={linkChoice.hits}
+      schemas={schemas}
+      onPick={(rel) => {
+        clearLinkChoice();
+        openNote(rel);
+      }}
       onClose={clearLinkChoice}
-      panelClassName="w-96 rounded-lg p-5 shadow-xl"
-    >
+    />
+  );
+}
+
+/** 이름이 겹치는 `[[링크]]`에서 어느 글인지 고르는 창.
+ *
+ *  자유노트와 회의록에 '중복노트'가 하나씩 있으면 `[[중복노트]]`만으로는 어느
+ *  쪽인지 알 수 없다. 예전에는 목록에서 먼저 걸린 하나를 말없이 열었는데, 그건
+ *  둘 중 하나를 몰래 고르는 것이라 사용자가 틀린 글을 보고 있어도 알 수가 없다.
+ *  분류와 폴더 경로를 나란히 보여 주고 사람이 고르게 한다.
+ *
+ *  **스토어를 보지 않는다** — 별도 노트 창은 스토어를 초기화하지 않는데, 거기서도
+ *  같은 창이 떠야 한다. 고른 뒤 무엇을 할지(같은 창에서 열기 / 새 창으로 열기)는
+ *  부르는 쪽이 정한다. */
+export function LinkPicker({
+  target,
+  hits,
+  schemas,
+  onPick,
+  onClose,
+}: {
+  target: string;
+  hits: LinkHit[];
+  schemas: TypeDef[];
+  onPick: (relPath: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal onClose={onClose} panelClassName="w-96 rounded-lg p-5 shadow-xl">
       <h2 className="text-base font-bold">
         <span className="text-neutral-500">[[</span>
         {target}
@@ -35,10 +64,7 @@ export default function LinkPickerDialog() {
           <li key={note.rel_path}>
             <button
               className="flex w-full flex-col items-start rounded-md border border-neutral-200 px-3 py-2 text-left hover:border-neutral-400 hover:bg-neutral-50"
-              onClick={() => {
-                clearLinkChoice();
-                openNote(note.rel_path);
-              }}
+              onClick={() => onPick(note.rel_path)}
             >
               <span className="flex w-full items-center gap-2">
                 <span className="truncate text-sm">
@@ -66,7 +92,7 @@ export default function LinkPickerDialog() {
       <div className="mt-3 flex justify-end">
         <button
           className="rounded px-3 py-1.5 text-sm text-neutral-500 hover:bg-neutral-100"
-          onClick={clearLinkChoice}
+          onClick={onClose}
         >
           취소
         </button>
