@@ -39,6 +39,7 @@
 - `src/stores/vault.ts` — 모든 액션(`init/openNote/saveCurrent/createNote/updateFrontmatter/…`), `guard()` 에러 수집
 - `src/components/` — `Bookshelf`(책장 그리드/목록), `BookView`(독서기록 화면), `BookInfoModal`, `BookCreateDialog`, `BookSearchDialog`, `EnrichDialog`(일괄 자동채우기), `SettingsModal`, `NewNoteDialog`, `EditorPane`, `SearchModal`, `BookPickerDialog`, `CustomTypeDialog`, `ReviewDashboard`+`ReviewFilterPanel`(회고와 고급 필터)
 - `src/lib/date.ts` — `ymd`/`dateOf`/`weekdayOf`/`addDays`/`daysBetween`. 날짜는 앱 전체에서 `YYYY-MM-DD` **문자열**이라 기간 비교가 곧 사전순 비교다
+- `src/lib/resolveLink.ts` — `[[…]]` 하나가 어느 노트를 가리키는지 정하는 **유일한 자리**. 겹 순서는 경로(`[[Free/중복노트]]`) → 제목 → 파일명 → 별칭(frontmatter `aliases`)이고, **앞 겹에 하나라도 걸리면 뒤 겹은 보지 않는다**(글이 별칭을 이긴다). 한 겹에서 여럿이 걸리면 전부 돌려주고 `LinkPickerDialog`가 고르게 한다. 자동완성 후보(`linkOptions`)도 여기서 나오며, 이름이 겹치는 후보는 폴더까지 넣어 준다. **대소문자를 가린다** — 백링크를 세는 SQLite `=`와 어긋나면 열리기는 하는데 백링크에는 안 잡히는 링크가 생긴다. 짝이 되는 백엔드는 `Indexer::link_names`(`indexer.rs`)로, 같은 "글이 별칭을 이긴다" 규칙을 SQL로 확인한다
 - `src/lib/reviewFilter.ts` — 회고 필터 판정 전부(순수 함수). 일지 콜아웃과 독서기록을 `ReviewCard` 하나로 정규화한다 — **일지 콜아웃 헤더에는 시각(`15:17`), 독서기록에는 날짜(`2026-07-18`)가 들어 있어** 정규화 없이는 시간대 필터·정렬이 조용히 틀린다
 - `src/lib/exportReview.ts` — 회고를 `NoteDoc`으로. 화면 칩과 문서 머리 줄이 `activeChips()` 하나를 공유한다
 - `src-tauri/src/commands.rs` — 전 커맨드 + 카카오/교보 API 클라이언트 + 파서 + 테스트
@@ -328,6 +329,21 @@ npx tsc --noEmit -p tsconfig.json
     남의 B 저장 알림까지 삼켰다**. 지금은 내용 지문으로 가린다(`Vault::is_self_write`).
 21. **클라우드 동기화는 내용이 같아도 mtime을 갈아치운다.** "바뀌었나"의 잣대로 mtime을 쓰면
     헛된 충돌 경고가 뜬다. 저장 충돌 검사(`save_note_checked`)도 지문 기준이다.
+
+**별칭·중복 이름 링크에서 밟은 것 (0.5.9)**
+
+22. **링크 해석이 두 곳에 있다 — 프론트(`resolveLink.ts`)와 백엔드(`Indexer::link_names`).**
+    둘이 어긋나면 "열리는 글과 백링크가 다른" 링크가 생기고, 그건 사용자가 알아챌 방법이 없다.
+    한쪽 규칙을 고치면 반드시 다른 쪽도 고친다. 특히 **별칭은 같은 이름의 진짜 글이 없을 때만
+    센다** — 이 조건을 백엔드에서 빼면 별칭이 남의 백링크를 가로챈다.
+23. **`aliases`는 나중에 생긴 칸이라 예전 `_types.json`에는 없다.** `Vault::open`이 커스텀 타입에
+    끼워 넣는다(`ensure_aliases_field`). 안 하면 사용자가 만든 분류만 별칭을 못 쓴다.
+24. **`FieldKind`를 새로 만들지 않고 `Tags`를 다시 썼다.** 새 변종을 넣으면 `bindings.ts`를
+    다시 내보내야 하는데(§2.3), 그럴 값어치가 없는 차이였다. 대신 태그 제안을 붙이는 조건을
+    **종류(`kind === "tags"`)가 아니라 이름(`name === "tags"`)으로** 바꿔야 한다 — 안 그러면
+    별칭 칸에 자동 태그 제안이 딸려 들어간다.
+25. **`WikiLinkSuggest.refresh`는 keyup마다 돈다.** 후보 목록을 거기서 만들면 링크를 치는 내내
+    vault 전체를 훑는다. `useMemo`로 노트 목록이 바뀔 때만 만든다.
 
 ---
 
