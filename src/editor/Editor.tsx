@@ -20,6 +20,7 @@ import {
   searchKeymap,
 } from "@codemirror/search";
 import { commands } from "../bindings";
+import type { LinkOption } from "../lib/resolveLink";
 import { formatKeymap } from "./format";
 import { livePreview } from "./livePreview";
 import { urlPaste } from "./urlPaste";
@@ -52,7 +53,8 @@ interface Props {
   value: string;
   onChange: (value: string) => void;
   onNavigate?: (target: string) => void;
-  getTitles?: () => string[];
+  /** `[[` 자동완성 후보 — 만드는 규칙은 `lib/resolveLink.ts`의 `linkOptions` */
+  getLinkOptions?: () => LinkOption[];
   /** 목차 등에서 특정 줄로 이동시키기 위한 훅 (1-based) */
   onReady?: (goToLine: (line: number) => void) => void;
   /** 우클릭 — 서식 메뉴를 띄우기 위해 뷰와 위치를 넘긴다 */
@@ -102,7 +104,7 @@ export default function Editor({
   value,
   onChange,
   onNavigate,
-  getTitles,
+  getLinkOptions,
   onReady,
   onContextMenu,
   onView,
@@ -118,8 +120,8 @@ export default function Editor({
   onChangeRef.current = onChange;
   const onNavigateRef = useRef(onNavigate);
   onNavigateRef.current = onNavigate;
-  const getTitlesRef = useRef(getTitles);
-  getTitlesRef.current = getTitles;
+  const getLinkOptionsRef = useRef(getLinkOptions);
+  getLinkOptionsRef.current = getLinkOptions;
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
   const onViewRef = useRef(onView);
@@ -162,7 +164,7 @@ export default function Editor({
           },
         }),
         wikiLinkClick((target) => onNavigateRef.current?.(target)),
-        wikiLinkCompletion(() => getTitlesRef.current?.() ?? []),
+        wikiLinkCompletion(() => getLinkOptionsRef.current?.() ?? []),
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {

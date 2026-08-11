@@ -9,6 +9,7 @@ import { syntaxTree } from "@codemirror/language";
 import { EditorView } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import type { MarkdownConfig } from "@lezer/markdown";
+import type { LinkOption } from "../lib/resolveLink";
 
 const OPEN = 91; // [
 const CLOSE = 93; // ]
@@ -72,19 +73,22 @@ export function wikiLinkClick(onNavigate: (target: string) => void) {
   });
 }
 
-/** `[[` 입력 시 노트 제목 자동완성 */
-export function wikiLinkCompletion(getTitles: () => string[]) {
+/** `[[` 입력 시 노트 이름 자동완성 (파일명·제목·별칭).
+ *
+ *  후보를 만드는 규칙은 `lib/resolveLink.ts`의 `linkOptions`가 갖고 있다 —
+ *  이름이 겹치면 폴더까지 넣어 주므로, 넣는 글자(`insert`)가 보이는 이름과 다를 수 있다. */
+export function wikiLinkCompletion(getOptions: () => LinkOption[]) {
   function source(context: CompletionContext): CompletionResult | null {
     const match = context.matchBefore(/\[\[([^\]|#\n]*)$/);
     if (!match) return null;
     const from = match.from + 2;
-    const titles = getTitles();
     return {
       from,
-      options: titles.map((t) => ({
-        label: t,
+      options: getOptions().map((o) => ({
+        label: o.label,
+        detail: o.detail || undefined,
         type: "text",
-        apply: `${t}]]`,
+        apply: `${o.insert}]]`,
       })),
       validFor: /^[^\]|#\n]*$/,
     };

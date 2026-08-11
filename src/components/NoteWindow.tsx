@@ -15,6 +15,7 @@ import EditorToolbar from "./EditorToolbar";
 import { editorMenuItems } from "../editor/editorMenu";
 import { useContextMenu, useSuppressNativeContextMenu } from "../lib/contextMenu";
 import { splitBookBody, composeBookBody } from "../lib/book";
+import { linkOptions } from "../lib/resolveLink";
 import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
 import { notifyOtherWindows } from "../lib/windowSync";
 import { fmObject } from "../stores/vault";
@@ -401,14 +402,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
             markEdited();
           }}
           onContextMenu={(e, view) => ctx.open(e, editorMenuItems(view))}
-          getTitles={() =>
-            notes
-              .map(
-                (n) =>
-                  n.rel_path.split("/").pop()?.replace(/\.md$/, "") ?? n.title,
-              )
-              .filter(Boolean)
-          }
+          getLinkOptions={() => linkOptions(notes)}
         />
       </div>
 

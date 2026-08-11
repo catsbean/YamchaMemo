@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { matches } from "./WikiLinkSuggest";
+import type { LinkOption } from "../lib/resolveLink";
+import { matches as rank } from "./WikiLinkSuggest";
 
 const TITLES = [
   "역사적 예수",
@@ -8,6 +9,14 @@ const TITLES = [
   "Clean Code",
   "클린 아키텍처",
 ];
+
+/** 이 테스트는 순위 규칙만 본다 — 후보를 이름만 있는 꼴로 눌러서 다룬다 */
+function opts(names: string[]): LinkOption[] {
+  return names.map((label) => ({ label, insert: label, detail: "" }));
+}
+function matches(names: string[], query: string): string[] {
+  return rank(opts(names), query).map((o) => o.label);
+}
 
 describe("위키링크 추천 고르기", () => {
   // 처음 보고된 자리 — `[[역사적`을 쳤는데 `역사적 예수`가 안 떴다

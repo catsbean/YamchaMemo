@@ -8,6 +8,7 @@ import { editorMenuItems, type UrlHit } from "../editor/editorMenu";
 import { useContextMenu } from "../lib/contextMenu";
 import { isImeEnter } from "../lib/ime";
 import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
+import { linkOptions } from "../lib/resolveLink";
 import { openNoteWindow } from "../lib/trashWindow";
 import ContextMenu from "./ContextMenu";
 import BacklinksPanel from "./BacklinksPanel";
@@ -430,14 +431,7 @@ export default function EditorPane() {
                 }),
               )
             }
-            getTitles={() =>
-              notes
-                .map(
-                  (n) =>
-                    n.rel_path.split("/").pop()?.replace(/\.md$/, "") ?? n.title,
-                )
-                .filter(Boolean)
-            }
+            getLinkOptions={() => linkOptions(notes)}
           />
         </div>
         </>

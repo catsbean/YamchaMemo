@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { commands, type NoteContent, type NoteSummary, type TagSuggestion } from "../bindings";
+import { commands, type NoteContent, type TagSuggestion } from "../bindings";
 import TagSuggestionRow from "./TagSuggestionRow";
 import { fmObject, useVault } from "../stores/vault";
 import { splitBookBody } from "../lib/book";
+import { linkOptions } from "../lib/resolveLink";
 import {
   BOOK_STATUS_LABELS as STATUS_LABELS,
   coverSrc,
@@ -293,11 +294,7 @@ export default function BookView({ note }: { note: NoteContent }) {
           value={records}
           onChange={onRecordsChange}
           onNavigate={openByTitle}
-          getTitles={() =>
-            notes
-              .map((n: NoteSummary) => n.rel_path.split("/").pop()?.replace(/\.md$/, "") ?? n.title)
-              .filter(Boolean)
-          }
+          getLinkOptions={() => linkOptions(notes)}
           onContextMenu={(e, view) =>
             ctx.open(
               e,

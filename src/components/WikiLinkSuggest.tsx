@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isImeEnter } from "../lib/ime";
+import { linkOptions, type LinkOption } from "../lib/resolveLink";
 import { useVault } from "../stores/vault";
 
 /** 추천을 띄울 최대 개수 */
@@ -26,17 +27,17 @@ function insert(el: HTMLTextAreaElement, title: string) {
   el.focus();
 }
 
-/** 질의에 맞는 제목들. 앞부터 맞는 것을 위로 —
+/** 질의에 맞는 후보들. 앞부터 맞는 것을 위로 —
  *  `역사적`이면 `역사적 예수`가 `한국의 역사적 인물`보다 먼저 와야 한다. */
-export function matches(titles: string[], raw: string): string[] {
+export function matches(options: LinkOption[], raw: string): LinkOption[] {
   const query = raw.trim().toLowerCase();
   const hit = query
-    ? titles.filter((t) => t.toLowerCase().includes(query))
-    : [...titles];
+    ? options.filter((o) => o.label.toLowerCase().includes(query))
+    : [...options];
   hit.sort((a, b) => {
-    const ai = a.toLowerCase().startsWith(query) ? 0 : 1;
-    const bi = b.toLowerCase().startsWith(query) ? 0 : 1;
-    return ai - bi || a.localeCompare(b, "ko");
+    const ai = a.label.toLowerCase().startsWith(query) ? 0 : 1;
+    const bi = b.label.toLowerCase().startsWith(query) ? 0 : 1;
+    return ai - bi || a.label.localeCompare(b.label, "ko");
   });
   return hit.slice(0, MAX);
 }
@@ -65,12 +66,15 @@ export default function WikiLinkSuggest({
   inputRef: { current: HTMLTextAreaElement | null };
 }) {
   const notes = useVault((s) => s.notes);
-  const [items, setItems] = useState<string[]>([]);
+  // 후보 목록은 노트가 바뀔 때만 다시 만든다. `refresh`는 keyup마다 도는데,
+  // 거기서 매번 전체 노트를 훑으면 링크를 치는 내내 그 값을 문다.
+  const options = useMemo(() => linkOptions(notes), [notes]);
+  const [items, setItems] = useState<LinkOption[]>([]);
   const [active, setActive] = useState(0);
 
   // 네이티브 리스너가 최신 값을 보게 하는 거울 (리스너를 매번 다시 달지 않으려고)
-  const latest = useRef({ items, active, notes });
-  latest.current = { items, active, notes };
+  const latest = useRef({ items, active, options });
+  latest.current = { items, active, options };
 
   useEffect(() => {
     const el = inputRef.current;
@@ -95,11 +99,8 @@ export default function WikiLinkSuggest({
       const at = openLinkAt(target);
       if (!at) return close();
       if (dismissed) return;
-      // 파일명이 곧 링크 대상이다 (에디터의 자동완성과 같은 기준)
-      const titles = latest.current.notes
-        .map((n) => n.rel_path.split("/").pop()?.replace(/\.md$/, "") ?? n.title)
-        .filter(Boolean);
-      setItems(matches(titles, at.query));
+      // 후보를 만드는 규칙은 에디터 자동완성과 같은 함수를 쓴다 (파일명·제목·별칭)
+      setItems(matches(latest.current.options, at.query));
       setActive(0);
     };
 
@@ -124,7 +125,7 @@ export default function WikiLinkSuggest({
           close();
           return stop();
         case "Tab":
-          insert(target, list[latest.current.active]);
+          insert(target, list[latest.current.active].insert);
           close();
           return stop();
         case "Enter":
@@ -132,7 +133,7 @@ export default function WikiLinkSuggest({
           if (e.ctrlKey || e.metaKey) return;
           // 조합 중 Enter는 한글을 확정하려는 것이다. 가로채면 글자가 잘린다.
           if (isImeEnter({ nativeEvent: e, key: e.key })) return;
-          insert(target, list[latest.current.active]);
+          insert(target, list[latest.current.active].insert);
           close();
           return stop();
       }
@@ -163,10 +164,10 @@ export default function WikiLinkSuggest({
 
   return (
     <ul className="absolute left-0 top-full z-30 mt-1 max-h-60 w-80 overflow-y-auto rounded border border-neutral-300 bg-white py-1 shadow-lg dark:border-neutral-600 dark:bg-neutral-800">
-      {items.map((title, i) => (
-        <li key={title}>
+      {items.map((o, i) => (
+        <li key={`${o.label} ${o.insert}`}>
           <button
-            className={`block w-full truncate px-3 py-1 text-left text-sm ${
+            className={`flex w-full items-center gap-2 px-3 py-1 text-left text-sm ${
               i === active
                 ? "bg-sky-100 dark:bg-sky-900"
                 : "hover:bg-neutral-100 dark:hover:bg-neutral-700"
@@ -175,11 +176,16 @@ export default function WikiLinkSuggest({
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               const el = inputRef.current;
-              if (el) insert(el, title);
+              if (el) insert(el, o.insert);
               setItems([]);
             }}
           >
-            {title}
+            <span className="truncate">{o.label}</span>
+            {o.detail && (
+              <span className="ml-auto shrink-0 text-2xs text-neutral-400">
+                {o.detail}
+              </span>
+            )}
           </button>
         </li>
       ))}
