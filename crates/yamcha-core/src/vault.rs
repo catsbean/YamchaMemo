@@ -553,6 +553,8 @@ impl Vault {
         // save_note가 새 경로 기준으로 type을 다시 정규화한다
         let moved = self.read_note(&dest_rel)?;
         self.save_note(&dest_rel, moved.frontmatter, &moved.body)?;
+        // 폴더까지 적어 가리킨 링크는 따라와야 한다 (`[[Free/메모]]` → `[[Writing/메모]]`)
+        self.replace_path_links(rel, &dest_rel)?;
 
         self.mark_index_stale(&cur_type);
         self.mark_index_stale(new_type_id);
@@ -560,6 +562,23 @@ impl Vault {
     }
 
     // ---------- 제목 변경 ----------
+
+    /// 파일이 자리를 옮겼을 때 **폴더까지 적어 가리킨 링크**를 새 경로로 고친다
+    /// (`[[Free/메모]]` → `[[Writing/메모]]`).
+    ///
+    /// 이름만 적은 `[[메모]]`는 **일부러 건드리지 않는다.** 옮기고 나면 그 폴더에
+    /// 같은 이름의 글이 둘이 될 수 있는데, 그 링크가 원래 있던 글을 가리켰는지
+    /// 방금 옮겨 온 글을 가리켰는지 글자만 봐서는 알 수 없다. 잘못 고치느니 둔다.
+    /// 경로로 적은 링크는 그런 모호함이 없어서 — 정확히 이 파일 하나였으므로 —
+    /// 고치는 것이 언제나 옳다.
+    ///
+    /// `.md`를 붙여 적은 형태도 함께 받는다. 고친 결과는 확장자 없는 쪽으로 모은다
+    /// (해석기가 둘 다 받으므로 표기를 하나로 모아도 손해가 없다).
+    fn replace_path_links(&self, old_rel: &str, new_rel: &str) -> Result<(), CoreError> {
+        let key = |r: &str| r.trim_end_matches(".md").to_string();
+        let olds = vec![key(old_rel), old_rel.to_string()];
+        self.replace_links(&olds, &key(new_rel))
+    }
 
     /// 모든 노트에서 `[[old]]` 링크를 `[[new]]`로 치환 (본문·frontmatter 원문 기준)
     fn replace_links(&self, olds: &[String], new: &str) -> Result<(), CoreError> {
@@ -639,6 +658,8 @@ impl Vault {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or(new_stem);
         self.replace_links(&[old_stem, old_title.clone()], &final_stem)?;
+        // 제목을 바꾸면 파일명이 바뀌므로 경로도 바뀐다 — 폴더까지 적은 링크도 따라와야 한다
+        self.replace_path_links(rel, &new_rel)?;
         Ok(new_rel)
     }
 
@@ -2974,6 +2995,50 @@ mod tests {
         assert!(v.move_note(&new_rel, "book").is_err());
         let daily = v.open_daily("2026-07-18").unwrap();
         assert!(v.move_note(&daily, "archive").is_err());
+    }
+
+    /// **폴더까지 적어 가리킨 링크는 옮겨도 따라와야 한다.**
+    ///
+    /// 자동완성이 이름 겹칠 때 이 형태를 넣어 주고 고르는 창도 이 형태를 권한다.
+    /// 조언을 따른 사람만 이동에서 링크가 끊기면, 그 조언이 함정이 된다.
+    #[test]
+    fn 옮기면_경로로_적은_링크가_따라온다() {
+        let (_d, mut v) = vault();
+        v.add_custom_type("회의록", "meeting", vec![], "").unwrap();
+        let target = v.create_note("free", "메모", serde_json::json!({})).unwrap();
+        assert_eq!(target, "Free/메모.md");
+        let linker = v.create_note("writing", "가리키는 글", serde_json::json!({})).unwrap();
+        v.save_note(
+            &linker,
+            serde_json::json!({}),
+            "[[Free/메모]] · [[Free/메모.md]] · [[Free/메모|딴이름]] · [[Free/메모#절]] · [[메모]]",
+        )
+        .unwrap();
+
+        let moved = v.move_note(&target, "meeting").unwrap();
+        assert_eq!(moved, "회의록/메모.md");
+
+        let body = v.read_note(&linker).unwrap().body;
+        assert!(body.contains("[[회의록/메모]] ·"), "경로 링크가 안 따라왔다: {body}");
+        assert!(body.contains("[[회의록/메모|딴이름]]"), "표시명 링크: {body}");
+        assert!(body.contains("[[회의록/메모#절]]"), "섹션 링크: {body}");
+        // `.md`를 붙여 쓴 것도 따라오되 표기는 확장자 없는 쪽으로 모은다
+        assert!(!body.contains("Free/메모"), "옛 경로가 남았다: {body}");
+        // **이름만 적은 링크는 건드리지 않는다** — 어느 글을 뜻했는지 알 수 없다
+        assert!(body.contains("[[메모]]"), "이름 링크를 함부로 고쳤다: {body}");
+    }
+
+    /// 제목을 바꾸면 파일명이 바뀌므로 경로도 바뀐다
+    #[test]
+    fn 제목을_바꿔도_경로_링크가_따라온다() {
+        let (_d, v) = vault();
+        let target = v.create_note("free", "옛 이름", serde_json::json!({})).unwrap();
+        let linker = v.create_note("free", "가리키는 글", serde_json::json!({})).unwrap();
+        v.save_note(&linker, serde_json::json!({}), "[[Free/옛 이름]] 참고").unwrap();
+
+        v.rename_note(&target, "새 이름").unwrap();
+        let body = v.read_note(&linker).unwrap().body;
+        assert!(body.contains("[[Free/새 이름]]"), "경로 링크가 안 따라왔다: {body}");
     }
 
     #[test]

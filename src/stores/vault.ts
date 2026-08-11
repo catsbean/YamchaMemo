@@ -71,11 +71,12 @@ export const DEFAULT_DAILY_KIND_ORDER = ["log", "feeling", "todo"];
  *
  * 대상 폴더에 같은 이름의 글이 이미 있으면 백엔드가 `(2)`를 붙여 옮긴다.
  * 그 사실을 알려야 하는 이유는 **파일명으로 걸어 둔 링크가 끊기기 때문**이다
- * (제목으로 걸린 링크는 frontmatter가 그대로라 살아 있다).
+ * (제목으로 걸린 링크는 frontmatter가 그대로라 살아 있고, 폴더까지 적은 링크는
+ * `Vault::replace_path_links`가 새 경로로 따라 고쳐 준다).
  *
- * 링크를 자동으로 고쳐 주지는 않는다. 옮기고 나면 그 폴더에 비슷한 이름의 글이
- * 둘이 되는데, `[[메모]]`가 원래 있던 글을 가리켰는지 방금 옮겨 온 글을
- * 가리켰는지 글자만 봐서는 알 수 없다. 잘못 고치느니 알리고 맡긴다.
+ * 이름만 적은 `[[메모]]`는 고치지 않는다. 옮기고 나면 그 폴더에 같은 이름의 글이
+ * 둘이 되는데, 그 링크가 원래 있던 글을 가리켰는지 방금 옮겨 온 글을 가리켰는지
+ * 글자만 봐서는 알 수 없다. 잘못 고치느니 알리고 맡긴다.
  */
 function renamedStem(oldRel: string, newRel: string): string | undefined {
   const stem = (r: string) => r.split("/").pop()?.replace(/\.md$/i, "") ?? "";
