@@ -7,6 +7,7 @@ import CalloutSection from "./settings/CalloutSection";
 import CustomTypeRow from "./settings/CustomTypeRow";
 import DailyKindOrderSection from "./settings/DailyKindOrderSection";
 import HistorySection from "./settings/HistorySection";
+import LinkSection from "./settings/LinkSection";
 import NoteTemplateSection from "./settings/NoteTemplateSection";
 import ScrapTypeSection from "./settings/ScrapTypeSection";
 import ShortcutSection from "./settings/ShortcutSection";
@@ -208,6 +209,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             ))}
           </div>
         </section>
+        <LinkSection />
         <ShortcutSection />
         <section className="mb-5">
           <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-neutral-600">

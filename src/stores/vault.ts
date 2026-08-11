@@ -4,6 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { join } from "@tauri-apps/api/path";
 import { notifyOtherWindows } from "../lib/windowSync";
+import { canMoveType } from "../lib/note";
 import { normalizeFilter, type ReviewFilter } from "../lib/reviewFilter";
 import { linkTargetOf, resolveLink, type LinkHit } from "../lib/resolveLink";
 import {
@@ -59,6 +60,16 @@ export function applyTheme(mode: ThemeMode) {
 
 /** 일지 빠른 입력 바의 기본 순서 — 기록 · 느낌 · 할 일, 사용자 정의는 그 뒤 */
 export const DEFAULT_DAILY_KIND_ORDER = ["log", "feeling", "todo"];
+
+/** 없는 링크에서 새 글을 만들 분류. 보던 글과 같은 분류에 두되,
+ *  거기 만들 수 없거나 그새 사라진 분류면 자유노트로 보낸다. */
+export function createTypeFor(
+  typeId: string | undefined,
+  schemas: { id: string }[],
+): string {
+  if (!typeId || !canMoveType(typeId)) return "free";
+  return schemas.some((s) => s.id === typeId) ? typeId : "free";
+}
 
 interface VaultStore {
   /** 사이드바에서 선택된 섹션 — current가 없으면 이 타입의 대시보드가 열린다 */
@@ -200,6 +211,14 @@ interface VaultStore {
   /** 이름이 겹쳐 어느 글인지 못 정한 링크 — 사용자가 고를 때까지 들고 있는다 */
   linkChoice: { target: string; hits: LinkHit[] } | null;
   clearLinkChoice(): void;
+  /** 가리키는 글이 없는 링크. 잠깐 알리고 스스로 사라진다 */
+  missingLink: { target: string; typeId: string } | null;
+  dismissMissingLink(): void;
+  /** 없는 링크 알림에서 곧바로 그 이름의 글을 만든다 */
+  createMissingLink(): Promise<void>;
+  /** 없는 링크 알림에 [만들기]를 띄울지 (기본 켬) */
+  createOnMissingLink: boolean;
+  setCreateOnMissingLink(v: boolean): Promise<void>;
   addCustomType(
     label: string,
     id: string,
@@ -595,6 +614,8 @@ export const useVault = create<VaultStore>((set, get) => {
           (await store.get<string[]>("dailyKindOrder")) ??
           DEFAULT_DAILY_KIND_ORDER;
         const shortcutsOff = (await store.get<string[]>("shortcutsOff")) ?? [];
+        const createOnMissingLink =
+          (await store.get<boolean>("createOnMissingLink")) ?? true;
         const theme = (await store.get<ThemeMode>("theme")) ?? "light";
         applyTheme(theme);
         const startupMode =
@@ -624,6 +645,7 @@ export const useVault = create<VaultStore>((set, get) => {
           searchFuzzy,
           searchInFiles,
           dailyKindOrder,
+          createOnMissingLink,
         });
         // 켜 둔 채로 앱을 껐었다면 다시 걸어 준다. 실패해도 시작을 막지 않는다.
         if (quickCaptureOn) {
@@ -932,7 +954,8 @@ export const useVault = create<VaultStore>((set, get) => {
 
     /** 위키링크 타깃으로 노트 열기 — 규칙은 `lib/resolveLink.ts`가 갖고 있다.
      *
-     *  하나면 그대로 열고, 이름이 겹쳐 여럿이면 고르게 한다. */
+     *  하나면 그대로 열고, 이름이 겹쳐 여럿이면 고르게 하고, 없으면 알린다.
+     *  "없으면 조용히 아무 일도 안 일어난다"가 제일 나쁜 결과라 셋 다 화면에 드러낸다. */
     async openByTitle(title) {
       const t = linkTargetOf(title);
       if (!t) return;
@@ -942,15 +965,39 @@ export const useVault = create<VaultStore>((set, get) => {
         return;
       }
       if (hits.length > 1) {
-        set({ linkChoice: { target: t, hits } });
+        set({ linkChoice: { target: t, hits }, missingLink: null });
         return;
       }
-      set({ error: `노트를 찾을 수 없습니다: ${t}` });
+      set({
+        missingLink: {
+          target: t,
+          typeId: createTypeFor(get().current?.note_type, get().schemas),
+        },
+      });
     },
 
     linkChoice: null,
     clearLinkChoice() {
       set({ linkChoice: null });
+    },
+
+    missingLink: null,
+    dismissMissingLink() {
+      set({ missingLink: null });
+    },
+
+    async createMissingLink() {
+      const m = get().missingLink;
+      if (!m) return;
+      set({ missingLink: null });
+      await get().createNote(m.typeId, m.target, {});
+    },
+
+    createOnMissingLink: true,
+    async setCreateOnMissingLink(v) {
+      set({ createOnMissingLink: v });
+      const store = await settings();
+      await store.set("createOnMissingLink", v);
     },
 
     async addCustomType(label, id, fields, template) {
