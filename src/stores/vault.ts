@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { join } from "@tauri-apps/api/path";
 import { notifyOtherWindows } from "../lib/windowSync";
 import { normalizeFilter, type ReviewFilter } from "../lib/reviewFilter";
+import { linkTargetOf, resolveLink, type LinkHit } from "../lib/resolveLink";
 import {
   DEFAULT_CAPTURE_SHORTCUT,
   disableCapture,
@@ -196,6 +197,9 @@ interface VaultStore {
   appendCalloutKind(label: string, text: string): Promise<void>;
   openReadingForBook(bookRelPath: string): Promise<void>;
   openByTitle(title: string): Promise<void>;
+  /** 이름이 겹쳐 어느 글인지 못 정한 링크 — 사용자가 고를 때까지 들고 있는다 */
+  linkChoice: { target: string; hits: LinkHit[] } | null;
+  clearLinkChoice(): void;
   addCustomType(
     label: string,
     id: string,
@@ -926,21 +930,27 @@ export const useVault = create<VaultStore>((set, get) => {
       });
     },
 
-    /** 위키링크 타깃(제목 또는 파일명 stem)으로 노트 열기 */
+    /** 위키링크 타깃으로 노트 열기 — 규칙은 `lib/resolveLink.ts`가 갖고 있다.
+     *
+     *  하나면 그대로 열고, 이름이 겹쳐 여럿이면 고르게 한다. */
     async openByTitle(title) {
-      const t = title.trim();
-      const notes = get().notes;
-      const found =
-        notes.find((n) => n.title === t) ??
-        notes.find((n) => {
-          const stem = n.rel_path.split("/").pop()?.replace(/\.md$/, "");
-          return stem === t;
-        });
-      if (found) {
-        await get().openNote(found.rel_path);
-      } else {
-        set({ error: `노트를 찾을 수 없습니다: ${t}` });
+      const t = linkTargetOf(title);
+      if (!t) return;
+      const hits = resolveLink(get().notes, t);
+      if (hits.length === 1) {
+        await get().openNote(hits[0].note.rel_path);
+        return;
       }
+      if (hits.length > 1) {
+        set({ linkChoice: { target: t, hits } });
+        return;
+      }
+      set({ error: `노트를 찾을 수 없습니다: ${t}` });
+    },
+
+    linkChoice: null,
+    clearLinkChoice() {
+      set({ linkChoice: null });
     },
 
     async addCustomType(label, id, fields, template) {

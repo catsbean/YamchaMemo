@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Dashboard from "./components/Dashboard";
 import EditorPane from "./components/EditorPane";
+import LinkPickerDialog from "./components/LinkPickerDialog";
 import SearchModal from "./components/SearchModal";
 import SettingsModal from "./components/SettingsModal";
 import ShortcutHint from "./components/ShortcutHint";
@@ -176,6 +177,7 @@ export default function App() {
 
       {searchOpen && <SearchModal onClose={() => setSearchOpen(false)} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      <LinkPickerDialog />
       {startupNotice && (
         <StartupNoticeBanner
           message={startupNotice}
