@@ -66,9 +66,10 @@ export default function WikiLinkSuggest({
   inputRef: { current: HTMLTextAreaElement | null };
 }) {
   const notes = useVault((s) => s.notes);
+  const schemas = useVault((s) => s.schemas);
   // 후보 목록은 노트가 바뀔 때만 다시 만든다. `refresh`는 keyup마다 도는데,
   // 거기서 매번 전체 노트를 훑으면 링크를 치는 내내 그 값을 문다.
-  const options = useMemo(() => linkOptions(notes), [notes]);
+  const options = useMemo(() => linkOptions(notes, schemas), [notes, schemas]);
   const [items, setItems] = useState<LinkOption[]>([]);
   const [active, setActive] = useState(0);
 

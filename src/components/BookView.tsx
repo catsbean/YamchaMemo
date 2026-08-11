@@ -31,6 +31,7 @@ export default function BookView({ note }: { note: NoteContent }) {
   const {
     vaultPath,
     notes,
+    schemas,
     dirty,
     setBody,
     saveCurrent,
@@ -294,7 +295,7 @@ export default function BookView({ note }: { note: NoteContent }) {
           value={records}
           onChange={onRecordsChange}
           onNavigate={openByTitle}
-          getLinkOptions={() => linkOptions(notes)}
+          getLinkOptions={() => linkOptions(notes, schemas)}
           onContextMenu={(e, view) =>
             ctx.open(
               e,

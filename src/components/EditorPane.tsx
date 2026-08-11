@@ -432,7 +432,7 @@ export default function EditorPane() {
                 }),
               )
             }
-            getLinkOptions={() => linkOptions(notes)}
+            getLinkOptions={() => linkOptions(notes, schemas)}
           />
         </div>
         </>

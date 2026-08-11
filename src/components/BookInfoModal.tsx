@@ -2,12 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { load } from "@tauri-apps/plugin-store";
-import {
-  commands,
-  type JsonValue,
-  type NoteContent,
-  type NoteSummary,
-} from "../bindings";
+import { commands, type JsonValue, type NoteContent } from "../bindings";
 import { fmObject, useVault } from "../stores/vault";
 import { composeBookBody } from "../lib/book";
 import { coverSrc, fmStr } from "../lib/note";
@@ -61,9 +56,7 @@ export default function BookInfoModal({
     : "";
   const [tagsDraft, setTagsDraft] = useState(initialTags);
   // 별칭 — `[[비비풀]]`처럼 다른 이름으로도 이 책에 닿게 한다 (태그와 같은 쉼표 입력)
-  const [aliasDraft, setAliasDraft] = useState(
-    aliasesOf({ frontmatter: fm0 } as unknown as NoteSummary).join(", "),
-  );
+  const [aliasDraft, setAliasDraft] = useState(aliasesOf(fm0).join(", "));
   // 저자·출판사·분야는 같은 값을 되풀이해 넣는 칸이라 지난 값을 골라 쓸 수 있게 한다
   const bookOptions = useMemo(() => pastFieldValues(notes, "book"), [notes]);
   const [introDraft, setIntroDraft] = useState(intro);

@@ -6,6 +6,7 @@ import { syntaxTree } from "@codemirror/language";
 import type { EditorView } from "@codemirror/view";
 import type { MenuItem } from "../lib/contextMenu";
 import type { CalloutKind } from "../lib/callouts";
+import { josaRo } from "../lib/note";
 import { wikiLinkTargetAt } from "./wikilink";
 import {
   clearFormatting,
@@ -177,7 +178,8 @@ export function editorMenuItems(
     ...(linkTarget
       ? ([
           {
-            label: `🔗 ${ellipsis(linkTarget)}(으)로 이동`,
+            // 조사는 **자르기 전** 이름으로 고른다 — 잘린 끝의 '…'로는 받침을 알 수 없다
+            label: `🔗 ${ellipsis(linkTarget)}${josaRo(linkTarget)} 이동`,
             hint: "Ctrl+클릭",
             onClick: () => link!.onNavigate(linkTarget!),
           },

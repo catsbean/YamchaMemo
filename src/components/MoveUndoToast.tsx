@@ -28,9 +28,13 @@ export default function MoveUndoToast() {
       }}
     >
       <span className="font-medium">{to}</span>
-      <span className="text-neutral-300">
-        {josaRo(to)} 옮겼습니다
-      </span>
+      <span className="text-neutral-300">{josaRo(to)} 옮겼습니다</span>
+      {/* 파일명이 바뀌었으면 반드시 알린다 — 파일명으로 걸어 둔 링크가 끊긴다 */}
+      {moveUndo.renamedTo && (
+        <span className="block text-2xs text-amber-300">
+          같은 이름이 있어 '{moveUndo.renamedTo}'로 바뀌었습니다
+        </span>
+      )}
     </Toast>
   );
 }

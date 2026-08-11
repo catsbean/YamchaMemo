@@ -440,7 +440,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
           onContextMenu={(e, view) =>
             ctx.open(e, editorMenuItems(view, [], { event: e, onNavigate: navigate }))
           }
-          getLinkOptions={() => linkOptions(notes)}
+          getLinkOptions={() => linkOptions(notes, schemas)}
         />
       </div>
 

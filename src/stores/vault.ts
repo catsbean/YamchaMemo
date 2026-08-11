@@ -66,6 +66,23 @@ export function applyTheme(mode: ThemeMode) {
 /** 일지 빠른 입력 바의 기본 순서 — 기록 · 느낌 · 할 일, 사용자 정의는 그 뒤 */
 export const DEFAULT_DAILY_KIND_ORDER = ["log", "feeling", "todo"];
 
+/**
+ * 옮기면서 파일명이 바뀌었으면 새 이름, 그대로면 undefined.
+ *
+ * 대상 폴더에 같은 이름의 글이 이미 있으면 백엔드가 `(2)`를 붙여 옮긴다.
+ * 그 사실을 알려야 하는 이유는 **파일명으로 걸어 둔 링크가 끊기기 때문**이다
+ * (제목으로 걸린 링크는 frontmatter가 그대로라 살아 있다).
+ *
+ * 링크를 자동으로 고쳐 주지는 않는다. 옮기고 나면 그 폴더에 비슷한 이름의 글이
+ * 둘이 되는데, `[[메모]]`가 원래 있던 글을 가리켰는지 방금 옮겨 온 글을
+ * 가리켰는지 글자만 봐서는 알 수 없다. 잘못 고치느니 알리고 맡긴다.
+ */
+function renamedStem(oldRel: string, newRel: string): string | undefined {
+  const stem = (r: string) => r.split("/").pop()?.replace(/\.md$/i, "") ?? "";
+  const next = stem(newRel);
+  return next === stem(oldRel) ? undefined : next;
+}
+
 /** 없는 링크에서 새 글을 만들 분류. 보던 글과 같은 분류에 두되,
  *  거기 만들 수 없거나 그새 사라진 분류면 자유노트로 보낸다. */
 export function createTypeFor(
@@ -235,8 +252,14 @@ interface VaultStore {
   moveCurrent(newTypeId: string): Promise<void>;
   /** 열지 않은 노트를 다른 분류로 옮긴다 (목록 우클릭 메뉴) */
   moveNoteTo(relPath: string, newTypeId: string): Promise<void>;
-  /** 방금 옮긴 노트 — 되돌릴 수 있게 잠깐 들고 있는다 */
-  moveUndo: { rel: string; toTypeId: string; fromTypeId: string } | null;
+  /** 방금 옮긴 노트 — 되돌릴 수 있게 잠깐 들고 있는다.
+   *  `renamedTo`는 대상 폴더에 같은 파일명이 있어 이름이 바뀐 경우에만 채워진다. */
+  moveUndo: {
+    rel: string;
+    toTypeId: string;
+    fromTypeId: string;
+    renamedTo?: string;
+  } | null;
   undoMove(): Promise<void>;
   dismissMoveUndo(): void;
   addMirror(): Promise<void>;
@@ -1050,7 +1073,14 @@ export const useVault = create<VaultStore>((set, get) => {
         const newRel = unwrap(await commands.moveNote(cur.rel_path, newTypeId));
         await get().refresh();
         await get().openNote(newRel);
-        set({ moveUndo: { rel: newRel, toTypeId: newTypeId, fromTypeId } });
+        set({
+          moveUndo: {
+            rel: newRel,
+            toTypeId: newTypeId,
+            fromTypeId,
+            renamedTo: renamedStem(cur.rel_path, newRel),
+          },
+        });
       });
     },
 
@@ -1065,7 +1095,14 @@ export const useVault = create<VaultStore>((set, get) => {
         const newRel = unwrap(await commands.moveNote(relPath, newTypeId));
         await get().refresh();
         if (fromTypeId) {
-          set({ moveUndo: { rel: newRel, toTypeId: newTypeId, fromTypeId } });
+          set({
+            moveUndo: {
+              rel: newRel,
+              toTypeId: newTypeId,
+              fromTypeId,
+              renamedTo: renamedStem(relPath, newRel),
+            },
+          });
         }
       });
     },
