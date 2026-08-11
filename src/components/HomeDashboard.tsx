@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { commands, type TodoItem } from "../bindings";
 import { typeLabel, useVault } from "../stores/vault";
 import { fmStr } from "../lib/note";
-import { noteItemHandlers, useContextMenu } from "../lib/contextMenu";
+import {
+  moveMenuItems,
+  noteItemHandlers,
+  useContextMenu,
+} from "../lib/contextMenu";
 import { openNoteWindow } from "../lib/trashWindow";
 import ContextMenu from "./ContextMenu";
 
@@ -15,13 +19,21 @@ function isoDate(d: Date): string {
 
 /** 홈: 독서·쓰기 통계 + 데일리 히트맵 + 최근 활동 */
 export default function HomeDashboard() {
-  const { notes, schemas, openNote, openToday, setNav } = useVault();
+  const { notes, schemas, openNote, openToday, setNav, moveNoteTo } = useVault();
   const ctx = useContextMenu();
   const year = new Date().getFullYear();
 
-  /** 목록 항목 공통: 클릭=열기, Ctrl+클릭·가운데클릭=새 창, 우클릭=메뉴 */
-  const itemProps = (rel: string) =>
-    noteItemHandlers(rel, () => openNote(rel), openNoteWindow, ctx.open);
+  /** 목록 항목 공통: 클릭=열기, Ctrl+클릭·가운데클릭=새 창, 우클릭=메뉴(+분류 이동) */
+  const itemProps = (rel: string) => {
+    const noteType = notes.find((n) => n.rel_path === rel)?.note_type ?? "";
+    return noteItemHandlers(
+      rel,
+      () => openNote(rel),
+      openNoteWindow,
+      ctx.open,
+      moveMenuItems(noteType, schemas, (id) => moveNoteTo(rel, id)),
+    );
+  };
 
   const stats = useMemo(() => {
     const books = notes.filter((n) => n.note_type === "book");

@@ -1,9 +1,11 @@
 import { useState } from "react";
 import type { TypeDef } from "../bindings";
+import { canMoveType } from "../lib/note";
 
 /** 노트를 다른 분류로 옮기는 버튼 — 눌러 대상 분류를 고르면 파일이 그
  *  분류의 폴더로 옮겨지고 frontmatter type도 함께 바뀐다.
- *  책·데일리는 파일명·폴더 규칙이 확고해 원본·대상 모두에서 뺀다. */
+ *  책·데일리는 파일명·폴더 규칙이 확고해 원본·대상 모두에서 뺀다
+ *  (목록 우클릭 메뉴의 `moveMenuItems`와 같은 규칙). */
 export default function MoveNoteButton({
   schemas,
   currentTypeId,
@@ -14,12 +16,11 @@ export default function MoveNoteButton({
   onMove: (newTypeId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const locked = currentTypeId === "book" || currentTypeId === "daily";
   const targets = schemas.filter(
-    (s) => s.id !== currentTypeId && s.id !== "book" && s.id !== "daily",
+    (s) => s.id !== currentTypeId && canMoveType(s.id),
   );
 
-  if (locked || targets.length === 0) return null;
+  if (!canMoveType(currentTypeId) || targets.length === 0) return null;
 
   return (
     <span className="relative">

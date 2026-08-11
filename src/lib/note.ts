@@ -12,6 +12,29 @@ export function vaultAssetSrc(vaultPath: string, rel: string): string {
   return convertFileSrc(`${vaultPath}${s}${rel.replace(/[\\/]/g, s)}`);
 }
 
+/** 파일명·연동 규칙이 확고해 임의의 제목으로 만들거나 다른 폴더로 옮길 수 없는 분류 —
+ *  책은 도서 정보가, 일지는 날짜가 파일명을 정한다. (백엔드 `move_note`·`save_scrap`의
+ *  제약과 같다. 여기서 미리 걸러 눌러도 안 되는 메뉴를 안 보여 주려는 것뿐이다.) */
+export const FIXED_NAMING_TYPES = ["book", "daily"];
+
+/** 다른 분류로 옮길 수 있는 노트인가 */
+export function canMoveType(typeId: string): boolean {
+  return !FIXED_NAMING_TYPES.includes(typeId);
+}
+
+/** 말 뒤에 붙일 `로`/`으로`. 받침이 없거나 ㄹ이면 `로`, 나머지는 `으로`.
+ *
+ *  분류 이름은 사용자가 짓는 것이라(회의록·레시피·자유노트) 미리 정해 둘 수 없다.
+ *  "(으)로"로 뭉개면 메뉴에 서류 냄새가 나므로 그때그때 고른다.
+ *  한글이 아닌 이름(영문·숫자)은 판정할 수 없어 "(으)로"로 남긴다. */
+export function josaRo(word: string): string {
+  const c = word.charCodeAt(word.length - 1);
+  if (Number.isNaN(c) || c < 0xac00 || c > 0xd7a3) return "(으)로";
+  const jongseong = (c - 0xac00) % 28;
+  // 0 = 받침 없음, 8 = ㄹ
+  return jongseong === 0 || jongseong === 8 ? "로" : "으로";
+}
+
 /** 책 상태 코드 → 한국어 라벨 */
 export const BOOK_STATUS_LABELS: Record<string, string> = {
   wishlist: "읽고 싶은 책",

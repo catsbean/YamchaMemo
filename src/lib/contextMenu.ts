@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { canMoveType, josaRo } from "./note";
 
 /** 우클릭 메뉴 항목. `separator: true`면 구분선. */
 export interface MenuItem {
@@ -45,6 +46,30 @@ export function useContextMenu() {
   }
 
   return { menu, open, close: () => setMenu(null) };
+}
+
+/**
+ * 노트 우클릭 메뉴의 [다른 분류로 이동] 묶음 — 구분선 + 대상 분류들.
+ *
+ * 편집기 헤더에도 같은 기능이 있지만 거기까지 가려면 글을 먼저 열어야 한다.
+ * 정리는 목록을 훑으면서 하는 일이라, 목록에서 바로 옮길 수 있어야 한다.
+ * 옮길 수 없는 노트(책·일지)나 갈 곳이 없으면 아무것도 내놓지 않는다.
+ */
+export function moveMenuItems(
+  noteType: string,
+  schemas: { id: string; label: string }[],
+  onMove: (typeId: string) => void,
+): MenuItem[] {
+  if (!canMoveType(noteType)) return [];
+  const targets = schemas.filter((s) => s.id !== noteType && canMoveType(s.id));
+  if (targets.length === 0) return [];
+  return [
+    { separator: true },
+    ...targets.map((s) => ({
+      label: `${s.label}${josaRo(s.label)} 이동`,
+      onClick: () => onMove(s.id),
+    })),
+  ];
 }
 
 /**

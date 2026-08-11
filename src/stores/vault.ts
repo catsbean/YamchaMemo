@@ -205,6 +205,8 @@ interface VaultStore {
   renameCurrent(newTitle: string): Promise<void>;
   /** 현재 열려 있는 노트를 다른 분류로 옮긴다 (파일 이동 + type 갱신) */
   moveCurrent(newTypeId: string): Promise<void>;
+  /** 열지 않은 노트를 다른 분류로 옮긴다 (목록 우클릭 메뉴) */
+  moveNoteTo(relPath: string, newTypeId: string): Promise<void>;
   addMirror(): Promise<void>;
   removeMirror(path: string): Promise<void>;
   syncMirrors(): Promise<void>;
@@ -969,6 +971,18 @@ export const useVault = create<VaultStore>((set, get) => {
         const newRel = unwrap(await commands.moveNote(cur.rel_path, newTypeId));
         await get().refresh();
         await get().openNote(newRel);
+      });
+    },
+
+    async moveNoteTo(relPath, newTypeId) {
+      // 열려 있는 글이면 편집 중인 내용을 먼저 저장하고 새 자리에서 다시 연다
+      if (get().current?.rel_path === relPath) {
+        await get().moveCurrent(newTypeId);
+        return;
+      }
+      await guard(async () => {
+        unwrap(await commands.moveNote(relPath, newTypeId));
+        await get().refresh();
       });
     },
 

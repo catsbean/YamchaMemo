@@ -5,7 +5,11 @@ import { fileSuffix, fmStr } from "../lib/note";
 import AuditDashboard from "./AuditDashboard";
 import Bookshelf from "./Bookshelf";
 import ContextMenu from "./ContextMenu";
-import { noteItemHandlers, useContextMenu } from "../lib/contextMenu";
+import {
+  moveMenuItems,
+  noteItemHandlers,
+  useContextMenu,
+} from "../lib/contextMenu";
 import { openNoteWindow } from "../lib/trashWindow";
 import NewNoteDialog from "./NewNoteDialog";
 import { useCreateRequest } from "../lib/shortcuts";
@@ -55,7 +59,7 @@ function hostOf(url: string): string {
 const QUICK_CREATE = new Set(["free"]);
 
 function ListDashboard({ noteType }: { noteType: string }) {
-  const { schemas, notes, current, openNote, openToday, createUntitled } =
+  const { schemas, notes, current, openNote, openToday, createUntitled, moveNoteTo } =
     useVault();
   const [creating, setCreating] = useState(false);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
@@ -223,6 +227,9 @@ function ListDashboard({ noteType }: { noteType: string }) {
                       () => openNote(n.rel_path),
                       openNoteWindow,
                       ctx.open,
+                      moveMenuItems(n.note_type, schemas, (id) =>
+                        moveNoteTo(n.rel_path, id),
+                      ),
                     )}
                   >
                     <Row note={n} noteType={noteType} />
