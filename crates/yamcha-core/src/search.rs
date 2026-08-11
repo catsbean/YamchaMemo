@@ -98,6 +98,7 @@ pub struct SearchEngine {
     f_title: tantivy::schema::Field,
     f_body: tantivy::schema::Field,
     f_tags: tantivy::schema::Field,
+    f_alias: tantivy::schema::Field,
     f_type: tantivy::schema::Field,
     f_date: tantivy::schema::Field,
     f_title_jamo: tantivy::schema::Field,
@@ -187,6 +188,11 @@ impl SearchEngine {
         // 태그는 검색뿐 아니라 결과 필터에도 쓰므로 저장까지 한다
         // (스키마가 바뀌면 open()이 인덱스를 지우고 다시 만들고, set_vault가 재색인한다)
         let f_tags = b.add_text_field("tags", bigram_text().set_stored());
+        // 별칭 — 제목과 같은 무게로 찾는다. 태그처럼 저장까지 하는 이유는
+        // 퍼지 검증(`fuzzy_score`)이 **저장된 값**을 보기 때문이다. 저장하지 않으면
+        // 완화 쿼리가 건져 온 별칭 후보를 그 자리에서 도로 버린다.
+        // f_title에 섞지 않는 이유는 목록에 보여 줄 제목이 거기서 나오기 때문이다.
+        let f_alias = b.add_text_field("alias", bigram_text().set_stored());
         let f_type = b.add_text_field("type", STRING | STORED);
         let f_date = b.add_text_field("date", STRING | STORED);
         // 퍼지·초성용 제목 파생 필드. **제목만** 넣는다 —
@@ -223,6 +229,7 @@ impl SearchEngine {
             f_title,
             f_body,
             f_tags,
+            f_alias,
             f_type,
             f_date,
             f_title_jamo,
@@ -234,16 +241,29 @@ impl SearchEngine {
     pub fn upsert(&mut self, note: &ParsedNote) -> Result<(), CoreError> {
         self.writer
             .delete_term(Term::from_field_text(self.f_path, &note.rel_path));
-        self.writer.add_document(doc!(
+        let mut d = doc!(
             self.f_path => note.rel_path.clone(),
             self.f_title => note.title.clone(),
             self.f_body => note.body.clone(),
             self.f_tags => note.tags.join(" "),
+            self.f_alias => note.aliases.join(" "),
             self.f_type => note.note_type.clone(),
             self.f_date => note.date.clone(),
             self.f_title_jamo => korean::to_jamo(&note.title),
             self.f_title_cho => korean::chosung(&note.title),
-        ))?;
+        );
+        // 별칭도 이 글의 이름이다 — 링크로만 닿고 검색으로는 못 찾으면
+        // 별칭을 달아 둔 사람은 그 차이를 설명할 방법이 없다.
+        //
+        // 자모·초성에는 별칭 하나를 값 하나로 **따로** 넣는다. 이어 붙이면
+        // n그램이 별칭 경계를 넘어 없는 말을 만들어 낸다 ('비비풀'+'BB' →
+        // '풀ㅂ'). f_alias 쪽은 태그와 같이 이어 붙인다 — 거기 생기는
+        // 경계 그램은 공백을 품어서, 공백으로 끊어 만드는 쿼리 그램과 만날 일이 없다.
+        for a in &note.aliases {
+            d.add_text(self.f_title_jamo, korean::to_jamo(a));
+            d.add_text(self.f_title_cho, korean::chosung(a));
+        }
+        self.writer.add_document(d)?;
         Ok(())
     }
 
@@ -321,7 +341,8 @@ impl SearchEngine {
                         continue;
                     }
                     let s = if chosung_only {
-                        chosung_score(query, &r.title)
+                        // 초성도 제목과 별칭 양쪽에 물어본다 (더 잘 맞는 쪽을 쓴다)
+                        chosung_score(query, &r.title).max(chosung_score(query, &r.aliases))
                     } else {
                         fuzzy_score(query, &r)
                     };
@@ -345,11 +366,15 @@ impl SearchEngine {
 
     /// 지금까지의 검색 — 모든 n그램을 AND로 묶는다
     fn strict_query(&self, query: &str) -> Box<dyn Query> {
-        let mut parser =
-            QueryParser::for_index(&self.index, vec![self.f_title, self.f_body, self.f_tags]);
+        let mut parser = QueryParser::for_index(
+            &self.index,
+            vec![self.f_title, self.f_body, self.f_tags, self.f_alias],
+        );
         parser.set_conjunction_by_default();
         parser.set_field_boost(self.f_title, 3.0);
         parser.set_field_boost(self.f_tags, 2.0);
+        // 별칭은 제목과 같은 무게 — 그 사람에게는 그게 이 글의 이름이다
+        parser.set_field_boost(self.f_alias, 3.0);
         let (q, _errors) = parser.parse_query_lenient(query);
         q
     }
@@ -373,6 +398,7 @@ impl SearchEngine {
             (self.f_title, 3.0),
             (self.f_body, 1.0),
             (self.f_tags, 2.0),
+            (self.f_alias, 3.0),
         ] {
             if let Some(q) = self.min_match_query(field, &uni, need_uni, boost) {
                 clauses.push((Occur::Should, q));
@@ -512,6 +538,7 @@ impl SearchEngine {
                 title: get(self.f_title),
                 date,
                 tags,
+                aliases: get(self.f_alias),
                 body: get(self.f_body),
             });
             if out.len() >= want {
@@ -529,6 +556,8 @@ struct Raw {
     title: String,
     date: String,
     tags: String,
+    /// 별칭들을 공백으로 이어 붙인 것 (퍼지·초성 검증용)
+    aliases: String,
     body: String,
 }
 
@@ -554,6 +583,10 @@ fn fuzzy_score(query: &str, r: &Raw) -> f32 {
     let title = korean::best_window_similarity(query, &r.title);
     if korean::is_near(query, &r.title) {
         return 1.0 + title; // 제목이 맞은 것은 늘 본문보다 위
+    }
+    // 별칭도 이 글의 이름이라 제목과 같은 칸에 둔다
+    if !r.aliases.is_empty() && korean::is_near(query, &r.aliases) {
+        return 1.0 + korean::best_window_similarity(query, &r.aliases);
     }
     if !r.tags.is_empty() && korean::is_near(query, &r.tags) {
         return 0.9;
@@ -698,6 +731,63 @@ mod tests {
             body: body.into(),
             frontmatter_json: "{}".into(),
         }
+    }
+
+    fn aliased(rel: &str, title: &str, body: &str, aliases: &[&str]) -> ParsedNote {
+        ParsedNote {
+            aliases: aliases.iter().map(|s| s.to_string()).collect(),
+            ..note(rel, title, body, &[])
+        }
+    }
+
+    /// 별칭으로도 찾을 수 있어야 한다 — 링크로만 닿고 검색은 안 되면
+    /// 별칭을 달아 둔 사람은 그 차이를 설명할 방법이 없다.
+    #[test]
+    fn 별칭으로_검색된다() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = SearchEngine::open(dir.path()).unwrap();
+        s.upsert(&aliased(
+            "Free/프로헥사디온 칼슘.md",
+            "프로헥사디온 칼슘",
+            "생장 조절제 살포 기록",
+            &["비비풀"],
+        ))
+        .unwrap();
+        s.upsert(&note("Free/딴글.md", "딴글", "관계 없는 내용", &[]))
+            .unwrap();
+        s.commit().unwrap();
+
+        let hits = s.search("비비풀", 10).unwrap();
+        assert_eq!(hits.len(), 1, "별칭으로 못 찾았다");
+        // 목록에 보여 줄 제목은 별칭이 아니라 진짜 제목이어야 한다
+        assert_eq!(hits[0].title, "프로헥사디온 칼슘");
+    }
+
+    /// 별칭에도 오타·초성이 통해야 한다 (제목과 같은 대접)
+    #[test]
+    fn 별칭도_오타와_초성을_견딘다() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = SearchEngine::open(dir.path()).unwrap();
+        s.upsert(&aliased(
+            "Free/프로헥사디온 칼슘.md",
+            "프로헥사디온 칼슘",
+            "살포 기록",
+            &["비비풀"],
+        ))
+        .unwrap();
+        s.commit().unwrap();
+
+        let f = SearchFilter { fuzzy: true, ..Default::default() };
+        assert_eq!(
+            s.search_filtered("비비플", &f, 10).unwrap().len(),
+            1,
+            "별칭 오타를 못 견뎠다"
+        );
+        assert_eq!(
+            s.search_filtered("ㅂㅂㅍ", &f, 10).unwrap().len(),
+            1,
+            "별칭 초성으로 못 찾았다"
+        );
     }
 
     /// **이미 열려 있는 색인을 두 번째로 열면, 지우지 말고 거절해야 한다.**
