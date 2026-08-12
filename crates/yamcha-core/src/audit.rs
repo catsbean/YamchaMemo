@@ -149,9 +149,16 @@ pub fn audit(vault: &Vault) -> Vec<NoteIssue> {
     out
 }
 
-/// rel 경로에서 확장자를 뗀 파일명
+/// rel 경로에서 확장자를 뗀 파일명 (`Free/메모.md` → `메모`)
+///
+/// **한 번만 뗀다.** `trim_end_matches`는 끝에 붙은 만큼 반복해서 떼므로 제목이
+/// `메모.md`인 글(`Free/메모.md.md`)에서 `메모`가 나오는데, 같은 자리를 계산하는
+/// `summarize`의 `Path::file_stem()`과 프런트의 `stemOf`는 `메모.md`를 준다.
+/// 여기만 어긋나면 남의 별칭 '메모'를 죽었다고 보고하고 [고치기]가 지운다 —
+/// 실제로는 `resolveLink`의 별칭 겹으로 멀쩡히 닿는 별칭이다.
 fn stem_of(rel: &str) -> String {
-    rel.rsplit('/').next().unwrap_or(rel).trim_end_matches(".md").to_string()
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    name.strip_suffix(".md").unwrap_or(name).to_string()
 }
 
 /// 별칭이 **적어 뒀는데 작동하지 않는** 두 경우를 찾는다.
@@ -175,8 +182,7 @@ fn alias_issues(vault: &Vault) -> Vec<NoteIssue> {
     let mut mine: Vec<(String, String, Vec<String>)> = Vec::new();
 
     for n in &notes {
-        let stem = stem_of(&n.rel_path);
-        for name in [n.title.clone(), stem.clone()] {
+        for name in [n.title.clone(), stem_of(&n.rel_path)] {
             if name.is_empty() {
                 continue;
             }
@@ -196,8 +202,8 @@ fn alias_issues(vault: &Vault) -> Vec<NoteIssue> {
         for a in &aliases {
             claims.entry(a.clone()).or_default().push(n.rel_path.clone());
         }
-        let display = if n.title.is_empty() { stem } else { n.title.clone() };
-        mine.push((n.rel_path.clone(), display, aliases));
+        // summarize가 title을 stem으로 채우므로 여기 title은 비지 않는다
+        mine.push((n.rel_path.clone(), n.title.clone(), aliases));
     }
 
     let mut out = Vec::new();
@@ -230,6 +236,13 @@ fn alias_issues(vault: &Vault) -> Vec<NoteIssue> {
         //    어느 쪽이 그 이름을 가져야 하는지는 앱이 정할 수 없으므로 알리기만 한다.
         let mut shared: Vec<String> = Vec::new();
         for a in aliases {
+            // 이미 가려진 별칭이면 겹쳐도 묻지 않는다 — 해석기가 제목·파일명 겹에서
+            // 끊으므로 별칭 겹은 아예 돌지 않는다. 여기서 "누를 때마다 묻는다"고
+            // 알리면 거짓말이고, 고칠 수도 없어서 어느 쪽을 정하든 아무 일도 안 난다.
+            // 고칠 데는 위의 ShadowedAlias 하나뿐이다.
+            if shadowed.contains(&a) {
+                continue;
+            }
             let Some(holders) = claims.get(a) else { continue };
             if holders.len() < 2 {
                 continue;
@@ -597,6 +610,63 @@ mod tests {
         assert!(dup.iter().all(|i| !i.fixable));
 
         assert!(fix(&v, &a, IssueKind::DuplicateAlias).is_err(), "임의로 고쳤다");
+    }
+
+    /// 겹친 별칭이 **이미 가려져 있으면** 겹친다고 말하지 않는다.
+    ///
+    /// 해석기는 제목 겹에서 끊으므로 `[[BB]]`는 묻지 않고 곧장 'BB' 글로 간다.
+    /// "누를 때마다 묻게 됩니다"는 일어나지 않을 일이고, 고칠 수도 없어서
+    /// 어느 쪽을 정하든 아무것도 안 달라진다. 고칠 데는 가려진 별칭 하나뿐이다.
+    #[test]
+    fn 가려진_별칭은_겹쳐도_겹친다고_하지_않는다() {
+        let (_d, v) = setup();
+        let a = v.create_note("free", "가나다", json!({"aliases": ["BB"]})).unwrap();
+        let b = v.create_note("writing", "라마바", json!({"aliases": ["BB"]})).unwrap();
+        // 나중에 'BB'라는 제목의 글이 생겼다 — 이 순간 양쪽 별칭이 함께 죽는다
+        v.create_note("free", "BB", json!({})).unwrap();
+
+        let issues = audit(&v);
+        assert!(
+            !issues.iter().any(|i| i.kind == IssueKind::DuplicateAlias),
+            "닿지도 않는 별칭을 겹친다고 알렸다: {issues:?}"
+        );
+        // 죽은 것은 죽었다고 알린다 — 양쪽 모두
+        let shadow: Vec<&NoteIssue> = issues
+            .iter()
+            .filter(|i| i.kind == IssueKind::ShadowedAlias)
+            .collect();
+        assert_eq!(shadow.len(), 2, "{issues:?}");
+        assert!(shadow.iter().any(|i| i.rel_path == a));
+        assert!(shadow.iter().any(|i| i.rel_path == b));
+
+        // 가린 글이 사라지면 그때는 진짜로 겹친다
+        v.delete_note("Free/BB.md").unwrap();
+        let issues = audit(&v);
+        assert_eq!(
+            issues.iter().filter(|i| i.kind == IssueKind::DuplicateAlias).count(),
+            2,
+            "{issues:?}"
+        );
+    }
+
+    /// 제목에 `.md`가 든 글(`Free/메모.md.md`)이 남의 별칭을 죽이면 안 된다.
+    ///
+    /// 확장자를 두 번 떼면 이 글의 이름이 '메모'로 보여서 '메모'라는 별칭을 죽었다고
+    /// 보고하고 [고치기]가 지운다. 실제로는 제목도 파일명도 '메모.md'라 `[[메모]]`는
+    /// 별칭 겹까지 내려와 멀쩡히 닿는다.
+    #[test]
+    fn 제목에_점md가_들어도_남의_별칭을_죽이지_않는다() {
+        let (_d, v) = setup();
+        let dotmd = v.create_note("free", "메모.md", json!({})).unwrap();
+        assert_eq!(dotmd, "Free/메모.md.md", "전제가 바뀌었다");
+        let aliased = v.create_note("writing", "딴글", json!({"aliases": ["메모"]})).unwrap();
+
+        let issues = audit(&v);
+        assert!(
+            !issues.iter().any(|i| i.kind == IssueKind::ShadowedAlias),
+            "멀쩡한 별칭을 죽었다고 했다: {issues:?}"
+        );
+        assert_eq!(v.parse_full(&aliased).unwrap().aliases, vec!["메모"]);
     }
 
     /// 두 기기에서 같은 글을 고치면 클라우드가 사본을 남긴다. 앱에서는 노트가 하나

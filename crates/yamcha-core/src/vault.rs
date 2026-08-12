@@ -574,8 +574,12 @@ impl Vault {
     ///
     /// `.md`를 붙여 적은 형태도 함께 받는다. 고친 결과는 확장자 없는 쪽으로 모은다
     /// (해석기가 둘 다 받으므로 표기를 하나로 모아도 손해가 없다).
+    ///
+    /// 확장자는 **한 번만 뗀다.** 반복해서 떼면 제목이 `메모.md`인 글(`Free/메모.md.md`)에서
+    /// `Free/메모`가 나오는데, 그건 **다른 글**(`Free/메모.md`)의 경로 키다. 남의 링크를
+    /// 고치면서 정작 이 파일의 링크(`[[Free/메모.md]]`)는 놓친다.
     fn replace_path_links(&self, old_rel: &str, new_rel: &str) -> Result<(), CoreError> {
-        let key = |r: &str| r.trim_end_matches(".md").to_string();
+        let key = |r: &str| r.strip_suffix(".md").unwrap_or(r).to_string();
         let olds = vec![key(old_rel), old_rel.to_string()];
         self.replace_links(&olds, &key(new_rel))
     }
@@ -3039,6 +3043,38 @@ mod tests {
         v.rename_note(&target, "새 이름").unwrap();
         let body = v.read_note(&linker).unwrap().body;
         assert!(body.contains("[[Free/새 이름]]"), "경로 링크가 안 따라왔다: {body}");
+    }
+
+    /// 제목에 `.md`가 든 글(`Free/메모.md.md`)을 옮겨도 **남의 링크는 건드리지 않는다.**
+    ///
+    /// 확장자를 두 번 떼면 이 파일의 옛 키가 `Free/메모`로 나오는데, 그건 옆에 있는
+    /// 다른 글(`Free/메모.md`)의 경로 키다. 그 글을 가리키던 `[[Free/메모]]`를 엉뚱하게
+    /// 고치면서, 정작 옮긴 글의 링크(`[[Free/메모.md]]`)는 놓친다.
+    #[test]
+    fn 제목에_점md가_든_글을_옮겨도_남의_링크는_그대로다() {
+        let (_d, mut v) = vault();
+        v.add_custom_type("회의록", "meeting", vec![], "").unwrap();
+        let plain = v.create_note("free", "메모", serde_json::json!({})).unwrap();
+        let dotmd = v.create_note("free", "메모.md", serde_json::json!({})).unwrap();
+        assert_eq!(plain, "Free/메모.md");
+        assert_eq!(dotmd, "Free/메모.md.md", "전제가 바뀌었다");
+
+        let linker = v.create_note("writing", "가리키는 글", serde_json::json!({})).unwrap();
+        v.save_note(
+            &linker,
+            serde_json::json!({}),
+            "[[Free/메모]] · [[Free/메모.md]]",
+        )
+        .unwrap();
+
+        // '메모.md' 쪽만 옮긴다
+        assert_eq!(v.move_note(&dotmd, "meeting").unwrap(), "회의록/메모.md.md");
+
+        let body = v.read_note(&linker).unwrap().body;
+        // 안 옮긴 글을 가리키던 링크는 그대로
+        assert!(body.contains("[[Free/메모]]"), "남의 링크를 고쳤다: {body}");
+        // 옮긴 글을 가리키던 링크는 따라온다
+        assert!(body.contains("[[회의록/메모.md]]"), "링크가 안 따라왔다: {body}");
     }
 
     #[test]
