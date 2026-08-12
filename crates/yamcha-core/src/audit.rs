@@ -19,7 +19,12 @@ use crate::parse;
 use crate::schema::{Builtin, BOOK_STATUSES, WRITING_STATUSES};
 use crate::vault::Vault;
 
-/// 점검에서 발견한 문제의 종류. 한 파일당 하나만 보고하며, 이 열거 순서가 우선순위다.
+/// 점검에서 발견한 문제의 종류. 이 열거 순서가 우선순위다.
+///
+/// 파일 규격 문제(앞의 일곱)는 **한 파일당 하나만** 보고한다 — 하나를 고치면
+/// 다음 것이 드러나는 편이 한꺼번에 늘어놓는 것보다 낫다. 별칭 문제(뒤의 둘)는
+/// 파일이 아니라 **vault 전체의 이름 관계**에서 나오므로 그 규칙 밖에 있다.
+/// 같은 파일이 규격 문제와 별칭 문제를 함께 낼 수 있다 — 서로 다른 고장이다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueKind {
@@ -37,6 +42,10 @@ pub enum IssueKind {
     TypeMismatch,
     /// book/writing의 status 값이 정의 밖
     UnknownStatus,
+    /// 같은 이름의 글이 따로 있어 이 별칭으로는 아무도 오지 않는다
+    ShadowedAlias,
+    /// 두 글 이상이 같은 별칭을 달고 있다 — 누를 때마다 고르게 된다
+    DuplicateAlias,
 }
 
 impl IssueKind {
@@ -49,6 +58,8 @@ impl IssueKind {
             IssueKind::MissingDate => "날짜 없음",
             IssueKind::TypeMismatch => "분류가 폴더와 다름",
             IssueKind::UnknownStatus => "알 수 없는 상태값",
+            IssueKind::ShadowedAlias => "쓰이지 않는 별칭",
+            IssueKind::DuplicateAlias => "겹치는 별칭",
         }
     }
 }
@@ -133,7 +144,124 @@ fn conflict_copy_of(abs: &Path) -> Option<String> {
 pub fn audit(vault: &Vault) -> Vec<NoteIssue> {
     let mut out = Vec::new();
     walk(vault, vault.root(), &mut out);
+    out.extend(alias_issues(vault));
     out.sort_by(|a, b| (a.kind as u8).cmp(&(b.kind as u8)).then(a.rel_path.cmp(&b.rel_path)));
+    out
+}
+
+/// rel 경로에서 확장자를 뗀 파일명
+fn stem_of(rel: &str) -> String {
+    rel.rsplit('/').next().unwrap_or(rel).trim_end_matches(".md").to_string()
+}
+
+/// 별칭이 **적어 뒀는데 작동하지 않는** 두 경우를 찾는다.
+///
+/// 이 둘은 시간이 지나야 생긴다. A에 '비비풀'을 달아 둔 뒤 몇 달 지나 '비비풀'이라는
+/// 제목의 글을 만들면 그 순간 A의 별칭이 죽는데, 편집 화면을 다시 열지 않는 한
+/// 알 길이 없다. 그래서 주기적으로 훑는 점검이 이걸 맡는다.
+///
+/// 파일을 다시 읽지 않고 `list_notes`의 요약을 쓴다 — 그 목록은 (수정시각, 크기)로
+/// 캐시되어 있어서, 점검을 눌러도 vault를 두 번 읽지 않는다.
+fn alias_issues(vault: &Vault) -> Vec<NoteIssue> {
+    let Ok(notes) = vault.list_notes() else {
+        return Vec::new();
+    };
+
+    // 이름(제목·파일명) → 그 이름을 가진 글들. 별칭은 이들에게 진다.
+    let mut owners: std::collections::HashMap<String, Vec<String>> = Default::default();
+    // 별칭 → 그 별칭을 단 글들
+    let mut claims: std::collections::HashMap<String, Vec<String>> = Default::default();
+    // 글 → 그 글이 단 별칭들 (보고 순서를 파일 순서로 유지하려고 따로 둔다)
+    let mut mine: Vec<(String, String, Vec<String>)> = Vec::new();
+
+    for n in &notes {
+        let stem = stem_of(&n.rel_path);
+        for name in [n.title.clone(), stem.clone()] {
+            if name.is_empty() {
+                continue;
+            }
+            let e = owners.entry(name).or_default();
+            if !e.contains(&n.rel_path) {
+                e.push(n.rel_path.clone());
+            }
+        }
+        let aliases = n
+            .frontmatter
+            .as_object()
+            .map(parse::extract_aliases)
+            .unwrap_or_default();
+        if aliases.is_empty() {
+            continue;
+        }
+        for a in &aliases {
+            claims.entry(a.clone()).or_default().push(n.rel_path.clone());
+        }
+        let display = if n.title.is_empty() { stem } else { n.title.clone() };
+        mine.push((n.rel_path.clone(), display, aliases));
+    }
+
+    let mut out = Vec::new();
+    for (rel, _display, aliases) in &mine {
+        // ① 가려진 별칭 — 같은 이름의 **다른** 글이 있다.
+        //    자기 제목과 같은 별칭은 치지 않는다. 쓸모는 없지만 링크는 제목으로 닿는다.
+        let shadowed: Vec<&String> = aliases
+            .iter()
+            .filter(|a| owners.get(*a).is_some_and(|v| v.iter().any(|r| r != rel)))
+            .collect();
+        if !shadowed.is_empty() {
+            let names = shadowed
+                .iter()
+                .map(|a| format!("'{a}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push(NoteIssue {
+                rel_path: rel.clone(),
+                kind: IssueKind::ShadowedAlias,
+                label: IssueKind::ShadowedAlias.label().to_string(),
+                detail: format!(
+                    "{names}은(는) 이미 다른 글의 이름이라, 이 별칭으로 링크해도 그 글로 갑니다."
+                ),
+                suggestion: "이 글에서 그 별칭을 빼냅니다 (다른 별칭은 그대로 둡니다).".into(),
+                fixable: true,
+            });
+        }
+
+        // ② 겹치는 별칭 — 다른 글도 같은 별칭을 달았다.
+        //    어느 쪽이 그 이름을 가져야 하는지는 앱이 정할 수 없으므로 알리기만 한다.
+        let mut shared: Vec<String> = Vec::new();
+        for a in aliases {
+            let Some(holders) = claims.get(a) else { continue };
+            if holders.len() < 2 {
+                continue;
+            }
+            let others = holders
+                .iter()
+                .filter(|r| *r != rel)
+                .map(|r| {
+                    mine.iter()
+                        .find(|(m, _, _)| m == r)
+                        .map(|(_, d, _)| d.clone())
+                        .unwrap_or_else(|| stem_of(r))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            shared.push(format!("'{a}' (함께 쓰는 글: {others})"));
+        }
+        if !shared.is_empty() {
+            out.push(NoteIssue {
+                rel_path: rel.clone(),
+                kind: IssueKind::DuplicateAlias,
+                label: IssueKind::DuplicateAlias.label().to_string(),
+                detail: format!(
+                    "{} — 이 별칭으로 링크하면 누를 때마다 어느 글인지 묻게 됩니다.",
+                    shared.join(" / ")
+                ),
+                suggestion: "어느 글이 그 이름을 가질지 정하고, 나머지 글에서 별칭을 빼주세요."
+                    .into(),
+                fixable: false,
+            });
+        }
+    }
     out
 }
 
@@ -283,6 +411,14 @@ pub fn fix(vault: &Vault, rel: &str, kind: IssueKind) -> Result<String, CoreErro
             "frontmatter 문법 오류는 자동으로 고칠 수 없습니다. 원문을 직접 수정해주세요.".into(),
         ));
     }
+    if kind == IssueKind::DuplicateAlias {
+        // 두 글이 같은 별칭을 달았을 때 어느 쪽이 그 이름을 가져야 하는지는
+        // 앱이 알 수 없다. 한쪽을 임의로 지우면 사용자가 의도한 쪽이 지워질 수 있다.
+        return Err(CoreError::Invalid(
+            "겹치는 별칭은 자동으로 정리할 수 없습니다. 어느 글이 그 이름을 가질지 정한 뒤 나머지에서 빼주세요."
+                .into(),
+        ));
+    }
     if kind == IssueKind::CloudConflictCopy {
         // 어느 쪽에 마지막 수정이 들어 있는지 파일만 봐서는 알 수 없다.
         // 잘못 고르면 사용자가 쓴 글이 사라진다 — 사람이 보고 정해야 한다.
@@ -319,13 +455,38 @@ pub fn fix(vault: &Vault, rel: &str, kind: IssueKind) -> Result<String, CoreErro
         }
         // TypeMismatch는 save_note의 정규화가 폴더 기준으로 type을 다시 써 준다
         IssueKind::TypeMismatch => {}
-        IssueKind::ParseError | IssueKind::CloudConflictCopy => {
+        IssueKind::ShadowedAlias => {
+            // **지금 다시 계산해서** 뺀다. 점검 목록을 띄워 둔 사이에 가리던 글이
+            // 사라졌을 수 있는데, 그때 화면에 적힌 대로 지우면 멀쩡한 별칭을 잃는다.
+            let kept = live_aliases(vault, &rel)?;
+            if kept.is_empty() {
+                fm.remove("aliases");
+            } else {
+                fm.insert("aliases".into(), json!(kept));
+            }
+        }
+        IssueKind::ParseError | IssueKind::CloudConflictCopy | IssueKind::DuplicateAlias => {
             unreachable!("위에서 이미 걸렀다")
         }
     }
 
     vault.save_note(&rel, Value::Object(fm), &note.body)?;
     Ok(rel)
+}
+
+/// 이 글의 별칭 중 **아직 살아 있는 것**만 (같은 이름의 다른 글에 가리지 않은 것).
+fn live_aliases(vault: &Vault, rel: &str) -> Result<Vec<String>, CoreError> {
+    let notes = vault.list_notes()?;
+    let mine = vault.parse_full(rel)?;
+    Ok(mine
+        .aliases
+        .into_iter()
+        .filter(|a| {
+            !notes
+                .iter()
+                .any(|n| n.rel_path != rel && (n.title == *a || stem_of(&n.rel_path) == *a))
+        })
+        .collect())
 }
 
 /// 타입 폴더 밖의 파일을 `Free/`로 옮기고 새 rel을 돌려준다.
@@ -363,6 +524,79 @@ mod tests {
         v.create_note("free", "메모", json!({})).unwrap();
         v.create_note("book", "클린 코드", json!({"author": "마틴"})).unwrap();
         assert!(audit(&v).is_empty(), "{:?}", audit(&v));
+    }
+
+    /// 별칭이 멀쩡하면 아무 말도 하지 않는다 (자기 제목과 같은 별칭도 고장은 아니다)
+    #[test]
+    fn 멀쩡한_별칭은_점검에_안_뜬다() {
+        let (_d, v) = setup();
+        v.create_note("free", "프로헥사디온 칼슘", json!({"aliases": ["비비풀"]}))
+            .unwrap();
+        // 자기 제목을 별칭으로 또 적어 둔 경우 — 쓸모는 없지만 링크는 제목으로 닿는다
+        v.create_note("free", "메모", json!({"aliases": ["메모"]})).unwrap();
+        assert!(audit(&v).is_empty(), "{:?}", audit(&v));
+    }
+
+    /// **가려진 별칭** — 나중에 같은 이름의 글이 생기면 별칭이 조용히 죽는다.
+    /// 그 노트를 다시 열어 보지 않는 한 알 길이 없어서 점검이 맡는다.
+    #[test]
+    fn 가려진_별칭을_찾아_뺀다() {
+        let (_d, v) = setup();
+        let aliased = v
+            .create_note("free", "프로헥사디온 칼슘", json!({"aliases": ["비비풀", "BB"]}))
+            .unwrap();
+        // 몇 달 뒤 '비비풀'이라는 제목의 글이 생겼다
+        v.create_note("writing", "비비풀", json!({})).unwrap();
+
+        let issues = audit(&v);
+        let i = issues
+            .iter()
+            .find(|i| i.kind == IssueKind::ShadowedAlias)
+            .expect("가려진 별칭을 못 찾았다");
+        assert_eq!(i.rel_path, aliased);
+        assert!(i.detail.contains("'비비풀'"), "{}", i.detail);
+        assert!(!i.detail.contains("'BB'"), "멀쩡한 별칭까지 걸었다: {}", i.detail);
+        assert!(i.fixable);
+
+        fix(&v, &aliased, IssueKind::ShadowedAlias).unwrap();
+        // 죽은 것만 빠지고 멀쩡한 별칭은 남는다
+        assert_eq!(v.parse_full(&aliased).unwrap().aliases, vec!["BB"]);
+        assert!(!audit(&v).iter().any(|i| i.kind == IssueKind::ShadowedAlias));
+    }
+
+    /// 별칭이 전부 죽었으면 `aliases` 키 자체를 지운다 (빈 배열을 남기지 않는다)
+    #[test]
+    fn 별칭이_전부_죽으면_키를_지운다() {
+        let (_d, v) = setup();
+        let aliased = v.create_note("free", "가나다", json!({"aliases": ["비비풀"]})).unwrap();
+        v.create_note("writing", "비비풀", json!({})).unwrap();
+
+        fix(&v, &aliased, IssueKind::ShadowedAlias).unwrap();
+        let fm = v.read_note(&aliased).unwrap().frontmatter;
+        assert!(fm.get("aliases").is_none(), "빈 aliases가 남았다: {fm:?}");
+    }
+
+    /// **겹치는 글**은 앱이 정할 수 없다 — 알리기만 하고 고치지 않는다
+    #[test]
+    fn 겹치는_별칭은_알리되_고치지_않는다() {
+        let (_d, v) = setup();
+        let a = v.create_note("free", "가나다", json!({"aliases": ["BB"]})).unwrap();
+        let b = v.create_note("writing", "라마바", json!({"aliases": ["BB"]})).unwrap();
+
+        let issues = audit(&v);
+        let dup: Vec<&NoteIssue> = issues
+            .iter()
+            .filter(|i| i.kind == IssueKind::DuplicateAlias)
+            .collect();
+        // 양쪽 모두에 뜬다 — 어느 쪽을 열어 고치든 되도록
+        assert_eq!(dup.len(), 2, "{issues:?}");
+        assert!(dup.iter().any(|i| i.rel_path == a));
+        assert!(dup.iter().any(|i| i.rel_path == b));
+        // 상대가 누구인지 알려 준다
+        assert!(dup.iter().any(|i| i.detail.contains("라마바")), "{dup:?}");
+        assert!(dup.iter().all(|i| !i.fixable));
+
+        assert!(fix(&v, &a, IssueKind::DuplicateAlias).is_err(), "임의로 고쳤다");
     }
 
     /// 두 기기에서 같은 글을 고치면 클라우드가 사본을 남긴다. 앱에서는 노트가 하나

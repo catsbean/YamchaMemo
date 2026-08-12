@@ -170,7 +170,7 @@ export default function Sidebar({
                 : "bg-rose-50 text-rose-600 hover:bg-rose-100"
             }`}
             onClick={() => setNav("audit")}
-            title="규격에서 벗어나 목록에 안 보이는 노트가 있습니다"
+            title="규격에서 벗어나 목록에 안 보이는 노트나, 적어 뒀는데 작동하지 않는 별칭이 있습니다"
           >
             <span>⚠️ 점검</span>
             <span className="font-bold">{issues.length}</span>
