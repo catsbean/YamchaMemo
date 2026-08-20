@@ -81,6 +81,10 @@ pub struct FieldDef {
     pub options: Vec<String>,
     /// Select일 때 선택지 한글 라벨 (options와 같은 길이)
     pub option_labels: Vec<String>,
+    /// 목록 화면의 각 줄에 이 칸의 값을 뱃지로 보여줄지.
+    /// 나중에 생긴 칸이라 예전 `_types.json`에는 없다 — 없으면 끔이다.
+    #[serde(default)]
+    pub in_list: bool,
 }
 
 impl FieldDef {
@@ -92,6 +96,7 @@ impl FieldDef {
             required,
             options: vec![],
             option_labels: vec![],
+            in_list: false,
         }
     }
 
@@ -103,6 +108,7 @@ impl FieldDef {
             required,
             options: options.iter().map(|(v, _)| v.to_string()).collect(),
             option_labels: options.iter().map(|(_, l)| l.to_string()).collect(),
+            in_list: false,
         }
     }
 }

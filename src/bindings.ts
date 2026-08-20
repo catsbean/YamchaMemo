@@ -767,6 +767,17 @@ async updateCustomTypeTemplate(id: string, template: string) : Promise<Result<Ty
 }
 },
 /**
+ * 목록 줄에 값을 내보일 칸 고르기 — 켠 칸만 이름으로 넘긴다 (나머지는 꺼진다)
+ */
+async updateCustomTypeListFields(id: string, names: string[]) : Promise<Result<TypeDef, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("update_custom_type_list_fields", { id, names }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 사용자 정의 분류 제거 — 내부 노트는 자유노트로 이동
  */
 async removeCustomType(id: string) : Promise<Result<null, string>> {
@@ -1136,7 +1147,12 @@ options: string[];
 /**
  * Select일 때 선택지 한글 라벨 (options와 같은 길이)
  */
-option_labels: string[] }
+option_labels: string[]; 
+/**
+ * 목록 화면의 각 줄에 이 칸의 값을 뱃지로 보여줄지.
+ * 나중에 생긴 칸이라 예전 `_types.json`에는 없다 — 없으면 끔이다.
+ */
+in_list?: boolean }
 /**
  * GUI 폼 위젯 종류
  */
@@ -1191,13 +1207,13 @@ saved_at: string;
 char_count: number }
 /**
  * 점검에서 발견한 문제의 종류. 이 열거 순서가 우선순위다.
- *
+ * 
  * 파일 규격 문제(앞의 일곱)는 **한 파일당 하나만** 보고한다 — 하나를 고치면
  * 다음 것이 드러나는 편이 한꺼번에 늘어놓는 것보다 낫다. 별칭 문제(뒤의 둘)는
  * 파일이 아니라 **vault 전체의 이름 관계**에서 나오므로 그 규칙 밖에 있다.
  * 같은 파일이 규격 문제와 별칭 문제를 함께 낼 수 있다 — 서로 다른 고장이다.
  */
-export type IssueKind =
+export type IssueKind = 
 /**
  * 클라우드 동기화가 만든 충돌 사본 — 같은 글이 둘로 갈라져 있다
  */
@@ -1225,11 +1241,11 @@ export type IssueKind =
 /**
  * book/writing의 status 값이 정의 밖
  */
-"unknown_status" |
+"unknown_status" | 
 /**
  * 같은 이름의 글이 따로 있어 이 별칭으로는 아무도 오지 않는다
  */
-"shadowed_alias" |
+"shadowed_alias" | 
 /**
  * 두 글 이상이 같은 별칭을 달고 있다 — 누를 때마다 고르게 된다
  */

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { NoteSummary } from "../bindings";
 import { useVault } from "../stores/vault";
-import { fileSuffix, fmStr } from "../lib/note";
+import { fileSuffix, fmDisplay, fmStr, listFields } from "../lib/note";
 import AuditDashboard from "./AuditDashboard";
 import Bookshelf from "./Bookshelf";
 import ContextMenu from "./ContextMenu";
@@ -71,6 +71,8 @@ function ListDashboard({ noteType }: { noteType: string }) {
   useEffect(() => setGroupFilters({}), [noteType]);
   const ctx = useContextMenu();
   const schema = schemas.find((s) => s.id === noteType);
+  // 목록 줄에 값을 내보일 칸 (분류 설정에서 사람이 켠 것만)
+  const shown = useMemo(() => listFields(schema), [schema]);
   // 사용자 정의 분류는 채울 필드를 스스로 정한 것이므로, 생성 폼 없이 바로 편집기로 시작한다
   const quickCreate = QUICK_CREATE.has(noteType) || (schema != null && !schema.builtin);
 
@@ -232,7 +234,7 @@ function ListDashboard({ noteType }: { noteType: string }) {
                       ),
                     )}
                   >
-                    <Row note={n} noteType={noteType} />
+                    <Row note={n} noteType={noteType} fields={shown} />
                   </button>
                 </li>
               ))}
@@ -264,10 +266,32 @@ function Title({ note, className }: { note: NoteSummary; className: string }) {
   );
 }
 
-function Row({ note, noteType }: { note: NoteSummary; noteType: string }) {
+function Row({
+  note,
+  noteType,
+  fields = [],
+}: {
+  note: NoteSummary;
+  noteType: string;
+  /** 분류 정의에서 '목록에 보이기'를 켠 칸들 — 제목 뒤에 뱃지로 붙는다 */
+  fields?: { name: string; label: string }[];
+}) {
   const date = (
     <span className="w-24 shrink-0 text-xs text-neutral-400">{note.date}</span>
   );
+  // 켠 칸이라도 값이 빈 노트에는 빈 뱃지를 만들지 않는다
+  const extras = fields
+    .map((f) => ({ field: f, value: fmDisplay(note, f.name) }))
+    .filter(({ value }) => value !== "")
+    .map(({ field, value }) => (
+      <span
+        key={field.name}
+        className="shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 text-2xs text-neutral-500"
+        title={field.label}
+      >
+        {value}
+      </span>
+    ));
   const tags = note.tags.length > 0 && (
     <span className="ml-auto flex shrink-0 gap-1">
       {note.tags.slice(0, 3).map((t) => (
@@ -309,6 +333,7 @@ function Row({ note, noteType }: { note: NoteSummary; noteType: string }) {
         <>
           {date}
           <Title note={note} className="truncate text-sm" />
+          {extras}
           {host && (
             <span className="shrink-0 rounded bg-sky-50 px-1.5 py-0.5 text-2xs text-sky-600">
               {host}

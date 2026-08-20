@@ -469,6 +469,25 @@ impl Vault {
         Ok(updated)
     }
 
+    /// 목록 화면 각 줄에 값을 내보일 칸을 정한다 (이름이 `names`에 있는 칸만 켠다).
+    ///
+    /// 목록이 보여 주는 것은 원래 고정이었다 — 날짜·제목·태그. 사용자가 만든 칸은
+    /// 분류마다 다르므로 앱이 무엇이 중요한지 알 수 없어, 켤 칸을 사람이 고른다.
+    /// 날짜·태그는 이미 줄에 나오므로 여기서 고르는 대상이 아니다.
+    pub fn set_list_fields(&mut self, id: &str, names: &[String]) -> Result<TypeDef, CoreError> {
+        let def = self
+            .types
+            .iter_mut()
+            .find(|t| !t.builtin && t.id == id)
+            .ok_or_else(|| CoreError::Invalid(format!("수정할 분류가 없습니다: {id}")))?;
+        for f in def.fields.iter_mut() {
+            f.in_list = names.iter().any(|n| n == &f.name);
+        }
+        let updated = def.clone();
+        self.save_custom_types()?;
+        Ok(updated)
+    }
+
     /// 사용자 정의 타입 제거 — 내부 노트는 자유노트로 이동한다.
     pub fn remove_custom_type(&mut self, id: &str) -> Result<(), CoreError> {
         let def = self
@@ -3198,6 +3217,59 @@ mod tests {
 
         // 없는 분류는 오류
         assert!(v.update_custom_type_template("없음", "x").is_err());
+    }
+
+    #[test]
+    fn set_list_fields_persists_and_old_types_json_defaults_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = Vault::open(dir.path()).unwrap();
+        v.add_custom_type(
+            "용어집",
+            "용어집",
+            vec![FieldDef::new("분류", "분류", FieldKind::Text, false)],
+            "",
+        )
+        .unwrap();
+
+        // 켜기 전에는 꺼져 있다 (칸을 만들었다고 목록에 끼어들지 않는다)
+        let before = v.def_by_id("용어집").unwrap().clone();
+        assert!(before.fields.iter().all(|f| !f.in_list));
+
+        v.set_list_fields("용어집", &["분류".to_string()]).unwrap();
+        let after = Vault::open(dir.path()).unwrap();
+        let f = after.def_by_id("용어집").unwrap();
+        assert!(f.fields.iter().find(|f| f.name == "분류").unwrap().in_list);
+        // 고른 칸 하나만 켜진다
+        assert_eq!(f.fields.iter().filter(|f| f.in_list).count(), 1);
+
+        // 빈 목록을 주면 전부 꺼진다
+        let mut v = Vault::open(dir.path()).unwrap();
+        v.set_list_fields("용어집", &[]).unwrap();
+        let after = Vault::open(dir.path()).unwrap();
+        assert!(after
+            .def_by_id("용어집")
+            .unwrap()
+            .fields
+            .iter()
+            .all(|f| !f.in_list));
+
+        // in_list가 아예 없는 예전 파일도 열린다 (없으면 꺼짐)
+        fs::write(
+            dir.path().join(TYPES_FILE),
+            r#"[{"id":"옛분류","label":"옛분류","folder":"옛분류","fields":[{"name":"분류","label":"분류","kind":"text","required":false,"options":[],"option_labels":[]}],"template":"","builtin":false}]"#,
+        )
+        .unwrap();
+        let old = Vault::open(dir.path()).unwrap();
+        assert!(old
+            .def_by_id("옛분류")
+            .unwrap()
+            .fields
+            .iter()
+            .all(|f| !f.in_list));
+
+        // 내장 분류는 고를 수 없다 (목록 줄이 손으로 짜여 있다)
+        let mut v = Vault::open(dir.path()).unwrap();
+        assert!(v.set_list_fields("free", &["title".to_string()]).is_err());
     }
 
     #[test]

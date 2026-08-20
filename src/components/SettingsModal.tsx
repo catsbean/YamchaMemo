@@ -289,8 +289,10 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
               사용자 추가 분류
             </h3>
             <p className="mb-2 text-xs text-neutral-400">
-              각 분류로 새로 만드는 노트의 본문 템플릿입니다. frontmatter는
-              건드리지 않으며, 이미 만든 노트에는 영향을 주지 않습니다.{" "}
+              분류마다 <b>목록에 함께 보일 칸</b>과 새 노트의 <b>본문 템플릿</b>을
+              정합니다. 켠 칸은 그 분류의 목록에서 제목 옆에 값이 붙습니다(날짜·태그는
+              늘 보이므로 고르는 대상이 아닙니다). 템플릿은 frontmatter를 건드리지
+              않으며 이미 만든 노트에도 영향을 주지 않습니다 —{" "}
               <code>{"{{date}}"}</code>, <code>{"{{title}}"}</code> 등의 자리표시자를
               쓸 수 있습니다.
             </p>
@@ -300,6 +302,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
                   key={s.id}
                   id={s.id}
                   label={s.label}
+                  fields={s.fields}
                   template={s.template}
                   onRemoved={removeCustom}
                   onTemplateSaved={removeCustom}

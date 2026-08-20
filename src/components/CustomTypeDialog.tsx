@@ -19,6 +19,7 @@ interface FieldRow {
   kind: FieldKind;
   required: boolean;
   options: string; // 쉼표 구분 (select일 때)
+  inList: boolean; // 목록 줄에 값을 뱃지로 내보일지
 }
 
 const EMPTY_ROW: FieldRow = {
@@ -27,6 +28,7 @@ const EMPTY_ROW: FieldRow = {
   kind: "text",
   required: false,
   options: "",
+  inList: false,
 };
 
 /** 사용자 정의 분류 생성: 이름 + 추가 frontmatter 필드 + 본문 템플릿 */
@@ -69,6 +71,7 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
             required: r.required,
             options,
             option_labels: options,
+            in_list: r.inList,
           };
         });
       const ok = await addCustomType(label.trim(), id.trim(), fields, template);
@@ -161,6 +164,10 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
           <span className="text-xs font-medium text-neutral-500">
             추가 frontmatter 필드
           </span>
+          <p className="text-2xs text-neutral-400">
+            [목록]을 켜면 이 분류의 목록에서 제목 옆에 그 칸의 값이 함께 보입니다
+            (나중에 설정 &gt; 기록에서 바꿀 수 있습니다).
+          </p>
           <div className="mt-1 flex flex-col gap-1.5">
             {rows.map((r, i) => (
               <div key={i} className="flex items-center gap-1.5">
@@ -189,7 +196,9 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
                 </select>
                 {r.kind === "select" && (
                   <input
-                    className={`${inputCls} flex-1`}
+                    // min-w-0이 없으면 flex-1이 줄어들지 못해(기본 min-width:auto)
+                    // 칸이 하나 늘어난 지금은 줄이 창 밖으로 밀린다
+                    className={`${inputCls} w-0 min-w-0 flex-1`}
                     placeholder="선택지 (쉼표 구분)"
                     value={r.options}
                     onChange={(e) => setRow(i, { options: e.target.value })}
@@ -202,6 +211,17 @@ export default function CustomTypeDialog({ onClose }: { onClose: () => void }) {
                     onChange={(e) => setRow(i, { required: e.target.checked })}
                   />
                   필수
+                </label>
+                <label
+                  className="flex items-center gap-1 text-xs text-neutral-500"
+                  title="이 분류의 목록에서 각 줄에 이 칸의 값을 함께 보여줍니다"
+                >
+                  <input
+                    type="checkbox"
+                    checked={r.inList}
+                    onChange={(e) => setRow(i, { inList: e.target.checked })}
+                  />
+                  목록
                 </label>
                 <button
                   className="px-1 text-neutral-400 hover:text-rose-500"

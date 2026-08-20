@@ -61,6 +61,43 @@ export function fmStr(source: unknown, key: string): string {
   return "";
 }
 
+/** frontmatter 값을 목록 뱃지에 쓸 한 줄로.
+ *
+ *  fmStr과 나누어 둔 이유는 받는 값의 폭이 다르기 때문이다 — 여기 오는 것은
+ *  사용자가 자기 분류에 만든 칸이라 무엇이든 들어 있을 수 있다. 별칭 같은 목록은
+ *  이어 붙이고, 위키링크는 대괄호를 걷어낸다(`[[화학]]` → `화학`). 화면에 그대로
+ *  나가는 값이므로 모르는 모양(객체 등)은 빈 문자열로 흘려보낸다. */
+export function fmDisplay(source: unknown, key: string): string {
+  if (!source || typeof source !== "object") return "";
+  const fm =
+    "frontmatter" in source
+      ? (source as { frontmatter: unknown }).frontmatter
+      : source;
+  if (!fm || typeof fm !== "object" || Array.isArray(fm)) return "";
+  const v = (fm as Record<string, unknown>)[key];
+  const one = (x: unknown): string =>
+    typeof x === "string"
+      ? x.replace(/^\[\[|\]\]$/g, "").trim()
+      : typeof x === "number"
+        ? String(x)
+        : "";
+  if (Array.isArray(v)) return v.map(one).filter(Boolean).join(", ");
+  return one(v);
+}
+
+/** 목록 줄에 값을 내보일 칸들 — 분류 정의에서 사람이 켠 것만.
+ *
+ *  날짜·태그는 줄이 이미 보여 주므로 켜져 있어도 뺀다. 켤 때 걸러 두긴 하지만,
+ *  손으로 고친 `_types.json`이 들어와도 같은 값이 두 번 나오지는 않게 한다. */
+export function listFields<F extends { name: string; in_list?: boolean }>(
+  schema: { fields: F[] } | null | undefined,
+): F[] {
+  if (!schema) return [];
+  return schema.fields.filter(
+    (f) => f.in_list && f.name !== "date" && f.name !== "tags",
+  );
+}
+
 /** 제목이 같은 노트를 구별하려고 파일명에만 붙는 꼬리표를 돌려준다.
  *
  *  제목이 "제목"인 노트가 둘이면 파일은 `제목.md` · `제목 (2).md`가 되는데,

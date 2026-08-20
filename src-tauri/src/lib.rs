@@ -80,6 +80,7 @@ pub fn run() {
         commands::maintenance::purge_trash,
         commands::add_custom_type,
         commands::update_custom_type_template,
+        commands::update_custom_type_list_fields,
         commands::remove_custom_type,
         commands::notes::rename_note,
         commands::notes::move_note,

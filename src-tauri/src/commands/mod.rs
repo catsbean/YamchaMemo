@@ -341,6 +341,17 @@ pub fn update_custom_type_template(
     })
 }
 
+/// 목록 줄에 값을 내보일 칸 고르기 — 켠 칸만 이름으로 넘긴다 (나머지는 꺼진다)
+#[tauri::command]
+#[specta::specta]
+pub fn update_custom_type_list_fields(
+    state: State<'_, AppState>,
+    id: String,
+    names: Vec<String>,
+) -> Result<TypeDef, String> {
+    with_ctx_write(&state, |c| c.vault.set_list_fields(&id, &names))
+}
+
 /// 사용자 정의 분류 제거 — 내부 노트는 자유노트로 이동
 #[tauri::command]
 #[specta::specta]
