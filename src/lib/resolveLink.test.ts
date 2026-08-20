@@ -182,13 +182,25 @@ describe("자동완성 후보 만들기", () => {
       aliases: ["비비풀"],
     });
     expect(linkOptions([n])).toEqual([
-      { label: "프로헥사디온 칼슘", insert: "프로헥사디온 칼슘", detail: "" },
-      { label: "비비풀", insert: "비비풀", detail: "별칭 → 프로헥사디온 칼슘" },
+      { label: "프로헥사디온 칼슘", insert: "프로헥사디온 칼슘", detail: "Free" },
+      {
+        label: "비비풀",
+        insert: "비비풀",
+        detail: "Free · 별칭 → 프로헥사디온 칼슘",
+      },
     ]);
   });
 
+  /** 어느 분류의 글인지가 이름만큼이나 단서다 — 겹치지 않아도 늘 보여 준다 */
+  it("분류 이름을 꼬리말에 적고, 정의가 있으면 라벨로 적는다", () => {
+    const n = note("Free/자유글.md", "자유글");
+    expect(linkOptions([n], [{ id: "free", label: "자유노트" }])[0].detail).toBe(
+      "자유노트",
+    );
+  });
+
   /** 고르는 순간에는 사용자가 어느 쪽인지 안다 — 그때 폴더까지 못 박아 둔다 */
-  it("이름이 겹치면 폴더까지 넣고 폴더를 꼬리말로 보여 준다", () => {
+  it("이름이 겹치면 폴더까지 적어 넣는다", () => {
     const a = note("Free/중복노트.md", "중복노트");
     const b = note("회의록/중복노트.md", "중복노트");
     expect(linkOptions([a, b])).toEqual([
