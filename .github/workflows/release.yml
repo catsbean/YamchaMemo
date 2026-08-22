@@ -23,10 +23,10 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           # 로컬 개발 환경과 같은 버전으로 고정한다. 메이저만 적으면 최신
           # 11.x가 깔려서, 새 pnpm이 요구하는 Node 버전이 올라갈 때 갑자기
@@ -34,7 +34,7 @@ jobs:
           version: 11.13.1
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # pnpm 11은 node:sqlite를 쓰므로 Node 22.13 미만에서는 실행되지
           # 않는다. 로컬과 같은 24로 맞춘다.

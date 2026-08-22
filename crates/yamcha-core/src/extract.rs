@@ -303,8 +303,9 @@ fn aes_ecb_decrypt(key: &[u8; 16], data: &[u8]) -> Vec<u8> {
     };
     let usable = data.len() - (data.len() % 16);
     let mut out = data[..usable].to_vec();
-    for block in out.chunks_exact_mut(16) {
-        let Ok(b) = <&mut aes::cipher::Array<u8, aes::cipher::consts::U16>>::try_from(block)
+    for block in out.as_chunks_mut::<16>().0 {
+        let Ok(b) =
+            <&mut aes::cipher::Array<u8, aes::cipher::consts::U16>>::try_from(block.as_mut_slice())
         else {
             continue;
         };
@@ -418,8 +419,10 @@ fn scan_records(data: &[u8], out: &mut String) {
 fn decode_para_text(body: &[u8], out: &mut String) {
     const EXTENDED: [u16; 13] = [1, 2, 3, 11, 12, 14, 15, 16, 17, 18, 21, 22, 23];
     let units: Vec<u16> = body
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
         .collect();
     let mut buf: Vec<u16> = Vec::with_capacity(units.len());
     let mut i = 0usize;
@@ -802,8 +805,11 @@ mod tests {
         let cipher = aes::Aes128::new_from_slice(&key).unwrap();
         let mut sealed = deflated.clone();
         sealed.resize(sealed.len() + (16 - sealed.len() % 16) % 16, 0);
-        for block in sealed.chunks_exact_mut(16) {
-            let b = <&mut aes::cipher::Array<u8, aes::cipher::consts::U16>>::try_from(block).unwrap();
+        for block in sealed.as_chunks_mut::<16>().0 {
+            let b = <&mut aes::cipher::Array<u8, aes::cipher::consts::U16>>::try_from(
+                block.as_mut_slice(),
+            )
+            .unwrap();
             cipher.encrypt_block(b);
         }
 

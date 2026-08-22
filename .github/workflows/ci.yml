@@ -19,17 +19,17 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           # release.yml과 같은 버전으로 고정 (메이저만 적으면 새 pnpm이 요구하는
           # Node 버전이 올라갈 때 갑자기 깨진다)
           version: 11.13.1
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
