@@ -9,12 +9,32 @@ import {
   coverSrc,
   fmStr,
 } from "../lib/note";
+import {
+  DATE_SORT,
+  TITLE_SORT,
+  defaultDir,
+  sortNotes,
+  type SortOption,
+  type SortSpec,
+} from "../lib/sort";
+import SortControl, { useSort } from "./SortControl";
 import BookCreateDialog from "./BookCreateDialog";
 import BookSearchDialog from "./BookSearchDialog";
 import EnrichDialog from "./EnrichDialog";
 import ExportBooksDialog from "./ExportBooksDialog";
 
 type GroupBy = "genre" | "status" | "author" | "none";
+
+/** 책을 줄 세울 수 있는 기준. 목록 뷰의 표 머리글도 이 키를 그대로 쓴다 —
+ *  책장에서 작가순으로 보다가 목록으로 넘어가면 그 차례가 이어진다. */
+const BOOK_SORTS: SortOption[] = [
+  DATE_SORT,
+  TITLE_SORT,
+  { key: "author", label: "작가" },
+  { key: "genre", label: "분야" },
+  { key: "status", label: "상태", order: STATUS_ORDER },
+  { key: "rating", label: "평점", numeric: true },
+];
 
 /** 아이콘만 있는 툴바 버튼 — 폭이 좁아져도 줄바꿈되지 않게 정사각으로 고정한다 */
 const ICON_BTN =
@@ -93,9 +113,10 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
   const [enriching, setEnriching] = useState(false);
   const [exporting, setExporting] = useState(false);
 
+  const [sort, setSort] = useSort("book", BOOK_SORTS);
   const books = useMemo(
-    () => notes.filter((n) => n.note_type === "book"),
-    [notes],
+    () => sortNotes(notes.filter((n) => n.note_type === "book"), sort, BOOK_SORTS),
+    [notes, sort],
   );
 
   return (
@@ -169,9 +190,14 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
       </header>
 
       {view === "grid" ? (
-        <GridView books={books} compact={compact} />
+        <GridView
+          books={books}
+          compact={compact}
+          sort={sort}
+          onSort={setSort}
+        />
       ) : (
-        <ListView books={books} />
+        <ListView books={books} sort={sort} onSort={setSort} />
       )}
 
       {creating && <BookCreateDialog onClose={() => setCreating(false)} />}
@@ -186,7 +212,17 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
 
 // ---------- 그리드(책장) 뷰 ----------
 
-function GridView({ books, compact }: { books: NoteSummary[]; compact: boolean }) {
+function GridView({
+  books,
+  compact,
+  sort,
+  onSort,
+}: {
+  books: NoteSummary[];
+  compact: boolean;
+  sort: SortSpec;
+  onSort: (spec: SortSpec) => void;
+}) {
   const { vaultPath, openNote, openReadingForBook } = useVault();
   const [groupBy, setGroupBy] = useState<GroupBy>("genre");
   // 그룹별 표시 on/off (분야가 많아질 때 골라 보기)
@@ -215,7 +251,9 @@ function GridView({ books, compact }: { books: NoteSummary[]; compact: boolean }
 
   return (
     <>
-      <div className="flex gap-1 border-b border-neutral-100 px-4 py-1.5 text-xs">
+      {/* 3단 보기처럼 폭이 좁아지면 묶기 버튼과 정렬이 두 줄로 접힌다 —
+          한 줄을 고집하면 툴바가 옆으로 삐져나간다 */}
+      <div className="flex flex-wrap items-center gap-1 border-b border-neutral-100 px-4 py-1.5 text-xs">
         {(
           [
             ["genre", "분야별"],
@@ -239,6 +277,8 @@ function GridView({ books, compact }: { books: NoteSummary[]; compact: boolean }
             {label}
           </button>
         ))}
+        <span className="flex-1" />
+        <SortControl options={BOOK_SORTS} value={sort} onChange={onSort} />
       </div>
 
       {groupBy !== "none" && groups.length > 1 && (
@@ -407,7 +447,57 @@ function BookCard({
 
 // ---------- 목록(표) 뷰: 인라인 편집 + 대량 입력 ----------
 
-function ListView({ books }: { books: NoteSummary[] }) {
+/** 표 머리글 한 칸 — 누르면 그 칸으로 줄을 세운다 (같은 칸을 또 누르면 뒤집힌다).
+ *  표에서 사람이 가장 먼저 누르는 곳이 머리글이라, 정렬 버튼을 따로 두기보다
+ *  머리글 자체를 누를 수 있게 했다. */
+function SortTh({
+  field,
+  width = "",
+  sort,
+  onSort,
+}: {
+  field: string;
+  width?: string;
+  sort: SortSpec;
+  onSort: (spec: SortSpec) => void;
+}) {
+  const opt = BOOK_SORTS.find((o) => o.key === field)!;
+  const on = sort.key === field;
+  return (
+    <th
+      className={`border-b border-neutral-200 px-2 py-2 text-left font-normal ${width}`}
+    >
+      <button
+        type="button"
+        aria-pressed={on}
+        className={`flex items-center gap-0.5 rounded px-1 py-0.5 hover:bg-neutral-100 ${
+          on ? "text-neutral-800" : ""
+        }`}
+        onClick={() =>
+          onSort(
+            on
+              ? { key: field, dir: sort.dir === "asc" ? "desc" : "asc" }
+              : { key: field, dir: defaultDir(field) },
+          )
+        }
+        title={on ? "다시 누르면 차례가 뒤집힙니다" : `${opt.label} 순으로`}
+      >
+        {opt.label}
+        {on && <span>{sort.dir === "asc" ? "↑" : "↓"}</span>}
+      </button>
+    </th>
+  );
+}
+
+function ListView({
+  books,
+  sort,
+  onSort,
+}: {
+  books: NoteSummary[];
+  sort: SortSpec;
+  onSort: (spec: SortSpec) => void;
+}) {
   const { openNote, openReadingForBook, updateFrontmatter, refresh } =
     useVault();
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -455,15 +545,18 @@ function ListView({ books }: { books: NoteSummary[] }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="border-b border-neutral-100 px-4 py-1.5">
+      <div className="flex flex-wrap items-center gap-2 border-b border-neutral-100 px-4 py-1.5">
         <button
           className="text-xs text-neutral-500 underline hover:text-neutral-700"
           onClick={() => setBulkOpen((v) => !v)}
         >
           {bulkOpen ? "대량 입력 닫기" : "대량 입력 열기 (Excel/텍스트 붙여넣기)"}
         </button>
+        <span className="flex-1" />
+        {/* 표 머리글로도 세울 수 있지만 날짜 칸은 표에 없다 — 여기서 마저 고른다 */}
+        <SortControl options={BOOK_SORTS} value={sort} onChange={onSort} />
         {bulkOpen && (
-          <div className="mt-2 flex flex-col gap-2 pb-2">
+          <div className="mt-2 flex w-full flex-col gap-2 pb-2">
             <p className="text-2xs text-neutral-400">
               한 줄에 한 권 — <b>제목, 저자, 분야, 상태</b> 순서. 구분자는
               탭(Excel 복사), <code>|</code>, 쉼표 모두 인식. 제목만 있어도
@@ -495,11 +588,11 @@ function ListView({ books }: { books: NoteSummary[] }) {
         <table className="w-full min-w-[40rem] border-collapse text-sm">
           <thead className="sticky top-0 bg-neutral-50 text-xs text-neutral-500">
             <tr>
-              <th className="border-b border-neutral-200 px-3 py-2 text-left">제목</th>
-              <th className="w-32 border-b border-neutral-200 px-2 py-2 text-left">저자</th>
-              <th className="w-24 border-b border-neutral-200 px-2 py-2 text-left">분야</th>
-              <th className="w-28 border-b border-neutral-200 px-2 py-2 text-left">상태</th>
-              <th className="w-16 border-b border-neutral-200 px-2 py-2 text-left">평점</th>
+              <SortTh field="title" width="px-3" sort={sort} onSort={onSort} />
+              <SortTh field="author" width="w-32" sort={sort} onSort={onSort} />
+              <SortTh field="genre" width="w-24" sort={sort} onSort={onSort} />
+              <SortTh field="status" width="w-28" sort={sort} onSort={onSort} />
+              <SortTh field="rating" width="w-16" sort={sort} onSort={onSort} />
               <th className="w-20 border-b border-neutral-200 px-2 py-2"></th>
             </tr>
           </thead>

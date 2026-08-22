@@ -17,6 +17,8 @@ import HomeDashboard from "./HomeDashboard";
 import ReadingDashboard from "./ReadingDashboard";
 import ReviewDashboard from "./ReviewDashboard";
 import ReviewModal from "./ReviewModal";
+import SortControl, { useSort } from "./SortControl";
+import { DATE_SORT, TITLE_SORT, sortNotes, type SortOption } from "../lib/sort";
 import TagBrowser from "./TagBrowser";
 import WritingDashboard from "./WritingDashboard";
 
@@ -71,6 +73,24 @@ function ListDashboard({ noteType }: { noteType: string }) {
   useEffect(() => setGroupFilters({}), [noteType]);
   const ctx = useContextMenu();
   const schema = schemas.find((s) => s.id === noteType);
+  // 줄 세울 수 있는 칸 — 날짜·제목에 더해, 고르는 칸(select)과 사람이 목록에
+  // 보이기로 켠 칸까지. 화면에 안 보이는 칸으로 세우면 왜 이 차례인지 알 수 없다
+  const sortOptions = useMemo<SortOption[]>(() => {
+    const out: SortOption[] = [DATE_SORT, TITLE_SORT];
+    const seen = new Set(["date", "title", "tags"]);
+    for (const f of schema?.fields ?? []) {
+      if (seen.has(f.name) || !(f.kind === "select" || f.in_list)) continue;
+      seen.add(f.name);
+      out.push({
+        key: f.name,
+        label: f.label,
+        order: f.kind === "select" && f.options.length > 0 ? f.options : undefined,
+        numeric: f.kind === "number",
+      });
+    }
+    return out;
+  }, [schema]);
+  const [sort, setSort] = useSort(noteType, sortOptions);
   // 목록 줄에 값을 내보일 칸 (분류 설정에서 사람이 켠 것만)
   const shown = useMemo(() => listFields(schema), [schema]);
   // 사용자 정의 분류는 채울 필드를 스스로 정한 것이므로, 생성 폼 없이 바로 편집기로 시작한다
@@ -107,8 +127,8 @@ function ListDashboard({ noteType }: { noteType: string }) {
     for (const [name, value] of Object.entries(groupFilters)) {
       out = out.filter((n) => fmStr(n, name) === value);
     }
-    return out;
-  }, [all, tagFilter, groupFilters]);
+    return sortNotes(out, sort, sortOptions);
+  }, [all, tagFilter, groupFilters, sort, sortOptions]);
 
   // 데일리는 월별 그룹, 나머지는 단일 목록
   const groups = useMemo(() => {
@@ -153,6 +173,10 @@ function ListDashboard({ noteType }: { noteType: string }) {
           {noteType === "daily" ? "오늘의 노트" : "새로 만들기"}
         </button>
       </header>
+
+      <div className="border-b border-neutral-100 px-6 py-1.5">
+        <SortControl options={sortOptions} value={sort} onChange={setSort} />
+      </div>
 
       {allTags.length > 0 && (
         <div className="flex flex-wrap gap-1.5 border-b border-neutral-100 px-6 py-2">

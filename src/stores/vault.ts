@@ -6,6 +6,7 @@ import { join } from "@tauri-apps/api/path";
 import { notifyOtherWindows } from "../lib/windowSync";
 import { canMoveType } from "../lib/note";
 import { normalizeFilter, type ReviewFilter } from "../lib/reviewFilter";
+import type { SortSpec } from "../lib/sort";
 import {
   linkReaches,
   linkTargetOf,
@@ -112,6 +113,11 @@ interface VaultStore {
   /** 독서기록 새로만들기 시 책 선택 팝업 표시 방식 */
   bookPickerView: "grid" | "list";
   setBookPickerView(v: "grid" | "list"): Promise<void>;
+  /** 목록 화면마다 마지막으로 고른 정렬. 키는 분류 id ("free"·"book"·사용자 분류 id).
+   *  분류마다 따로 기억하는 이유는 세울 기준이 분류마다 다르기 때문이다 —
+   *  책은 작가로, 회의록은 날짜로 보다가 메뉴를 옮길 때마다 다시 고르면 성가시다. */
+  sorts: Record<string, SortSpec>;
+  setSort(scope: string, spec: SortSpec): Promise<void>;
   /** 휴지통 자동삭제 보존 일수 (0 = 안 함) */
   trashRetentionDays: number;
   setTrashRetention(days: number): Promise<void>;
@@ -446,6 +452,13 @@ export const useVault = create<VaultStore>((set, get) => {
       const store = await settings();
       await store.set("bookPickerView", v);
     },
+    sorts: {},
+    async setSort(scope, spec) {
+      const sorts = { ...get().sorts, [scope]: spec };
+      set({ sorts });
+      const store = await settings();
+      await store.set("listSorts", sorts);
+    },
     callouts: [],
     async refreshCallouts() {
       const r = await commands.listCallouts();
@@ -622,6 +635,10 @@ export const useVault = create<VaultStore>((set, get) => {
           (await store.get<boolean>("deleteConfirm")) ?? true;
         const bookPickerView =
           (await store.get<"grid" | "list">("bookPickerView")) ?? "grid";
+        // 값이 성한지는 화면이 고를 수 있는 칸 목록과 견줘 봐야 알 수 있어
+        // (없어진 사용자 칸일 수 있다) 여기서는 담아만 두고 화면에서 다듬는다
+        const sorts =
+          (await store.get<Record<string, SortSpec>>("listSorts")) ?? {};
         const trashRetentionDays =
           (await store.get<number>("trashRetentionDays")) ?? 7;
         const historyMax = (await store.get<number>("historyMax")) ?? 20;
@@ -665,6 +682,7 @@ export const useVault = create<VaultStore>((set, get) => {
           shortcutsOff,
           deleteConfirm,
           bookPickerView,
+          sorts,
           trashRetentionDays,
           historyMax,
           historyIntervalSecs,

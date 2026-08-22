@@ -4,6 +4,13 @@ import type { NoteSummary } from "../bindings";
 import { useVault } from "../stores/vault";
 import { fmStr } from "../lib/note";
 import NewNoteDialog, { nextEpisodeNumber } from "./NewNoteDialog";
+import SortControl, { useSort } from "./SortControl";
+import {
+  DATE_SORT,
+  TITLE_SORT,
+  sortNotes,
+  type SortOption,
+} from "../lib/sort";
 
 // 글쓰기 전용 상태 라벨 (책 상태와 다름 — 통합하지 않는다)
 const STATUS_LABELS: Record<string, string> = {
@@ -13,6 +20,14 @@ const STATUS_LABELS: Record<string, string> = {
   done: "완성",
 };
 const STATUS_ORDER = ["draft", "revise", "idea", "done"];
+/** 원고를 줄 세울 수 있는 기준 — 연재 시리즈 안의 차례(회차)는 손대지 않는다 */
+const WRITING_SORTS: SortOption[] = [
+  DATE_SORT,
+  TITLE_SORT,
+  { key: "status", label: "상태", order: STATUS_ORDER },
+  { key: "category", label: "분야" },
+  { key: "chars", label: "글자수", numeric: true },
+];
 const STATUS_COLORS: Record<string, string> = {
   idea: "bg-neutral-100 text-neutral-600",
   draft: "bg-sky-50 text-sky-700",
@@ -27,6 +42,7 @@ export default function WritingDashboard() {
 
   useCreateRequest(() => setCreating(true));
   const [groupMode, setGroupMode] = useState<"status" | "category">("status");
+  const [sort, setSort] = useSort("writing", WRITING_SORTS);
 
   const pieces = useMemo(
     () => notes.filter((n) => n.note_type === "writing"),
@@ -60,8 +76,9 @@ export default function WritingDashboard() {
 
   const groups = useMemo(() => {
     const map = new Map<string, NoteSummary[]>();
+    const sorted = sortNotes(singles, sort, WRITING_SORTS);
     if (groupMode === "status") {
-      for (const p of singles) {
+      for (const p of sorted) {
         const s = fmStr(p, "status") || "idea";
         map.set(s, [...(map.get(s) ?? []), p]);
       }
@@ -69,7 +86,7 @@ export default function WritingDashboard() {
         (s) => [STATUS_LABELS[s] ?? s, map.get(s)!] as const,
       );
     }
-    for (const p of singles) {
+    for (const p of sorted) {
       const c = fmStr(p, "category") || "미분류";
       map.set(c, [...(map.get(c) ?? []), p]);
     }
@@ -78,7 +95,7 @@ export default function WritingDashboard() {
         a === "미분류" ? 1 : b === "미분류" ? -1 : a.localeCompare(b, "ko"),
       )
       .map((k) => [k, map.get(k)!] as const);
-  }, [singles, groupMode]);
+  }, [singles, groupMode, sort]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -121,6 +138,10 @@ export default function WritingDashboard() {
           </button>
         </div>
       </header>
+
+      <div className="border-b border-neutral-100 px-6 py-1.5">
+        <SortControl options={WRITING_SORTS} value={sort} onChange={setSort} />
+      </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {pieces.length === 0 && (
