@@ -3,9 +3,10 @@ chcp 65001 >nul
 setlocal enabledelayedexpansion
 
 rem 이 배치파일이 하는 일:
-rem   1. 버전을 올리고 (package.json / tauri.conf.json / Cargo.toml / Cargo.lock)
-rem   2. 커밋 + 태그 생성
-rem   3. origin에 push
+rem   1. Rust 툴체인을 최신 stable로 올리고, CI와 같은 검사를 로컬에서 돌리고
+rem   2. 버전을 올리고 (package.json / tauri.conf.json / Cargo.toml / Cargo.lock)
+rem   3. 커밋 + 태그 생성
+rem   4. origin에 push
 rem 태그가 push되면 .github/workflows/release.yml이 GitHub Actions에서
 rem Windows, Mac 설치 파일을 각각 빌드해 GitHub Release 초안으로 올린다.
 rem (Mac 앱은 macOS에서만 빌드 가능하므로 이 배치파일은 로컬에서 Mac 파일을
@@ -36,6 +37,18 @@ if errorlevel 1 (
   goto :END
 )
 
+where rustup >nul 2>nul
+if errorlevel 1 (
+  echo [오류] rustup이 설치되어 있지 않거나 PATH에 없습니다.
+  goto :END
+)
+
+where pnpm >nul 2>nul
+if errorlevel 1 (
+  echo [오류] pnpm이 설치되어 있지 않거나 PATH에 없습니다.
+  goto :END
+)
+
 for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD') do set BRANCH=%%b
 
 set DIRTY=
@@ -62,9 +75,11 @@ if errorlevel 1 (
 
 echo.
 echo 다음 작업을 수행합니다:
-echo   1. 버전을 v!CUR_VERSION! -^> v!NEWVER!로 올리고 커밋
-echo   2. 태그 v!NEWVER!를 만들고 origin/!BRANCH!와 함께 push
-echo   3. GitHub Actions가 Windows, Mac 설치 파일을 빌드해 릴리스 초안으로 올림
+echo   1. Rust 툴체인을 최신 stable로 갱신 (CI와 같은 자리로 맞춘다)
+echo   2. CI와 같은 검사를 로컬에서 실행 - 몇 분 걸립니다
+echo   3. 버전을 v!CUR_VERSION! -^> v!NEWVER!로 올리고 커밋
+echo   4. 태그 v!NEWVER!를 만들고 origin/!BRANCH!와 함께 push
+echo   5. GitHub Actions가 Windows, Mac 설치 파일을 빌드해 릴리스 초안으로 올림
 echo.
 set /p CONFIRM=계속할까요? (y/N):
 if /i not "!CONFIRM!"=="y" (
@@ -72,28 +87,76 @@ if /i not "!CONFIRM!"=="y" (
   goto :END
 )
 
+rem release.yml은 dtolnay/rust-toolchain@stable로 "그날의 최신 stable"을 받는다.
+rem 로컬이 뒤처져 있으면 새로 생긴 clippy 린트를 여기서 못 보고, 태그를 push한
+rem 뒤에야 CI에서 처음 터진다. (실제로 1.98.0에 들어온 chunks_exact_to_as_chunks가
+rem 그랬다 - 로컬 1.97.1에서는 조용했다.) 그래서 CI와 같은 자리로 먼저 올린다.
 echo.
-echo [1/5] 버전 파일 수정 중...
+echo [1/7] Rust 툴체인 갱신 중...
+call rustup update stable
+if errorlevel 1 (
+  echo [오류] rustup update에 실패했습니다.
+  goto :END
+)
+
+rem 올린 툴체인으로 ci.yml의 check 잡과 같은 검사를 같은 순서로 돌린다.
+rem 여기서 걸러야 태그가 나간 뒤 CI에서 깨지는 일을 막는다.
+echo.
+echo [2/7] CI와 같은 검사 실행 중... (몇 분 걸립니다)
+
+call pnpm install --frozen-lockfile
+if errorlevel 1 (
+  echo [오류] pnpm install 실패 - pnpm-lock.yaml이 package.json과 어긋났을 수 있습니다.
+  goto :END
+)
+
+call pnpm test
+if errorlevel 1 (
+  echo [오류] 프런트엔드 테스트가 실패했습니다.
+  goto :END
+)
+
+rem tsc + vite build. cargo보다 먼저 - tauri-build가 dist/를 찾는다.
+call pnpm build
+if errorlevel 1 (
+  echo [오류] 프런트엔드 빌드 ^(tsc/vite^)가 실패했습니다.
+  goto :END
+)
+
+call cargo clippy --workspace --all-targets -- -D warnings
+if errorlevel 1 (
+  echo [오류] clippy가 실패했습니다. 방금 올린 툴체인이 새 린트를 잡았을 수 있습니다.
+  goto :END
+)
+
+call cargo test --workspace
+if errorlevel 1 (
+  echo [오류] Rust 테스트가 실패했습니다.
+  goto :END
+)
+
+echo.
+echo [3/7] 버전 파일 수정 중...
 call node scripts\bump-version.mjs !NEWVER!
 if errorlevel 1 goto :END
 
-echo [2/5] Cargo.lock 갱신 중...
+echo [4/7] Cargo.lock 갱신 중...
 call cargo update -p yamcha-app --precise !NEWVER!
 if errorlevel 1 (
   echo [오류] cargo update에 실패했습니다.
   goto :END
 )
 
-echo [3/5] 커밋 중...
+echo [5/7] 커밋 중...
 git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml Cargo.lock
 git commit -m "release: v!NEWVER!"
 if errorlevel 1 goto :END
 
-echo [4/5] 태그 생성 중...
+echo [6/7] 태그 생성 중...
 git tag "v!NEWVER!"
 if errorlevel 1 goto :END
 
-echo [5/5] push 중...
+echo [7/7] push 중...
 git push origin !BRANCH!
 if errorlevel 1 goto :END
 git push origin "v!NEWVER!"
