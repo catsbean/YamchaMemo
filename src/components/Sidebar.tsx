@@ -25,6 +25,8 @@ export default function Sidebar({
     vaultPath,
     schemas,
     notes,
+    todoOpenTotal,
+    todoTabOn,
     nav,
     current,
     issues,
@@ -41,6 +43,10 @@ export default function Sidebar({
     counts.set(n.note_type, (counts.get(n.note_type) ?? 0) + 1);
   }
   counts.set("tags", new Set(notes.flatMap((n) => n.tags)).size);
+  // 할 일 메뉴의 숫자는 노트 수가 아니라 **아직 남은 할 일** 수다.
+  // 목록은 상한에 걸려 잘릴 수 있어서 길이를 세지 않고 백엔드가 센 총계를 쓴다.
+  // 다 끝냈으면 아예 안 붙인다 — 0이 붙어 있으면 빈 분류처럼 보인다
+  if (todoOpenTotal > 0) counts.set("todo", todoOpenTotal);
   // 독서기록 = 전체 기록(발췌·생각·요약·질문) 개수
   counts.set(
     "reading",
@@ -53,6 +59,7 @@ export default function Sidebar({
   // 메뉴 이동 단축키(1~9)가 가리킬 순서 — 화면에 그려지는 차례와 같아야 한다
   const navIds = useMemo(() => {
     const ids = ["home"];
+    if (todoTabOn) ids.push("todo");
     for (const s of schemas.filter((x) => x.builtin)) {
       ids.push(s.id);
       if (s.id === "book") ids.push("reading");
@@ -60,7 +67,7 @@ export default function Sidebar({
     ids.push("tags");
     for (const s of schemas.filter((x) => !x.builtin)) ids.push(s.id);
     return ids;
-  }, [schemas]);
+  }, [schemas, todoTabOn]);
 
   useShortcut("today", openToday);
   useShortcut("nav", (key) => {
@@ -133,6 +140,9 @@ export default function Sidebar({
 
       <nav className="flex-1 overflow-y-auto px-2">
         <MenuItem id="home" label="홈" icon="🏠" />
+        {/* 할 일은 분류가 아니라 여러 글에 흩어진 줄을 모아 보는 자리다 —
+            홈 바로 아래에 두어 "지금 뭘 하지"를 두 번째 걸음으로 만든다 */}
+        {todoTabOn && <MenuItem id="todo" label="할 일" icon="☑" />}
         {builtins.map((s) => (
           <span key={s.id}>
             <MenuItem

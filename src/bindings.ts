@@ -539,11 +539,22 @@ async dailyDigest(date: string) : Promise<Result<DailyDigest, string>> {
 }
 },
 /**
- * vault 전체의 미완 할 일 (내용이 있는 `- [ ]`만). 최근 노트가 앞에 온다.
+ * vault 전체의 할 일. `done`이 거짓이면 미완만, 참이면 완료만 담는다.
+ * 
+ * 미완과 완료를 **한 번에 주지 않는 이유**는 완료가 훨씬 빨리 쌓이기 때문이다.
+ * 노트 1만 편·완료 3만 건에서 둘을 합쳐 보내면 6.6MB가 오간다(미완만은 1.6MB).
+ * 완료는 사람이 [완료한 할 일 보기]를 켤 때만 필요하다.
+ * 
+ * 순서를 매기는 규칙은 `note_todos`와 **같은 함수**(`todos_of_body`)를 쓴다 —
+ * 여기서 본 그 줄을 목록에서 바로 체크할 수 있어야 하는데, 규칙이 갈리면
+ * index가 어긋나 엉뚱한 줄이 체크된다.
+ * 
+ * 비용은 할 일 수가 아니라 **노트 수**에 붙는다(파일을 연다). 실측값과 근거는
+ * `TodoCache`의 설명과 아래 `todo_scan_bench`에 있다.
  */
-async listOpenTodos(limit: number) : Promise<Result<TodoItem[], string>> {
+async listTodos(limit: number, done: boolean) : Promise<Result<TodoPage, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("list_open_todos", { limit }) };
+    return { status: "ok", data: await TAURI_INVOKE("list_todos", { limit, done }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -1468,9 +1479,34 @@ existing: boolean;
  */
 category: boolean }
 /**
- * 어느 노트에 있는 미완 할 일 한 줄
+ * 어느 노트에 있는 할 일 한 줄
  */
-export type TodoItem = { rel_path: string; note_type: string; note_title: string; date: string; text: string }
+export type TodoItem = { rel_path: string; note_type: string; note_title: string; date: string; 
+/**
+ * 그 노트 안에서의 순서 — `toggle_todo`·`update_todo`·`delete_todo`에 그대로 넘긴다
+ */
+index: number; done: boolean; text: string }
+/**
+ * 할 일 모아 보기의 한 쪽(page).
+ * 
+ * **개수는 목록과 따로 준다.** 목록은 `limit`에 걸려 잘릴 수 있는데, 화면의
+ * "N건 남음"과 메뉴 배지가 잘린 목록의 길이를 세면 조용히 틀린 수를 보여 준다
+ * (실측: 노트 1만 편이면 4만 건 중 1,000건만 남는다). 세는 일은 어차피 전부
+ * 훑으면서 하므로 총계는 공짜다.
+ */
+export type TodoPage = { items: TodoItem[]; 
+/**
+ * vault 전체의 미완 건수 (목록이 잘려도 정확하다)
+ */
+open_total: number; 
+/**
+ * vault 전체의 완료 건수
+ */
+done_total: number; 
+/**
+ * 목록이 `limit`에 걸려 잘렸는가 — 화면이 "더 있음"을 알릴 수 있게
+ */
+truncated: boolean }
 /**
  * 휴지통에 있는 삭제된 노트 한 건
  */

@@ -12,6 +12,7 @@ import NoteTemplateSection from "./settings/NoteTemplateSection";
 import ScrapTypeSection from "./settings/ScrapTypeSection";
 import ShortcutSection from "./settings/ShortcutSection";
 import StartupSection from "./settings/StartupSection";
+import TodoTabSection from "./settings/TodoTabSection";
 import TrashSection from "./settings/TrashSection";
 import VersionSection from "./settings/VersionSection";
 
@@ -156,6 +157,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
           </div>
         </section>
         <StartupSection />
+        <TodoTabSection />
         <section className="mb-5">
           <h3 className="mb-2 text-sm font-semibold text-neutral-600">
             편집 시 목록 표시

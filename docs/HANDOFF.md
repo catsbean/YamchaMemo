@@ -37,13 +37,13 @@
 **주요 파일 지도**:
 - `src/App.tsx` — 진입, 레이아웃 3종, vault 선택 화면, 전역 에러 토스트, Ctrl+K
 - `src/stores/vault.ts` — 모든 액션(`init/openNote/saveCurrent/createNote/updateFrontmatter/…`), `guard()` 에러 수집
-- `src/components/` — `Bookshelf`(책장 그리드/목록), `BookView`(독서기록 화면), `BookInfoModal`, `BookCreateDialog`, `BookSearchDialog`, `EnrichDialog`(일괄 자동채우기), `SettingsModal`, `NewNoteDialog`, `EditorPane`, `SearchModal`, `BookPickerDialog`, `CustomTypeDialog`, `ReviewDashboard`+`ReviewFilterPanel`(회고와 고급 필터)
+- `src/components/` — `Bookshelf`(책장 그리드/목록), `BookView`(독서기록 화면), `BookInfoModal`, `BookCreateDialog`, `BookSearchDialog`, `EnrichDialog`(일괄 자동채우기), `SettingsModal`, `NewNoteDialog`, `EditorPane`, `SearchModal`, `BookPickerDialog`, `CustomTypeDialog`, `ReviewDashboard`+`ReviewFilterPanel`(회고와 고급 필터), `TodoDashboard`(할 일 탭 — vault 전체의 할 일), `TodoList`(일지 한 편의 할 일)
 - `src/lib/date.ts` — `ymd`/`dateOf`/`weekdayOf`/`addDays`/`daysBetween`. 날짜는 앱 전체에서 `YYYY-MM-DD` **문자열**이라 기간 비교가 곧 사전순 비교다
 - `src/lib/resolveLink.ts` — `[[…]]` 하나가 어느 노트를 가리키는지 정하는 **유일한 자리**. 링크를 여는 곳(스토어·별도 노트 창)·자동완성·중복 선택 창·별칭 경고가 모두 여기를 본다. 겹 순서는 경로(`[[Free/중복노트]]`) → 제목 → 파일명 → 별칭(frontmatter `aliases`)이고, **앞 겹에 하나라도 걸리면 뒤 겹은 보지 않는다**(글이 별칭을 이긴다). 한 겹에서 여럿이 걸리면 전부 돌려주고 `LinkPickerDialog`가 고르게 한다. 자동완성 후보(`linkOptions`)도 여기서 나오며, 이름이 겹치는 후보는 폴더까지 넣어 준다. **대소문자를 가린다** — 백링크를 세는 SQLite `=`와 어긋나면 열리기는 하는데 백링크에는 안 잡히는 링크가 생긴다. 짝이 되는 백엔드는 `Indexer::link_names`(`indexer.rs`)로, 같은 "글이 별칭을 이긴다" 규칙을 SQL로 확인한다
 - `src/lib/reviewFilter.ts` — 회고 필터 판정 전부(순수 함수). 일지 콜아웃과 독서기록을 `ReviewCard` 하나로 정규화한다 — **일지 콜아웃 헤더에는 시각(`15:17`), 독서기록에는 날짜(`2026-07-18`)가 들어 있어** 정규화 없이는 시간대 필터·정렬이 조용히 틀린다
 - `src/lib/exportReview.ts` — 회고를 `NoteDoc`으로. 화면 칩과 문서 머리 줄이 `activeChips()` 하나를 공유한다
 - `src-tauri/src/commands.rs` — 전 커맨드 + 카카오/교보 API 클라이언트 + 파서 + 테스트
-- `src-tauri/src/commands/dashboard.rs` — 모아 보는 화면들의 커맨드. `review_range(from,to,with_reading)`는 회고 기간을 **한 번에** 준다 (날짜마다 `note_blocks`+`note_todos`를 부르면 한 달에 62번이 오간다). 필터는 일부러 백엔드에서 걸지 않는다 — 칩 하나 누를 때마다 파일을 다시 읽을 이유가 없다
+- `src-tauri/src/commands/dashboard.rs` — 모아 보는 화면들의 커맨드. `review_range(from,to,with_reading)`는 회고 기간을 **한 번에** 준다 (날짜마다 `note_blocks`+`note_todos`를 부르면 한 달에 62번이 오간다). 필터는 일부러 백엔드에서 걸지 않는다 — 칩 하나 누를 때마다 파일을 다시 읽을 이유가 없다. `list_todos(limit, done)`는 vault 전체의 할 일을 준다 — 순서(`index`)를 `note_todos`와 **같은 함수**(`todos_of_body`)로 매겨야 목록에서 본 그 줄을 `toggle_todo`로 바로 체크할 수 있다(규칙이 갈리면 엉뚱한 줄이 체크된다). 비용은 할 일 수가 아니라 **노트 수**에 붙으므로 `Ctx::todo_cache`가 (mtime,size)로 바뀐 편만 다시 읽는다. 개수(`open_total`·`done_total`)는 목록과 따로 준다 — 목록은 `limit`에 잘려도 배지·"N건 남음"은 정확해야 한다
 - `src-tauri/src/lib.rs` — `collect_commands![]` 등록부 (커맨드 추가 시 여기도 추가)
 - `src-tauri/src/watcher.rs` — vault 파일 감시, 자기쓰기 억제(전역 타임스탬프 2.5초)
 - `crates/yamcha-core/src/vault.rs` — 파일 CRUD, 휴지통(`.yamcha/trash`), 템플릿, 미러
@@ -381,6 +381,20 @@ npx tsc --noEmit -p tsconfig.json
 33. **별도 창(`?view=`)은 zustand 스토어를 초기화하지 않는다.** 스토어를 직접 보는
     컴포넌트는 거기서 못 쓴다. 두 창이 함께 쓸 UI는 표현 전용으로 갈라 두고(예:
     `LinkPicker`) 데이터는 부르는 쪽이 넣는다.
+
+**할 일 탭에서 밟은 것 (0.5.10)**
+
+34. **vault를 통째로 훑는 목록은 `refresh()`에만 매단다.** `useVault.todos`는 노트를 전부
+    열어야 나오는 값이라, 자동저장이 부르는 `refreshNote`에 매달면 타이핑하는 내내 돈다.
+    대신 할 일 탭·홈이 들어올 때 한 번 더 읽어 신선도를 맞춘다.
+34-b. **잘린 목록의 길이를 세면 안 된다.** 처음엔 `list_todos`가 목록만 돌려주고 화면이
+    그 길이로 "N건 남음"을 그렸다. 노트 1만 편에서는 4만 건 중 1,000건만 넘어와서
+    배지가 조용히 틀린 수를 보였다 — 잘렸다는 사실을 아무도 몰랐다. 개수는 백엔드가
+    따로 세어 주고(`open_total`·`done_total`), 잘렸으면 화면이 그렇다고 말한다.
+35. **모아 보는 목록의 `index`는 조작 커맨드와 같은 함수로 매겨야 한다.** 예전
+    `list_open_todos`는 본문 전체를 훑는 `open_todo_texts`를 썼는데, `toggle_todo`는
+    `## 할 일` 섹션 안에서 센다. 순서가 어긋나면 **엉뚱한 줄이 체크된다** — 그래서
+    `list_todos`는 `note_todos`와 같은 `todos_of_body`를 쓴다.
 
 ---
 

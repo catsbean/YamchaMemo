@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { commands, type TodoItem } from "../bindings";
 import { typeLabel, useVault } from "../stores/vault";
 import { fmStr } from "../lib/note";
 import {
@@ -19,7 +18,19 @@ function isoDate(d: Date): string {
 
 /** 홈: 독서·쓰기 통계 + 데일리 히트맵 + 최근 활동 */
 export default function HomeDashboard() {
-  const { notes, schemas, openNote, openToday, setNav, moveNoteTo } = useVault();
+  const {
+    notes,
+    schemas,
+    todos,
+    todoOpenTotal,
+    todoTabOn,
+    openNote,
+    openToday,
+    setNav,
+    moveNoteTo,
+    refreshTodos,
+    toggleTodoItem,
+  } = useVault();
   const ctx = useContextMenu();
   const year = new Date().getFullYear();
 
@@ -101,13 +112,12 @@ export default function HomeDashboard() {
 
   const recent = useMemo(() => notes.slice(0, 8), [notes]);
 
-  // 미완 할 일 (데일리 우선). 노트가 바뀔 때마다 다시 읽는다
-  const [todos, setTodos] = useState<TodoItem[]>([]);
+  // 미완 할 일 (데일리 우선). 목록은 스토어가 한 벌만 들고 있다 —
+  // 홈에 들어올 때 한 번 다시 읽어, 편집기에서 손으로 적은 체크박스도 따라온다
   useEffect(() => {
-    commands.listOpenTodos(50).then((r) => {
-      if (r.status === "ok") setTodos(r.data);
-    });
-  }, [notes]);
+    refreshTodos();
+  }, [refreshTodos]);
+  const [togglingTodo, setTogglingTodo] = useState<string | null>(null);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
@@ -191,22 +201,23 @@ export default function HomeDashboard() {
           )}
         </section>
 
-        {/* 할 일 */}
+        {/* 할 일 — 여기서 바로 체크할 수 있다. 홈에 띄워 두고 하루를 보내는
+            화면이라, 끝낸 것을 표시하러 그 글까지 들어갈 이유가 없다 */}
         <section className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-bold">
               ☑ 할 일{" "}
-              {todos.length > 0 && (
+              {todoOpenTotal > 0 && (
                 <span className="ml-1 text-xs font-normal text-amber-600">
-                  {todos.length}건
+                  {todoOpenTotal}건
                 </span>
               )}
             </h2>
             <button
               className="text-xs text-neutral-400 hover:text-neutral-600"
-              onClick={openToday}
+              onClick={() => (todoTabOn ? setNav("todo") : openToday())}
             >
-              오늘 노트 →
+              {todoTabOn ? "할 일 모아보기 →" : "오늘 노트 →"}
             </button>
           </div>
           {todos.length === 0 ? (
@@ -215,24 +226,44 @@ export default function HomeDashboard() {
             </p>
           ) : (
             <ul className="flex flex-col gap-0.5">
-              {todos.slice(0, 8).map((t, i) => (
-                <li key={`${t.rel_path}#${i}`}>
-                  <button
-                    className="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-neutral-50"
-                    {...itemProps(t.rel_path)}
-                    title={`${t.note_title} 에서 열기`}
+              {todos.slice(0, 8).map((t) => {
+                const key = `${t.rel_path}#${t.index}`;
+                return (
+                  <li
+                    key={key}
+                    className="flex items-center gap-2 rounded px-2 py-1 text-xs hover:bg-neutral-50"
                   >
-                    <span className="shrink-0 text-neutral-300">☐</span>
-                    <span className="truncate text-neutral-700">{t.text}</span>
-                    <span className="ml-auto shrink-0 text-3xs text-neutral-400">
-                      {t.note_type === "daily" ? t.date : t.note_title}
-                    </span>
-                  </button>
-                </li>
-              ))}
-              {todos.length > 8 && (
+                    <button
+                      className="shrink-0 text-neutral-300 hover:text-emerald-500 disabled:opacity-50"
+                      disabled={togglingTodo !== null}
+                      title="완료 표시"
+                      onClick={async () => {
+                        setTogglingTodo(key);
+                        try {
+                          await toggleTodoItem(t);
+                        } finally {
+                          setTogglingTodo(null);
+                        }
+                      }}
+                    >
+                      ☐
+                    </button>
+                    <button
+                      className="flex min-w-0 flex-1 items-center gap-2 rounded text-left"
+                      {...itemProps(t.rel_path)}
+                      title={`${t.note_title} 에서 열기`}
+                    >
+                      <span className="truncate text-neutral-700">{t.text}</span>
+                      <span className="ml-auto shrink-0 text-3xs text-neutral-400">
+                        {t.note_type === "daily" ? t.date : t.note_title}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+              {todoOpenTotal > 8 && (
                 <li className="px-2 pt-1 text-3xs text-neutral-400">
-                  외 {todos.length - 8}건
+                  외 {todoOpenTotal - 8}건
                 </li>
               )}
             </ul>

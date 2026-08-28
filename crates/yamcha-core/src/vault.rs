@@ -76,6 +76,14 @@ fn format_trash_stamp(stamp: &str) -> String {
 /// 사용자 정의 타입 정의 파일 (vault 루트, 미러링 대상에 포함)
 const TYPES_FILE: &str = "_types.json";
 
+/// 분류 id로 쓸 수 없는 이름.
+///
+/// 왼쪽 메뉴에는 분류가 아닌 자리(홈·할 일·태그·독서기록·회고·점검)가 섞여 있고,
+/// 그 자리들은 분류 id와 **같은 값**(`nav`)으로 골라진다. 겹치는 id로 분류를 만들면
+/// 메뉴에는 뜨는데 눌러도 그 자리의 화면이 열려 **목록에 영영 닿지 못한다.**
+/// 이미 만들어 둔 분류는 건드리지 않는다 — 새로 만들 때만 막는다.
+pub const RESERVED_TYPE_IDS: [&str; 6] = ["home", "todo", "tags", "reading", "review", "audit"];
+
 /// 필드 목록에 별칭 칸이 없으면 태그 바로 뒤에 끼워 넣는다 (있으면 그대로 둔다).
 /// 자리를 태그 뒤로 잡는 이유는 내장 분류의 칸 순서와 맞추기 위해서다.
 fn ensure_aliases_field(fields: &mut Vec<crate::schema::FieldDef>) {
@@ -414,6 +422,11 @@ impl Vault {
             return Err(CoreError::Invalid(
                 "타입 ID에는 공백이나 슬래시를 쓸 수 없습니다".into(),
             ));
+        }
+        if RESERVED_TYPE_IDS.contains(&id) {
+            return Err(CoreError::Invalid(format!(
+                "`{id}`는 화면이 이미 쓰는 이름입니다. 다른 타입 ID를 지어 주세요"
+            )));
         }
         let folder = Self::sanitize_filename(label);
         if self
@@ -2974,6 +2987,14 @@ mod tests {
             // 중복 방지 (라벨·ID 둘 다 검사)
             assert!(v.add_custom_type("회의록", "meeting2", vec![], "").is_err());
             assert!(v.add_custom_type("다른 이름", "meeting", vec![], "").is_err());
+            // 화면이 이미 쓰는 이름은 분류 ID로 못 쓴다 — 만들어지면 그 목록에
+            // 메뉴로 닿을 수 없다(눌러도 같은 이름의 화면이 열린다)
+            for id in RESERVED_TYPE_IDS {
+                assert!(
+                    v.add_custom_type(&format!("이름 {id}"), id, vec![], "").is_err(),
+                    "예약된 ID `{id}`로 분류가 만들어졌다"
+                );
+            }
         }
         // 재오픈 시 커스텀 타입 유지
         {

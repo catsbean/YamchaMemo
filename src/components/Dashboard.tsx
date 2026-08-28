@@ -20,6 +20,7 @@ import ReviewModal from "./ReviewModal";
 import SortControl, { useSort } from "./SortControl";
 import { DATE_SORT, TITLE_SORT, sortNotes, type SortOption } from "../lib/sort";
 import TagBrowser from "./TagBrowser";
+import TodoDashboard from "./TodoDashboard";
 import WritingDashboard from "./WritingDashboard";
 
 /** 선택된 메뉴의 대시보드: 타입별로 다른 화면을 보여준다 */
@@ -34,6 +35,7 @@ export default function Dashboard({
   if (noteType === "book") return <Bookshelf compact={compact} />;
   if (noteType === "reading") return <ReadingDashboard />;
   if (noteType === "writing") return <WritingDashboard />;
+  if (noteType === "todo") return <TodoDashboard />;
   if (noteType === "tags") return <TagBrowser />;
   if (noteType === "review") return <ReviewDashboard />;
   if (noteType === "audit") return <AuditDashboard />;

@@ -39,6 +39,9 @@ pub struct Ctx {
     pub vault: Vault,
     pub indexer: Indexer,
     pub search: SearchEngine,
+    /// 할 일 모아 보기용 편별 캐시 (`dashboard::list_todos`가 채우고 읽는다).
+    /// vault를 바꾸면 Ctx째로 새로 만들어지므로 저절로 비워진다.
+    pub todo_cache: dashboard::TodoCache,
 }
 
 pub struct AppState(pub Mutex<Option<Ctx>>);
@@ -203,6 +206,7 @@ pub fn set_vault(
         vault,
         indexer,
         search,
+        todo_cache: dashboard::TodoCache::default(),
     });
     drop(guard);
     crate::watcher::mark_self_write();

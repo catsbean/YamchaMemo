@@ -31,6 +31,7 @@ import {
   type NoteIssue,
   type NoteSummary,
   type Result,
+  type TodoItem,
   type TypeDef,
 } from "../bindings";
 
@@ -127,6 +128,28 @@ interface VaultStore {
   /** 할 일 구역을 크게 볼지 (기록 영역과 비율을 뒤집는다) */
   todoBig: boolean;
   toggleTodoBig(): Promise<void>;
+  /** 왼쪽 메뉴에 할 일 탭을 둘지 (기본 켬) */
+  todoTabOn: boolean;
+  setTodoTabOn(v: boolean): Promise<void>;
+  /** vault 전체의 **미완** 할 일. 완료는 담지 않는다.
+   *
+   *  할 일 탭·홈·사이드바 배지가 **이 한 벌을 나눠 본다.** 이 목록은 노트를
+   *  전부 읽어야 나오는 값이라, 화면마다 따로 부르면 같은 일을 여러 번 한다.
+   *
+   *  완료를 빼는 이유는 완료가 훨씬 빨리 쌓이기 때문이다 — 노트 1만 편·완료
+   *  3만 건에서 둘을 합치면 오가는 짐이 6.6MB, 미완만이면 1.6MB였다(실측).
+   *  완료한 할 일은 할 일 탭이 [완료 보기]를 켤 때만 따로 받는다. */
+  todos: TodoItem[];
+  /** 목록은 상한에 걸려 잘려도 **이 수는 정확하다** — 배지·카드가 이걸 본다 */
+  todoOpenTotal: number;
+  todoDoneTotal: number;
+  /** 미완 목록이 상한에 걸려 잘렸는가 */
+  todosTruncated: boolean;
+  refreshTodos(): Promise<void>;
+  /** 목록에서 본 할 일 한 건의 완료 여부를 뒤집는다 (그 노트를 열지 않고) */
+  toggleTodoItem(item: TodoItem): Promise<void>;
+  /** 오늘 일지의 할 일에 한 줄 붙인다. 오늘 일지가 없으면 만들고 넣는다. */
+  addTodoToday(text: string): Promise<void>;
   /** 빠른 담기 — 전역 단축키로 작은 창을 띄워 앱을 열지 않고 담는다 (기본 꺼짐) */
   quickCaptureOn: boolean;
   quickCaptureShortcut: string;
@@ -301,6 +324,10 @@ const MIRROR_IDLE_MS = 60_000;
 let indexTimer: ReturnType<typeof setTimeout> | null = null;
 /** 마지막 변경 뒤 이만큼 잠잠하면 목록 파일을 다시 만든다 */
 const INDEX_IDLE_MS = 5_000;
+/** 할 일 탭이 한 번에 받아 그리는 미완 할 일의 상한.
+ *  넘으면 화면이 "외 N건"으로 알린다 — 개수 자체는 백엔드가 따로 세어 주므로
+ *  잘려도 배지와 "N건 남음"은 정확하다. */
+const TODO_LIMIT = 500;
 
 export const useVault = create<VaultStore>((set, get) => {
   async function guard<T>(fn: () => Promise<T>): Promise<T | undefined> {
@@ -537,6 +564,79 @@ export const useVault = create<VaultStore>((set, get) => {
       const store = await settings();
       await store.set("todoPanel", v);
     },
+    todoTabOn: true,
+    async setTodoTabOn(v) {
+      set({ todoTabOn: v });
+      if (!v) {
+        // 보고 있던 탭을 끄면 갈 곳이 없다 — 홈으로 데려온다
+        if (get().nav === "todo") await get().setNav("home");
+        // 시작 탭으로 걸어 뒀다면 그것도 거둔다. 안 그러면 설정 화면은 다른 탭을
+        // 고른 것처럼 보이는데(고를 수 있는 목록에서 빠지므로) 저장된 값은 "todo"로
+        // 남아, 다음 실행에 "지정한 시작 탭이 없어 홈을 열었습니다"가 뜬다
+        if (get().startupTabId === "todo") await get().setStartupTabId("home");
+      }
+      const store = await settings();
+      await store.set("todoTabOn", v);
+    },
+    todos: [],
+    todoOpenTotal: 0,
+    todoDoneTotal: 0,
+    todosTruncated: false,
+    async refreshTodos() {
+      if (!get().vaultPath) return;
+      const r = await commands.listTodos(TODO_LIMIT, false);
+      if (r.status !== "ok") return;
+      set({
+        todos: r.data.items,
+        todoOpenTotal: r.data.open_total,
+        todoDoneTotal: r.data.done_total,
+        todosTruncated: r.data.truncated,
+      });
+    },
+    async toggleTodoItem(item) {
+      // 그 노트를 편집기에 열어 둔 채라면 먼저 저장한다 —
+      // 안 그러면 자동저장이 방금 바꾼 체크를 옛 내용으로 덮는다
+      if (get().current?.rel_path === item.rel_path && get().dirty) {
+        await get().saveCurrent();
+      }
+      await guard(async () => {
+        const updated = unwrap(
+          await commands.toggleTodo(
+            item.rel_path,
+            item.index,
+            item.text,
+            !item.done,
+          ),
+        );
+        if (get().current?.rel_path === item.rel_path) {
+          set({ current: updated, dirty: false });
+        }
+        await get().refreshNote(item.rel_path);
+        await get().refreshTodos();
+        await notifyOtherWindows([item.rel_path]);
+        afterWrite();
+      });
+    },
+    async addTodoToday(text) {
+      const value = text.trim();
+      if (!value) return;
+      await guard(async () => {
+        // 오늘 일지가 없으면 여기서 만들어진다
+        const rel = unwrap(await commands.openTodayDaily());
+        if (get().current?.rel_path === rel && get().dirty) {
+          await get().saveCurrent();
+        }
+        const updated = unwrap(
+          await commands.appendDailyEntry(rel, "todo", value),
+        );
+        if (get().current?.rel_path === rel) {
+          set({ current: updated, dirty: false });
+        }
+        await get().refresh();
+        await notifyOtherWindows([rel]);
+        afterWrite();
+      });
+    },
     dailyKindOrder: DEFAULT_DAILY_KIND_ORDER,
     async setDailyKindOrder(order) {
       set({ dailyKindOrder: order });
@@ -647,6 +747,7 @@ export const useVault = create<VaultStore>((set, get) => {
         const todoPanel =
           (await store.get<"bottom" | "right">("todoPanel")) ?? "bottom";
         const todoBig = (await store.get<boolean>("todoBig")) ?? false;
+        const todoTabOn = (await store.get<boolean>("todoTabOn")) ?? true;
         const quickCaptureOn =
           (await store.get<boolean>("quickCaptureOn")) ?? false;
         const quickCaptureShortcut =
@@ -688,6 +789,7 @@ export const useVault = create<VaultStore>((set, get) => {
           historyIntervalSecs,
           todoPanel,
           todoBig,
+          todoTabOn,
           quickCaptureOn,
           quickCaptureShortcut,
           scrapType,
@@ -726,7 +828,10 @@ export const useVault = create<VaultStore>((set, get) => {
           try {
             if (startupMode === "last") {
               const lastNav = await store.get<string>("lastNav");
-              if (lastNav) set({ nav: lastNav });
+              // 할 일 탭을 끈 뒤였다면 그 자리는 이제 없다 — 홈으로 연다
+              if (lastNav && !(lastNav === "todo" && !todoTabOn)) {
+                set({ nav: lastNav });
+              }
               const lastNoteRel = await store.get<string>("lastNoteRel");
               if (
                 lastNoteRel &&
@@ -739,6 +844,7 @@ export const useVault = create<VaultStore>((set, get) => {
                 "home",
                 "reading",
                 "tags",
+                ...(todoTabOn ? ["todo"] : []),
                 ...get().schemas.map((s) => s.id),
               ]);
               if (startupTabId && validIds.has(startupTabId)) {
@@ -817,6 +923,9 @@ export const useVault = create<VaultStore>((set, get) => {
       });
       // 목록에서 조용히 빠진 파일이 있는지 함께 확인 (실패는 무시)
       await get().refreshIssues();
+      // 할 일도 따라 갱신한다. **자동저장이 부르는 refreshNote에는 달지 않는다** —
+      // 한 번에 노트를 전부 읽는 일이라, 타이핑하는 내내 돌면 앱이 멈춘다.
+      get().refreshTodos().catch(() => {});
     },
 
     async refreshNote(relPath) {

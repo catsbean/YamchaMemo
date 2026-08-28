@@ -28,10 +28,13 @@ export default function StartupSection() {
     setStartupNoteRel,
     schemas,
     notes,
+    todoTabOn,
   } = useVault();
 
   const tabOptions = useMemo(() => {
     const opts: { id: string; label: string }[] = [{ id: "home", label: "홈" }];
+    // 꺼 둔 탭은 고를 수 없다 — 골라 놔도 열 자리가 없다
+    if (todoTabOn) opts.push({ id: "todo", label: "할 일" });
     for (const s of schemas.filter((x) => x.builtin)) {
       opts.push({ id: s.id, label: s.label });
       if (s.id === "book") opts.push({ id: "reading", label: "독서기록" });
@@ -41,7 +44,7 @@ export default function StartupSection() {
       opts.push({ id: s.id, label: s.label });
     }
     return opts;
-  }, [schemas]);
+  }, [schemas, todoTabOn]);
 
   const selectedNote = notes.find((n) => n.rel_path === startupNoteRel);
   const [pickingNote, setPickingNote] = useState(false);

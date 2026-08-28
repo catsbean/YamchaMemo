@@ -60,7 +60,7 @@ pub fn run() {
         commands::files::reset_file_index,
         commands::dashboard::list_entries,
         commands::dashboard::daily_digest,
-        commands::dashboard::list_open_todos,
+        commands::dashboard::list_todos,
         commands::dashboard::review_range,
         commands::notes::get_title_template,
         commands::notes::set_title_template,
