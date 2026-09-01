@@ -401,6 +401,26 @@ export const useVault = create<VaultStore>((set, get) => {
     } while (resaveRequested);
   }
 
+  /** `saving` 자물쇠를 쥔 채로 fn을 돈다 — rename·move처럼 rel_path가 바뀌는
+   *  동안 자동저장(3초 타이머)이 끼어들어 사라질 옛 경로에 새 파일을 만드는 것을
+   *  막는다. fn 안에서 dirty를 흘려보낼 땐 saveCurrent() 대신 runSave()를 직접
+   *  불러야 한다 — saveCurrent()는 이 자물쇠가 이미 잡혀 있으면 자기 자신을
+   *  기다리며 멈춘다. */
+  async function withSaveLock<T>(fn: () => Promise<T>): Promise<T> {
+    if (saving) {
+      resaveRequested = true;
+      await saving;
+    }
+    const run = fn();
+    saving = run.then(
+      () => undefined,
+      () => undefined,
+    ).finally(() => {
+      saving = null;
+    });
+    return await run;
+  }
+
   /** 손을 멈춘 지 한참 지나면 미러로 복제 (변경이 잦으면 마지막 것만).
    *
    *  예전엔 2초였다. 자동저장이 3초마다 도니까 타이머가 저장 사이사이에 끼어들어,
@@ -1184,31 +1204,55 @@ export const useVault = create<VaultStore>((set, get) => {
     async renameCurrent(newTitle) {
       const cur = get().current;
       if (!cur) return;
-      if (get().dirty) await get().saveCurrent();
-      await guard(async () => {
-        const newRel = unwrap(await commands.renameNote(cur.rel_path, newTitle));
-        await get().refresh();
-        await get().openNote(newRel);
+      // 이름을 바꾸는 동안(백엔드 왕복 사이) 자동저장이 끼어들면 안 된다 —
+      // 그 사이엔 화면의 rel_path가 아직 옛 경로라, 자동저장이 사라진 옛 경로에
+      // 새 파일을 하나 더 만들어 버린다("새 제목=빈 글" + "옛 제목=본문 있는 글").
+      // 저장 자물쇠를 쥔 채로 이름을 바꾸고, 그 사이 친 글자는 rel_path를 바로
+      // 갈아 끼워 새 파일로 흘려보낸다.
+      const newRel = await withSaveLock(async () => {
+        if (get().dirty) await runSave();
+        return await guard(async () => {
+          const renamed = unwrap(await commands.renameNote(cur.rel_path, newTitle));
+          const mid = get().current;
+          if (mid && mid.rel_path === cur.rel_path) {
+            set({ current: { ...mid, rel_path: renamed } });
+          }
+          if (get().dirty) await runSave();
+          return renamed;
+        });
       });
+      if (!newRel) return;
+      await get().refresh();
+      await get().openNote(newRel);
     },
 
     async moveCurrent(newTypeId) {
       const cur = get().current;
       if (!cur) return;
       const fromTypeId = cur.note_type;
-      if (get().dirty) await get().saveCurrent();
-      await guard(async () => {
-        const newRel = unwrap(await commands.moveNote(cur.rel_path, newTypeId));
-        await get().refresh();
-        await get().openNote(newRel);
-        set({
-          moveUndo: {
-            rel: newRel,
-            toTypeId: newTypeId,
-            fromTypeId,
-            renamedTo: renamedStem(cur.rel_path, newRel),
-          },
+      // renameCurrent와 같은 이유로 저장 자물쇠를 쥔 채로 옮긴다.
+      const newRel = await withSaveLock(async () => {
+        if (get().dirty) await runSave();
+        return await guard(async () => {
+          const moved = unwrap(await commands.moveNote(cur.rel_path, newTypeId));
+          const mid = get().current;
+          if (mid && mid.rel_path === cur.rel_path) {
+            set({ current: { ...mid, rel_path: moved } });
+          }
+          if (get().dirty) await runSave();
+          return moved;
         });
+      });
+      if (!newRel) return;
+      await get().refresh();
+      await get().openNote(newRel);
+      set({
+        moveUndo: {
+          rel: newRel,
+          toTypeId: newTypeId,
+          fromTypeId,
+          renamedTo: renamedStem(cur.rel_path, newRel),
+        },
       });
     },
 

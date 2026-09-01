@@ -2,19 +2,23 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 /** 저장 커맨드를 붙잡아 두는 손잡이 — 저장이 "도는 중"인 상태를 만들어 낸다 */
 let releaseSave: (() => void) | null = null;
-const saveCalls: { body: string; expected: string | null }[] = [];
+const saveCalls: { rel: string; body: string; expected: string | null }[] = [];
 /** 다음 저장이 "그 사이에 파일이 바뀌었다"고 답하게 한다 */
 let nextIsConflict = false;
+/** 이름 바꾸기 커맨드를 붙잡아 두는 손잡이 — 백엔드 왕복이 "도는 중"인 상태를 만들어 낸다 */
+let releaseRename: (() => void) | null = null;
+const renameCalls: { rel: string; newTitle: string }[] = [];
+let nextRenamedRel = "";
 
 vi.mock("../bindings", () => ({
   commands: {
     saveNote: (
-      _rel: string,
+      rel: string,
       _fm: unknown,
       body: string,
       expected: string | null,
     ) => {
-      saveCalls.push({ body, expected });
+      saveCalls.push({ rel, body, expected });
       const conflict = nextIsConflict;
       nextIsConflict = false;
       return new Promise((resolve) => {
@@ -23,6 +27,13 @@ vi.mock("../bindings", () => ({
             status: "ok",
             data: { stamp: conflict ? "남이-쓴-지문" : "새-지문", conflict },
           });
+      });
+    },
+    renameNote: (rel: string, newTitle: string) => {
+      renameCalls.push({ rel, newTitle });
+      return new Promise((resolve) => {
+        releaseRename = () =>
+          resolve({ status: "ok", data: nextRenamedRel });
       });
     },
     readNote: async (rel: string) => ({
@@ -225,5 +236,73 @@ describe("saveCurrent — 다른 곳에서 먼저 고쳤을 때", () => {
 
     expect(useVault.getState().forceOverwrite).toBe(false);
     expect(useVault.getState().externalChanged).toBe(false);
+  });
+});
+
+/** 제목을 바꾸는 백엔드 왕복이 도는 사이 계속 타이핑하면, 그 사이 자동저장이
+ *  아직 화면에 남아 있는 옛 경로에 새 파일을 하나 더 만들어 버렸다
+ *  ("새 제목=빈 글" + "옛 제목=본문 있는 글" 두 파일이 생기는 버그). */
+describe("renameCurrent — 이름 바꾸는 동안 편집", () => {
+  beforeEach(() => {
+    releaseSave = null;
+    releaseRename = null;
+    saveCalls.length = 0;
+    renameCalls.length = 0;
+    nextIsConflict = false;
+    nextRenamedRel = "Free/새 제목.md";
+    useVault.setState({ error: null });
+  });
+
+  it("이름을 바꾸는 왕복 사이에 친 글자는 새 경로로만 저장된다", async () => {
+    openNote("처음");
+
+    const renaming = useVault.getState().renameCurrent("새 제목");
+    await vi.waitFor(() => expect(releaseRename).not.toBeNull());
+    expect(renameCalls[0]).toEqual({
+      rel: "Free/메모.md",
+      newTitle: "새 제목",
+    });
+
+    // 백엔드가 아직 응답하기 전 — 화면은 옛 경로를 들고 있다
+    expect(useVault.getState().current?.rel_path).toBe("Free/메모.md");
+    useVault.getState().setBody("이름 바꾸는 도중에 친 글자");
+    expect(useVault.getState().dirty).toBe(true);
+
+    releaseRename!();
+
+    // 이름이 바뀌자마자 rel_path가 새 경로로 갈아 끼워지고, 도중에 친 글자는
+    // 그 새 경로로 저장된다 — 옛 경로에는 아무것도 쓰지 않는다
+    await vi.waitFor(() => expect(releaseSave).not.toBeNull());
+    expect(saveCalls).toHaveLength(1);
+    expect(saveCalls[0].rel).toBe("Free/새 제목.md");
+    expect(saveCalls[0].body).toBe("이름 바꾸는 도중에 친 글자");
+    releaseSave!();
+
+    await renaming;
+
+    // openNote가 다시 읽어 들일 때도 새 경로 하나만 거친다 — 옛 경로에
+    // 빈 파일을 만드는 별도의 저장은 없어야 한다
+    expect(saveCalls).toHaveLength(1);
+    expect(useVault.getState().current?.rel_path).toBe("Free/새 제목.md");
+  });
+
+  it("이름을 바꾸는 왕복 사이에 자동저장(Ctrl+S 등)이 겹쳐도 옛 경로에 파일을 만들지 않는다", async () => {
+    openNote("처음");
+
+    const renaming = useVault.getState().renameCurrent("새 제목");
+    await vi.waitFor(() => expect(releaseRename).not.toBeNull());
+
+    useVault.getState().setBody("도중에 친 글자");
+    // 3초 자동저장 타이머나 Ctrl+S가 이 시점에 끼어든다고 가정
+    const stray = useVault.getState().saveCurrent();
+
+    releaseRename!();
+    await vi.waitFor(() => expect(releaseSave).not.toBeNull());
+    // 끼어든 저장이 옛 경로("Free/메모.md")로 새 파일을 만들지 않았는지 확인
+    expect(saveCalls.every((c) => c.rel === "Free/새 제목.md")).toBe(true);
+    releaseSave!();
+
+    await Promise.all([renaming, stray]);
+    expect(saveCalls.some((c) => c.rel === "Free/메모.md")).toBe(false);
   });
 });
