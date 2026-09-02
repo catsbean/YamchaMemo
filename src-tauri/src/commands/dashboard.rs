@@ -166,18 +166,24 @@ pub fn list_todos(state: State<'_, AppState>, limit: u32, done: bool) -> Result<
                 );
                 continue;
             };
-            let items = todos_of_body(&note.body)
-                .into_iter()
-                .map(|t| TodoItem {
-                    rel_path: n.rel_path.clone(),
-                    note_type: n.note_type.clone(),
-                    note_title: n.title.clone(),
-                    date: n.date.clone(),
-                    index: t.index,
-                    done: t.done,
-                    text: t.text,
-                })
-                .collect();
+            // 글쓰기(원고) 안의 체크리스트는 원고 진행 표시이지 할 일이 아니다 —
+            // 모아보기 어디에도 섞이지 않도록 애초에 뽑지 않는다.
+            let items = if n.note_type == Builtin::Writing.id() {
+                Vec::new()
+            } else {
+                todos_of_body(&note.body)
+                    .into_iter()
+                    .map(|t| TodoItem {
+                        rel_path: n.rel_path.clone(),
+                        note_type: n.note_type.clone(),
+                        note_title: n.title.clone(),
+                        date: n.date.clone(),
+                        index: t.index,
+                        done: t.done,
+                        text: t.text,
+                    })
+                    .collect()
+            };
             c.todo_cache.0.insert(
                 f.rel_path.clone(),
                 TodoCacheEntry {
@@ -269,10 +275,13 @@ pub fn daily_digest(state: State<'_, AppState>, date: String) -> Result<DailyDig
             let Ok(note) = c.vault.read_note(&n.rel_path) else {
                 continue;
             };
-            let open = yamcha_core::parse::count_open_todos(&note.body);
-            d.open_todos_total += open;
-            if n.note_type == "daily" && n.date == date {
-                d.open_todos_today += open;
+            // 글쓰기(원고)의 체크리스트는 할 일 모아보기 어디에도 세지 않는다 (list_todos와 같은 규칙)
+            if n.note_type != Builtin::Writing.id() {
+                let open = yamcha_core::parse::count_open_todos(&note.body);
+                d.open_todos_total += open;
+                if n.note_type == "daily" && n.date == date {
+                    d.open_todos_today += open;
+                }
             }
             if n.note_type != "book" {
                 continue;
