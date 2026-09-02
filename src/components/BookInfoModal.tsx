@@ -8,6 +8,7 @@ import { composeBookBody } from "../lib/book";
 import { coverSrc, fmStr } from "../lib/note";
 import { aliasesOf, aliasShadowedBy } from "../lib/resolveLink";
 import { pastFieldValues } from "./FrontmatterForm";
+import ListInput from "./ListInput";
 import Modal from "./Modal";
 
 const STATUSES: [string, string][] = [
@@ -52,11 +53,13 @@ export default function BookInfoModal({
     cover: fmStr(fm0, "cover"),
   });
   const initialTags = Array.isArray((fm0 as { tags?: unknown }).tags)
-    ? ((fm0 as { tags?: string[] }).tags ?? []).join(", ")
-    : "";
-  const [tagsDraft, setTagsDraft] = useState(initialTags);
-  // 별칭 — `[[비비풀]]`처럼 다른 이름으로도 이 책에 닿게 한다 (태그와 같은 쉼표 입력)
-  const [aliasDraft, setAliasDraft] = useState(aliasesOf(fm0).join(", "));
+    ? ((fm0 as { tags?: string[] }).tags ?? []).filter(
+        (t): t is string => typeof t === "string",
+      )
+    : [];
+  const [tags, setTags] = useState<string[]>(initialTags);
+  // 별칭 — `[[비비풀]]`처럼 다른 이름으로도 이 책에 닿게 한다 (태그와 같은 칩 입력)
+  const [aliases, setAliases] = useState<string[]>(aliasesOf(fm0));
   // 저자·출판사·분야는 같은 값을 되풀이해 넣는 칸이라 지난 값을 골라 쓸 수 있게 한다
   const bookOptions = useMemo(() => pastFieldValues(notes, "book"), [notes]);
   const [introDraft, setIntroDraft] = useState(intro);
@@ -165,15 +168,8 @@ export default function BookInfoModal({
         if (v === null) delete nextFm[k];
         else nextFm[k] = v;
       }
-      nextFm.tags = tagsDraft
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean);
+      nextFm.tags = tags;
       // 별칭이 없으면 키 자체를 지운다 — 빈 `aliases: []`로 frontmatter를 어지럽히지 않는다
-      const aliases = aliasDraft
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean);
       if (aliases.length > 0) nextFm.aliases = aliases;
       else delete nextFm.aliases;
       const body = composeBookBody(introDraft, records);
@@ -351,19 +347,20 @@ export default function BookInfoModal({
           </div>
         </div>
 
-        <label className="mt-3 flex flex-col gap-0.5">
-          <span className="text-xs text-neutral-500">별칭 (쉼표로 구분)</span>
-          <input
-            className={inputCls}
+        <div className="mt-3 flex flex-col gap-0.5">
+          <span className="text-xs text-neutral-500">별칭</span>
+          <ListInput
+            items={aliases}
+            onChange={setAliases}
             placeholder="예: 비비풀 — 이 이름으로 [[링크]]해도 이 책이 열립니다"
-            value={aliasDraft}
-            onChange={(e) => setAliasDraft(e.target.value)}
+            chipTone={(a) => (aliasShadowedBy(notes, a) ? "warn" : undefined)}
+            chipTitle={(a) => {
+              const owner = aliasShadowedBy(notes, a);
+              return owner ? `'${owner}' 글에 가려 쓰이지 않습니다` : undefined;
+            }}
           />
           {/* 다른 글의 이름에 가려 쓰이지 않는 별칭을 그 자리에서 알린다 */}
-          {aliasDraft
-            .split(",")
-            .map((a) => a.trim())
-            .filter(Boolean)
+          {aliases
             .map((a) => [a, aliasShadowedBy(notes, a)] as const)
             .filter((p): p is readonly [string, string] => p[1] !== null)
             .map(([alias, owner]) => (
@@ -371,17 +368,17 @@ export default function BookInfoModal({
                 '{alias}'은(는) '{owner}' 글의 이름이라 이 별칭으로는 오지 않습니다
               </span>
             ))}
-        </label>
+        </div>
 
-        <label className="mt-3 flex flex-col gap-0.5">
-          <span className="text-xs text-neutral-500">태그 (쉼표로 구분)</span>
-          <input
-            className={inputCls}
+        <div className="mt-3 flex flex-col gap-0.5">
+          <span className="text-xs text-neutral-500">태그</span>
+          <ListInput
+            items={tags}
+            onChange={setTags}
+            tone="tag"
             placeholder="예: 고전, 다시읽기"
-            value={tagsDraft}
-            onChange={(e) => setTagsDraft(e.target.value)}
           />
-        </label>
+        </div>
 
         <label className="mt-3 flex flex-col gap-0.5">
           <span className="text-xs text-neutral-500">책 소개</span>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { commands, type NoteContent, type TagSuggestion } from "../bindings";
+import ListInput from "./ListInput";
 import TagSuggestionRow from "./TagSuggestionRow";
 import { fmObject, useVault } from "../stores/vault";
 import { splitBookBody } from "../lib/book";
@@ -362,7 +363,7 @@ function StarRating({
   );
 }
 
-/** 태그 인라인 편집: 쉼표 구분 문자열 → 배열, blur/Enter 시 커밋 */
+/** 태그 인라인 편집 — 칩으로 담고 쉼표·Enter·포커스 이탈에 확정한다 */
 function TagEditor({
   tags,
   onCommit,
@@ -370,32 +371,16 @@ function TagEditor({
   tags: string[];
   onCommit: (next: string[]) => void;
 }) {
-  const joined = tags.join(", ");
-  const [v, setV] = useState(joined);
-  const [prev, setPrev] = useState(joined);
-  if (joined !== prev) {
-    setPrev(joined);
-    setV(joined);
-  }
-  function commit() {
-    const next = v
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean);
-    if (next.join(",") !== tags.join(",")) onCommit(next);
-  }
   return (
     <div className="mt-1 flex items-center gap-1">
-      <span className="text-neutral-400">#</span>
-      <input
-        className="min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-2xs text-violet-600 placeholder-neutral-300 hover:border-neutral-200 focus:border-neutral-400 focus:bg-white focus:outline-none"
-        placeholder="태그 (쉼표로 구분)"
-        value={v}
-        onChange={(e) => setV(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        }}
+      <span className="shrink-0 text-neutral-400">#</span>
+      <ListInput
+        items={tags}
+        onChange={onCommit}
+        tone="tag"
+        variant="inline"
+        placeholder="태그 (쉼표나 Enter로 구분)"
+        className="min-w-0 flex-1"
       />
     </div>
   );

@@ -353,6 +353,10 @@ export default function EditorPane() {
       )}
 
       <FrontmatterForm
+        // 노트를 갈아탈 때 폼을 통째로 새로 짓는다. 태그·별칭 칸은 치던 글자를
+        // DOM에 들고 있어서(ListInput), 그대로 두면 앞 노트에 쓰다 만 글자가
+        // 다음 노트 칸에 남는다.
+        key={current.rel_path}
         schema={schema}
         value={fm}
         onChange={setFrontmatter}

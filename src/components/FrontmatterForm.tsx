@@ -7,6 +7,7 @@ import type {
   TypeDef,
 } from "../bindings";
 import { aliasShadowedBy } from "../lib/resolveLink";
+import ListInput from "./ListInput";
 import TagSuggestionRow from "./TagSuggestionRow";
 
 type FmObject = { [key: string]: JsonValue | undefined };
@@ -229,31 +230,45 @@ function Field({
       );
       const isAliases = def.name === "aliases";
       return (
-        <label className="flex flex-col gap-0.5">
+        // 여러 값을 담는 칸이라 <label>로 감싸지 않는다 — 칩의 [x]를 눌러도
+        // label이 입력칸으로 포커스를 넘겨 버려서 지운 자리가 어긋난다.
+        <div className="flex flex-col gap-0.5">
           {label}
-          <input
-            className={inputCls}
-            placeholder={isAliases ? "쉼표로 구분 — 이 이름으로도 링크됨" : "쉼표로 구분"}
+          <ListInput
+            items={items}
+            onChange={(next) => onChange(next)}
+            tone={isAliases ? "neutral" : "tag"}
+            placeholder={
+              isAliases
+                ? "쉼표나 Enter로 구분 — 이 이름으로도 링크됨"
+                : "쉼표나 Enter로 구분"
+            }
             title={
               isAliases
                 ? "여기 적은 이름으로 [[링크]]해도 이 글이 열립니다. 같은 이름의 글이 따로 있으면 그 글이 우선입니다."
                 : undefined
             }
-            value={items.join(", ")}
-            onChange={(e) =>
-              onChange(
-                e.target.value
-                  .split(",")
-                  .map((s) => s.trim())
-                  .filter(Boolean),
-              )
+            // 제 구실을 못 하는 별칭은 칩 자체를 호박색으로 — 아래 설명과 같은 사실을
+            // 값 옆에서 먼저 보여 준다
+            chipTone={
+              shadowedBy
+                ? (a) => (shadowedBy(a) ? "warn" : undefined)
+                : undefined
+            }
+            chipTitle={
+              shadowedBy
+                ? (a) => {
+                    const owner = shadowedBy(a);
+                    return owner ? `'${owner}' 글에 가려 쓰이지 않습니다` : undefined;
+                  }
+                : undefined
             }
           />
           {onAddTag && (
             <TagSuggestionRow suggestions={suggestions} onAdd={onAddTag} />
           )}
           {shadowedBy && <ShadowedAliases items={items} shadowedBy={shadowedBy} />}
-        </label>
+        </div>
       );
     }
     case "image":
