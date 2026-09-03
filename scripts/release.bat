@@ -1,6 +1,27 @@
 @echo off
-chcp 65001 >nul
 setlocal enabledelayedexpansion
+
+rem === ASCII only above the "chcp" below - do not put Korean here. ===
+rem (Why: see the note right after this block.)
+if not defined YAMCHA_RELEASE_UTF8 (
+  for /f "tokens=2 delims=:" %%c in ('chcp') do set "OLDCP=%%c"
+  set YAMCHA_RELEASE_UTF8=1
+  chcp 65001 >nul
+  cmd /d /c "%~f0"
+  chcp !OLDCP! >nul
+  exit /b
+)
+
+rem 위 블록이 하는 일:
+rem 이 파일은 UTF-8로 저장돼 있는데, cmd는 배치 파일을 "열 때의 코드페이지"로
+rem 읽는다. 그래서 파일 한가운데서 chcp로 65001로 바꾸면, 그때까지 읽은 위치를
+rem 글자 수로 세어 두었다가 바이트로 되돌리면서 어긋나 버린다. 한글 주석
+rem 한복판부터 명령으로 해석해 이런 오류가 난다:
+rem   '전을'은(는) 내부 또는 외부 명령이 아닙니다
+rem 그래서 (1) chcp 앞에는 ASCII만 두어 글자 수와 바이트 수를 같게 맞추고,
+rem (2) 코드페이지를 바꾼 뒤 첫 바이트부터 UTF-8로 읽는 새 cmd에게 이 파일을
+rem 다시 넘긴다. 재실행 표시 변수는 setlocal 안이라 사용자 창으로 새지 않고,
+rem 원래 코드페이지도 끝나고 되돌려 놓는다.
 
 rem 이 배치파일이 하는 일:
 rem   1. Rust 툴체인을 최신 stable로 올리고, CI와 같은 검사를 로컬에서 돌리고
