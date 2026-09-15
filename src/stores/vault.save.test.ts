@@ -41,7 +41,8 @@ vi.mock("../bindings", () => ({
       data: {
         rel_path: rel,
         note_type: "free",
-        frontmatter: {},
+        // 이름을 바꾼 파일은 백엔드가 title을 넣어 다시 써 둔 상태다
+        frontmatter: { title: rel.split("/").pop()!.replace(/\.md$/, "") },
         body: "디스크에 있던 내용",
         stamp: "디스크-지문",
       },
@@ -280,10 +281,84 @@ describe("renameCurrent — 이름 바꾸는 동안 편집", () => {
 
     await renaming;
 
-    // openNote가 다시 읽어 들일 때도 새 경로 하나만 거친다 — 옛 경로에
+    // 마무리 단계에서도 새 경로 하나만 거친다 — 옛 경로에
     // 빈 파일을 만드는 별도의 저장은 없어야 한다
     expect(saveCalls).toHaveLength(1);
     expect(useVault.getState().current?.rel_path).toBe("Free/새 제목.md");
+  });
+
+  /** 백엔드는 이름을 바꾸면서 새 경로에 파일을 다시 쓴다(title 갱신). 화면이 옛 파일의
+   *  지문을 그대로 들고 있으면, 바꾸자마자 친 글자의 저장이 "남이 고쳤다"며 막혀
+   *  "외부에서 수정되었습니다" 경고가 떴다. */
+  it("이름을 바꾼 뒤의 저장은 새 파일의 지문을 들고 간다", async () => {
+    openNote("처음");
+
+    const renaming = useVault.getState().renameCurrent("새 제목");
+    await vi.waitFor(() => expect(releaseRename).not.toBeNull());
+    useVault.getState().setBody("이름 바꾸는 도중에 친 글자");
+    releaseRename!();
+
+    await vi.waitFor(() => expect(releaseSave).not.toBeNull());
+    expect(saveCalls[0].expected).toBe("디스크-지문");
+    releaseSave!();
+    await renaming;
+
+    expect(useVault.getState().externalChanged).toBe(false);
+    // 백엔드가 넣은 title은 화면 frontmatter에도 얹힌다
+    const fm = useVault.getState().current?.frontmatter as { title?: string };
+    expect(fm.title).toBe("새 제목");
+  });
+
+  it("이름을 바꾼 뒤에 친 글자를 디스크 내용으로 덮지 않는다", async () => {
+    openNote("처음");
+
+    const renaming = useVault.getState().renameCurrent("새 제목");
+    await vi.waitFor(() => expect(releaseRename).not.toBeNull());
+    releaseRename!();
+    // 왕복이 끝나고 목록을 갱신하는 사이에 사용자가 친다
+    await vi.waitFor(() =>
+      expect(useVault.getState().current?.rel_path).toBe("Free/새 제목.md"),
+    );
+    useVault.getState().setBody("이름 바꾼 직후에 친 글자");
+    await renaming;
+
+    // 예전엔 여기서 openNote로 다시 읽어 들여 "디스크에 있던 내용"이 됐다
+    expect(useVault.getState().current?.body).toBe("이름 바꾼 직후에 친 글자");
+    expect(useVault.getState().dirty).toBe(true);
+    // 편집기를 새로 만들지 않는다 — 노트를 갈아탄 게 아니다
+    expect(useVault.getState().openSeq).toBe(0);
+  });
+
+  it("아무것도 안 쳤으면 새 파일 내용(지문·title)으로 갈아탄다", async () => {
+    openNote("처음");
+
+    const renaming = useVault.getState().renameCurrent("새 제목");
+    await vi.waitFor(() => expect(releaseRename).not.toBeNull());
+    releaseRename!();
+    await renaming;
+
+    const cur = useVault.getState().current!;
+    expect(cur.rel_path).toBe("Free/새 제목.md");
+    expect(cur.stamp).toBe("디스크-지문");
+    expect((cur.frontmatter as { title?: string }).title).toBe("새 제목");
+    expect(useVault.getState().dirty).toBe(false);
+    expect(saveCalls).toHaveLength(0);
+  });
+
+  it("바꾸는 사이에 다른 노트로 옮겨 갔으면 화면을 도로 끌어오지 않는다", async () => {
+    openNote("처음");
+
+    const renaming = useVault.getState().renameCurrent("새 제목");
+    await vi.waitFor(() => expect(releaseRename).not.toBeNull());
+    // 사용자가 목록에서 다른 노트를 연다 (편집한 게 없어 저장 자물쇠를 기다리지 않는다)
+    await useVault.getState().openNote("Free/다른 노트.md");
+    expect(useVault.getState().current?.rel_path).toBe("Free/다른 노트.md");
+
+    releaseRename!();
+    await renaming;
+
+    expect(useVault.getState().current?.rel_path).toBe("Free/다른 노트.md");
+    expect(saveCalls).toHaveLength(0);
   });
 
   it("이름을 바꾸는 왕복 사이에 자동저장(Ctrl+S 등)이 겹쳐도 옛 경로에 파일을 만들지 않는다", async () => {

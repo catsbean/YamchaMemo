@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canMoveType, fmDisplay, josaRo, listFields } from "./note";
+import { canMoveType, fmDisplay, josaRo, listFields, titleFromBody } from "./note";
 
 describe("로/으로 고르기", () => {
   it("받침이 없으면 로", () => {
@@ -83,5 +83,23 @@ describe("목록에 내보일 칸 고르기", () => {
   it("분류 정의가 없으면 빈 목록", () => {
     expect(listFields(null)).toEqual([]);
     expect(listFields(undefined)).toEqual([]);
+  });
+});
+
+describe("본문 첫머리로 짓는 제목 미리보기", () => {
+  it("빈 줄·빈 체크박스를 건너뛰고 표시 문자를 벗긴다", () => {
+    expect(titleFromBody("\n\n- [ ] \n## 카레 만드는 법\n재료")).toBe("카레 만드는 법");
+    expect(titleFromBody("> 인용으로 시작")).toBe("인용으로 시작");
+    expect(titleFromBody("- [x] 끝낸 일")).toBe("끝낸 일");
+  });
+
+  it("24자까지만 쓴다", () => {
+    const long = "가".repeat(30);
+    expect(titleFromBody(long)).toBe("가".repeat(24));
+  });
+
+  it("본문이 비었으면 빈 문자열", () => {
+    expect(titleFromBody("")).toBe("");
+    expect(titleFromBody("\n- \n# ")).toBe("");
   });
 });

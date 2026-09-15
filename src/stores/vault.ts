@@ -104,6 +104,10 @@ interface VaultStore {
   schemas: TypeDef[];
   notes: NoteSummary[];
   current: NoteContent | null;
+  /** 다른 노트로 갈아탄 횟수. 편집기가 이 값을 key로 써서 노트를 바꿀 때만 새로
+   *  만들어진다 — 제목 변경·분류 이동으로 rel_path만 바뀔 때는 그대로 둔다
+   *  (그때 편집기를 새로 만들면 커서·조합 중인 한글·되돌리기 기록이 날아간다). */
+  openSeq: number;
   dirty: boolean;
   error: string | null;
   initialized: boolean;
@@ -316,6 +320,9 @@ let saving: Promise<void> | null = null;
 // 저장이 도는 사이에 또 저장 요청이 들어왔다 — 끝나면 한 번 더 돈다.
 // 예전에는 그냥 무시했는데, 그러면 저장 중에 누른 Ctrl+S가 아무 일도 하지 않았다.
 let resaveRequested = false;
+// 제목 변경·분류 이동으로 옮겨 가는 중인 옛 경로. 파일 감시가 이 경로의 "사라짐"을
+// 외부 수정으로 알려 오면 무시한다 — 내가 옮긴 것이지 남이 지운 것이 아니다.
+let relocatingFrom: string | null = null;
 // 미러 동기화 디바운스 타이머
 let mirrorTimer: ReturnType<typeof setTimeout> | null = null;
 /** 마지막 변경 뒤 이만큼 잠잠하면 미러로 복제한다 */
@@ -421,6 +428,71 @@ export const useVault = create<VaultStore>((set, get) => {
     return await run;
   }
 
+  /** 열려 있는 노트의 경로를 바꾸는 커맨드(제목 변경·분류 이동)를 돌린다 — 새 rel을
+   *  돌려주고, 실패하면 undefined.
+   *
+   *  왕복이 도는 사이(백엔드는 링크 치환·재색인까지 하므로 큰 vault에선 몇 초)에도
+   *  사용자는 계속 친다. 지켜야 할 것이 셋이다.
+   *  1. 자동저장이 끼어들어 사라질 옛 경로에 새 파일을 만들면 안 된다 → 저장 자물쇠를
+   *     쥔 채로 돈다. 그 사이 친 글자는 rel_path를 바로 갈아 끼워 새 경로로 흘려보낸다.
+   *  2. 백엔드가 새 경로에 파일을 다시 쓴다(title·type 갱신). 화면의 지문은 옛 파일
+   *     것이라, 그대로 두면 다음 저장이 "남이 고쳤다"며 막힌다 → 새 파일을 읽어 지문을
+   *     갈아 끼운다. 백엔드가 고친 frontmatter 필드(`carry`)도 그때 얹는다.
+   *  3. 그 사이 친 글자를 디스크 내용으로 덮어쓰면 안 된다 → dirty면 본문·frontmatter는
+   *     화면 것을 지키고, 아니면 디스크 것을 그대로 쓴다. */
+  async function relocateCurrent(
+    cur: NoteContent,
+    relocate: () => Promise<Result<string, string>>,
+    carry: string[],
+  ): Promise<string | undefined> {
+    relocatingFrom = cur.rel_path;
+    try {
+      return await withSaveLock(async () => {
+        if (get().dirty) await runSave();
+        return await guard(async () => {
+          const moved = unwrap(await relocate());
+          const fresh = unwrap(await commands.readNote(moved));
+          const mid = get().current;
+          if (mid && mid.rel_path === cur.rel_path) {
+            if (get().dirty) {
+              const patch: FmObject = {};
+              const freshFm = fmObject(fresh);
+              for (const k of carry) patch[k] = freshFm[k];
+              set({
+                current: {
+                  ...mid,
+                  rel_path: moved,
+                  note_type: fresh.note_type,
+                  stamp: fresh.stamp,
+                  frontmatter: { ...fmObject(mid), ...patch },
+                },
+              });
+            } else {
+              set({ current: fresh });
+            }
+          }
+          if (get().dirty) await runSave();
+          return moved;
+        });
+      });
+    } finally {
+      relocatingFrom = null;
+    }
+  }
+
+  /** 경로가 바뀐 노트가 여전히 화면에 있으면 그 자리를 새 경로로 마무리한다.
+   *  예전엔 openNote로 다시 읽어 들였는데, 그러면 왕복 뒤에 친 글자가 디스크 내용에
+   *  덮이고 편집기도 새로 만들어졌다. 그 사이 사용자가 다른 노트로 옮겨 갔으면
+   *  화면을 도로 끌어오지 않는다. */
+  async function settleRelocated(newRel: string) {
+    const now = get().current;
+    if (!now || now.rel_path !== newRel) return;
+    set({ nav: now.note_type });
+    const store = await settings();
+    await store.set("lastNav", now.note_type);
+    await store.set("lastNoteRel", newRel);
+  }
+
   /** 손을 멈춘 지 한참 지나면 미러로 복제 (변경이 잦으면 마지막 것만).
    *
    *  예전엔 2초였다. 자동저장이 3초마다 도니까 타이머가 저장 사이사이에 끼어들어,
@@ -483,6 +555,7 @@ export const useVault = create<VaultStore>((set, get) => {
     schemas: [],
     notes: [],
     current: null,
+    openSeq: 0,
     dirty: false,
     error: null,
     initialized: false,
@@ -900,7 +973,10 @@ export const useVault = create<VaultStore>((set, get) => {
         const changed = e.payload;
         await get().refresh();
         const cur = get().current;
-        if (cur && changed.includes(cur.rel_path)) {
+        // 제목을 바꾸는 왕복이 길면(링크 치환·재색인) 그 사이 감시가 옛 경로의 사라짐을
+        // 알려 온다. 화면은 아직 옛 경로를 들고 있어서, 안 거르면 "외부에서 수정됨"
+        // 경고가 뜨거나 없는 파일을 다시 읽으려다 오류가 난다.
+        if (cur && changed.includes(cur.rel_path) && cur.rel_path !== relocatingFrom) {
           if (get().dirty) {
             set({ externalChanged: true });
           } else {
@@ -990,7 +1066,16 @@ export const useVault = create<VaultStore>((set, get) => {
       }
       await guard(async () => {
         const note = unwrap(await commands.readNote(relPath));
-        set({ current: note, dirty: false, nav: note.note_type });
+        const switching = get().current?.rel_path !== relPath;
+        set({
+          current: note,
+          dirty: false,
+          nav: note.note_type,
+          openSeq: switching ? get().openSeq + 1 : get().openSeq,
+          // 외부 수정 경고는 앞 노트 얘기다 — 새로 읽은 노트에 남겨 두지 않는다
+          externalChanged: false,
+          forceOverwrite: false,
+        });
         const store = await settings();
         await store.set("lastNav", note.note_type);
         await store.set("lastNoteRel", relPath);
@@ -1204,48 +1289,28 @@ export const useVault = create<VaultStore>((set, get) => {
     async renameCurrent(newTitle) {
       const cur = get().current;
       if (!cur) return;
-      // 이름을 바꾸는 동안(백엔드 왕복 사이) 자동저장이 끼어들면 안 된다 —
-      // 그 사이엔 화면의 rel_path가 아직 옛 경로라, 자동저장이 사라진 옛 경로에
-      // 새 파일을 하나 더 만들어 버린다("새 제목=빈 글" + "옛 제목=본문 있는 글").
-      // 저장 자물쇠를 쥔 채로 이름을 바꾸고, 그 사이 친 글자는 rel_path를 바로
-      // 갈아 끼워 새 파일로 흘려보낸다.
-      const newRel = await withSaveLock(async () => {
-        if (get().dirty) await runSave();
-        return await guard(async () => {
-          const renamed = unwrap(await commands.renameNote(cur.rel_path, newTitle));
-          const mid = get().current;
-          if (mid && mid.rel_path === cur.rel_path) {
-            set({ current: { ...mid, rel_path: renamed } });
-          }
-          if (get().dirty) await runSave();
-          return renamed;
-        });
-      });
+      const newRel = await relocateCurrent(
+        cur,
+        () => commands.renameNote(cur.rel_path, newTitle),
+        ["title"],
+      );
       if (!newRel) return;
       await get().refresh();
-      await get().openNote(newRel);
+      await settleRelocated(newRel);
     },
 
     async moveCurrent(newTypeId) {
       const cur = get().current;
       if (!cur) return;
       const fromTypeId = cur.note_type;
-      // renameCurrent와 같은 이유로 저장 자물쇠를 쥔 채로 옮긴다.
-      const newRel = await withSaveLock(async () => {
-        if (get().dirty) await runSave();
-        return await guard(async () => {
-          const moved = unwrap(await commands.moveNote(cur.rel_path, newTypeId));
-          const mid = get().current;
-          if (mid && mid.rel_path === cur.rel_path) {
-            set({ current: { ...mid, rel_path: moved } });
-          }
-          if (get().dirty) await runSave();
-          return moved;
-        });
-      });
+      const newRel = await relocateCurrent(
+        cur,
+        () => commands.moveNote(cur.rel_path, newTypeId),
+        ["type"],
+      );
       if (!newRel) return;
       await get().refresh();
-      await get().openNote(newRel);
+      await settleRelocated(newRel);
       set({
         moveUndo: {
           rel: newRel,

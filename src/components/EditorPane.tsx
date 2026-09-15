@@ -28,10 +28,13 @@ import FrontmatterForm from "./FrontmatterForm";
 import { HistoryButton } from "./HistoryModal";
 import OutlineButton from "./OutlineButton";
 import { fmObject, useVault } from "../stores/vault";
+import { titleFromBody } from "../lib/note";
+import { ymd } from "../lib/date";
 
 export default function EditorPane() {
   const {
     current,
+    openSeq,
     dirty,
     schemas,
     notes,
@@ -59,6 +62,9 @@ export default function EditorPane() {
     toggleTodoBig,
   } = useVault();
   const [editingTitle, setEditingTitle] = useState<string | null>(null);
+  // Enter로 제목을 확정하면 칸이 사라지면서 blur가 한 번 더 온다 — 그 두 번째
+  // 호출이 같은 이름으로 또 바꾸려다("이미 없는 파일") 오류를 띄우지 않게 막는다
+  const titleCommitted = useRef(false);
   const goToLine = useRef<((line: number) => void) | null>(null);
   // 제목 변경 단축키는 훅이라 조기 반환보다 위에 있어야 한다 — 값은 ref로 받는다
   const displayTitleRef = useRef<string | null>(null);
@@ -103,6 +109,7 @@ export default function EditorPane() {
   // 방금 만든 노트는 제목칸을 열어 둔다 (제목을 미리 묻지 않고 바로 만들었으므로)
   useEffect(() => {
     if (current && pendingTitleRel === current.rel_path) {
+      titleCommitted.current = false;
       setEditingTitle("");
     }
   }, [pendingTitleRel, current?.rel_path]);
@@ -113,7 +120,10 @@ export default function EditorPane() {
   useShortcut("rawEdit", toggleRawEdit, !!current && isDaily);
   useShortcut(
     "rename",
-    () => setEditingTitle(displayTitleRef.current ?? ""),
+    () => {
+      titleCommitted.current = false;
+      setEditingTitle(displayTitleRef.current ?? "");
+    },
     !!current && current?.note_type !== "daily",
   );
 
@@ -175,7 +185,14 @@ export default function EditorPane() {
     typeof fm.title === "string" && fm.title.trim() ? fm.title : fileName;
   displayTitleRef.current = displayTitle ?? null;
 
+  function openTitleEditor(initial: string) {
+    titleCommitted.current = false;
+    setEditingTitle(initial);
+  }
+
   async function commitRename() {
+    if (titleCommitted.current) return;
+    titleCommitted.current = true;
     const t = editingTitle?.trim();
     setEditingTitle(null);
     if (!t) return; // 비워 두고 나가면 나중에 본문 첫머리로 자동 명명된다
@@ -183,6 +200,17 @@ export default function EditorPane() {
     clearPendingTitle();
     if (t !== displayTitle) await renameCurrent(t);
   }
+
+  // 아직 이름을 안 정한 노트 — 이대로 떠나면 `{날짜} {본문 첫 줄}`로 이름이 붙는다.
+  // 머리에 "무제"를 박아 두면 안내문("비워 두면 본문 첫 줄로")과 어긋나 보이므로,
+  // 그 이름을 미리 보여 준다.
+  const titlePending = pendingTitleRel === current.rel_path;
+  // 글쓰기는 자동 명명 대상이 아니다 (백엔드 `supports_title_prefix`) — 비워 두면 그냥 무제
+  const autoNames = current.note_type !== "writing";
+  const autoHead = titlePending && autoNames ? titleFromBody(current.body) : "";
+  const autoTitle = autoHead
+    ? `${typeof fm.date === "string" && fm.date ? fm.date : ymd(new Date())} ${autoHead}`
+    : "";
 
   /** 제안 칩을 누르면 tags에 더한다 — 파일 저장은 기존 저장 흐름 그대로 */
   function addSuggestedTag(tag: string) {
@@ -236,13 +264,20 @@ export default function EditorPane() {
             <input
               autoFocus
               className="min-w-0 flex-1 rounded border border-neutral-300 px-2 py-0.5 text-base font-bold focus:border-neutral-500 focus:outline-none"
-              placeholder="제목 (비워 두면 본문 첫 줄로 정해집니다)"
+              placeholder={
+                autoNames
+                  ? "제목 (비워 두면 본문 첫 줄로 정해집니다)"
+                  : "제목"
+              }
               value={editingTitle}
               onChange={(e) => setEditingTitle(e.target.value)}
               onBlur={commitRename}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !isImeEnter(e)) commitRename();
-                if (e.key === "Escape") setEditingTitle(null);
+                if (e.key === "Escape") {
+                  titleCommitted.current = true;
+                  setEditingTitle(null);
+                }
               }}
             />
           ) : (
@@ -250,16 +285,33 @@ export default function EditorPane() {
               <h1
                 className={`truncate text-base font-bold ${canRename ? "cursor-text" : ""}`}
                 onDoubleClick={() =>
-                  canRename && setEditingTitle(displayTitle ?? "")
+                  canRename && openTitleEditor(displayTitle ?? "")
                 }
-                title={canRename ? "더블클릭으로 제목 변경" : undefined}
+                title={
+                  titlePending
+                    ? autoNames
+                      ? "아직 제목이 없습니다. 이대로 두면 본문 첫 줄로 정해집니다 — 더블클릭해 직접 지을 수 있습니다"
+                      : "아직 제목이 없습니다 — 더블클릭해 지으세요"
+                    : canRename
+                      ? "더블클릭으로 제목 변경"
+                      : undefined
+                }
               >
-                {fileName}
+                {titlePending ? (
+                  <span className="font-normal italic text-neutral-400">
+                    {autoTitle ||
+                      (autoNames
+                        ? "제목 없음 · 본문 첫 줄로 정해집니다"
+                        : "제목 없음")}
+                  </span>
+                ) : (
+                  fileName
+                )}
               </h1>
               {canRename && (
                 <button
                   className="shrink-0 rounded px-1 text-xs text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
-                  onClick={() => setEditingTitle(displayTitle ?? "")}
+                  onClick={() => openTitleEditor(displayTitle ?? "")}
                   title="제목 변경 (파일명과 링크가 함께 바뀝니다)"
                 >
                   ✏️
@@ -355,8 +407,9 @@ export default function EditorPane() {
       <FrontmatterForm
         // 노트를 갈아탈 때 폼을 통째로 새로 짓는다. 태그·별칭 칸은 치던 글자를
         // DOM에 들고 있어서(ListInput), 그대로 두면 앞 노트에 쓰다 만 글자가
-        // 다음 노트 칸에 남는다.
-        key={current.rel_path}
+        // 다음 노트 칸에 남는다. rel_path가 아니라 openSeq를 쓰는 건 제목 변경으로
+        // 경로만 바뀔 때는 새로 짓지 않으려는 것이다.
+        key={openSeq}
         schema={schema}
         value={fm}
         onChange={setFrontmatter}
@@ -419,7 +472,9 @@ export default function EditorPane() {
         <div className="min-h-0 flex-1">
           <Editor
             onView={setEditorView}
-            key={current.rel_path}
+            // 제목을 바꾸는 사이에도 편집기는 그대로 둔다 — 새로 만들면 커서와
+            // 조합 중인 한글, 되돌리기 기록이 날아간다
+            key={openSeq}
             value={current.body}
             onChange={setBody}
             onNavigate={openByTitle}

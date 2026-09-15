@@ -117,3 +117,18 @@ export function coverSrc(vaultPath: string | null, cover: string): string {
   if (!vaultPath) return "";
   return vaultAssetSrc(vaultPath, cover);
 }
+
+/** 제목 없이 떠나는 노트에 붙을 이름의 머리 — 본문에서 처음 나오는 글 줄.
+ *
+ *  백엔드 `Vault::title_from_body`와 같은 규칙이다: 인용·머리글·목록 표시와 빈
+ *  체크박스는 벗기고, 24자까지만 쓴다. 실제 이름은 노트를 떠날 때 백엔드가 붙이고,
+ *  이건 편집기 머리에 "이렇게 붙습니다"를 미리 보여 주는 용도다. */
+export function titleFromBody(body: string): string {
+  for (const raw of body.split(/\r?\n/)) {
+    let t = raw.trim().replace(/^>+/, "").trimStart().replace(/^[#\-*+]+/, "").trimStart();
+    t = t.replace(/^\[[ xX]\]/, "").trim();
+    if (!t) continue;
+    return [...t].slice(0, 24).join("").trim();
+  }
+  return "";
+}
