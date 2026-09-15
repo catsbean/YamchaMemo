@@ -597,18 +597,25 @@ pub fn set_title_template(
     with_ctx_write(&state, |c| c.vault.write_title_template(&type_id, &content))
 }
 
-/// 제목 없이 닫은 노트에 `{날짜} {본문 첫머리}`로 이름을 붙인다.
-/// 이미 이름이 있거나 본문이 비었으면 아무것도 하지 않고 원래 rel을 돌려준다.
+/// 제목 없이 떠나는 노트를 정리한다: 아무것도 안 친 빈 노트는 지우고 `None`,
+/// 본문이 있으면 `{날짜} {본문 첫머리}`로 이름을 붙여 새 rel을 돌려준다.
+/// 이미 이름이 있으면 아무것도 하지 않고 원래 rel을 돌려준다.
 #[tauri::command]
 #[specta::specta]
-pub fn auto_title_note(state: State<'_, AppState>, rel_path: String) -> Result<String, String> {
+pub fn auto_title_note(
+    state: State<'_, AppState>,
+    rel_path: String,
+) -> Result<Option<String>, String> {
     with_ctx_write(&state, |c| {
-        let new_rel = c.vault.auto_title_if_untitled(&rel_path)?;
-        if new_rel != rel_path {
+        let settled = c.vault.settle_untitled(&rel_path)?;
+        if settled.as_deref() != Some(rel_path.as_str()) {
             c.indexer.remove(&rel_path)?;
             c.search.remove(&rel_path)?;
         }
-        refresh_note(c, &new_rel)?;
-        Ok(new_rel)
+        match &settled {
+            Some(new_rel) => refresh_note(c, new_rel)?,
+            None => c.search.commit()?,
+        }
+        Ok(settled)
     })
 }

@@ -1574,14 +1574,8 @@ impl Vault {
         String::new()
     }
 
-    /// 제목을 정하지 않고 닫은 노트에 이름을 붙여 준다.
-    /// 이미 이름이 있으면 그대로 두고, 없을 때만 `{날짜} {본문 첫머리}`로 바꾼다.
-    /// 바뀌었으면 새 rel, 아니면 원래 rel을 돌려준다.
-    pub fn auto_title_if_untitled(&self, rel: &str) -> Result<String, CoreError> {
-        let note = self.read_note(rel)?;
-        if !Self::supports_title_prefix(&note.note_type) {
-            return Ok(rel.to_string());
-        }
+    /// 이름을 정하지 않은 노트인가 — "무제" 또는 "무제 (2)"처럼 자동 부여된 이름만.
+    fn is_untitled(rel: &str, note: &NoteContent) -> bool {
         let stem = Path::new(rel)
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -1592,12 +1586,57 @@ impl Vault {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let current = if fm_title.is_empty() { stem.clone() } else { fm_title };
+        let current = if fm_title.is_empty() { stem } else { fm_title };
+        current == "무제" || (current.starts_with("무제 (") && current.ends_with(')'))
+    }
 
-        // "무제" 또는 "무제 (2)"처럼 자동 부여된 이름만 대상으로 한다
-        let untitled = current == "무제"
-            || (current.starts_with("무제 (") && current.ends_with(')'));
-        if !untitled {
+    /// 제목 없이 떠나는 노트를 정리한다. 아무것도 안 친 빈 노트면 **지우고** `None`,
+    /// 아니면 `{날짜} {본문 첫머리}`로 이름을 붙여(`auto_title_if_untitled`) rel을 돌려준다.
+    ///
+    /// "빈"의 기준은 이름을 지어낼 글 줄이 없고(`title_from_body`) frontmatter도 제목 없이
+    /// 만들었을 때의 기본값(`normalize_frontmatter`가 채우는 것) 그대로인 것이다.
+    /// 만들어 놓고 돌아선 노트라 휴지통에도 넣지 않는다 — 넣으면 휴지통이 무제로 가득 찬다.
+    pub fn settle_untitled(&self, rel: &str) -> Result<Option<String>, CoreError> {
+        let note = self.read_note(rel)?;
+        let locked = matches!(
+            Builtin::from_id(&note.note_type),
+            Some(Builtin::Daily) | Some(Builtin::Book)
+        );
+        if locked || !Self::is_untitled(rel, &note) {
+            return Ok(Some(rel.to_string()));
+        }
+        // 제목 없이 만들면 frontmatter는 기본값뿐이다 — 거기서 벗어난 칸이 있으면 사용자가 적은 것
+        let mut fm = note.frontmatter.as_object().cloned().unwrap_or_default();
+        let date = fm
+            .get("date")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let mut pristine = Map::new();
+        normalize_frontmatter(&mut pristine, &note.note_type, &date);
+        for auto in ["date", "type", "title", "started"] {
+            fm.remove(auto);
+            pristine.remove(auto);
+        }
+        if fm != pristine || !Self::title_from_body(&note.body).is_empty() {
+            return self.auto_title_if_untitled(rel).map(Some);
+        }
+        let abs = self.abs(rel)?;
+        fs::remove_file(&abs)?;
+        let _ = crate::history::clear_note(self, rel);
+        self.mark_index_stale(&note.note_type);
+        Ok(None)
+    }
+
+    /// 제목을 정하지 않고 닫은 노트에 이름을 붙여 준다.
+    /// 이미 이름이 있으면 그대로 두고, 없을 때만 `{날짜} {본문 첫머리}`로 바꾼다.
+    /// 바뀌었으면 새 rel, 아니면 원래 rel을 돌려준다.
+    pub fn auto_title_if_untitled(&self, rel: &str) -> Result<String, CoreError> {
+        let note = self.read_note(rel)?;
+        if !Self::supports_title_prefix(&note.note_type) {
+            return Ok(rel.to_string());
+        }
+        if !Self::is_untitled(rel, &note) {
             return Ok(rel.to_string());
         }
 
@@ -3198,6 +3237,39 @@ mod tests {
         // 본문이 비었으면 이름을 지어낼 근거가 없으니 그대로
         let empty = v.create_note("free", "", serde_json::json!({})).unwrap();
         assert_eq!(v.auto_title_if_untitled(&empty).unwrap(), empty);
+    }
+
+    #[test]
+    fn settle_untitled_discards_blank_note_but_keeps_typed_ones() {
+        let (_d, v) = vault();
+        // 만들어 놓고 아무것도 안 친 노트는 사라진다 — 휴지통에도 남기지 않는다
+        let blank = v.create_note("free", "", serde_json::json!({})).unwrap();
+        assert_eq!(v.settle_untitled(&blank).unwrap(), None);
+        assert!(!v.root.join(&blank).exists());
+        let trashed = fs::read_dir(v.root.join(".yamcha/trash"))
+            .map(|d| d.count())
+            .unwrap_or(0);
+        assert_eq!(trashed, 0);
+
+        // 본문이 있으면 예전처럼 첫 줄로 이름을 붙인다
+        let typed = v.create_note("free", "", serde_json::json!({})).unwrap();
+        v.save_note(&typed, serde_json::json!({}), "장보기 목록").unwrap();
+        let named = v.settle_untitled(&typed).unwrap().unwrap();
+        assert!(named.ends_with("장보기 목록.md"), "{named}");
+
+        // 본문은 비었어도 태그를 적었으면 지우지 않는다
+        let tagged = v.create_note("free", "", serde_json::json!({ "tags": ["요리"] })).unwrap();
+        assert_eq!(v.settle_untitled(&tagged).unwrap(), Some(tagged.clone()));
+        assert!(v.root.join(&tagged).exists());
+
+        // 글쓰기는 자동 명명 대상이 아니지만 빈 무제는 똑같이 정리한다
+        let piece = v.create_note("writing", "", serde_json::json!({})).unwrap();
+        assert_eq!(v.settle_untitled(&piece).unwrap(), None);
+
+        // 이름을 지은 노트는 비어 있어도 건드리지 않는다
+        let named_empty = v.create_note("free", "메모", serde_json::json!({})).unwrap();
+        assert_eq!(v.settle_untitled(&named_empty).unwrap(), Some(named_empty.clone()));
+        assert!(v.root.join(&named_empty).exists());
     }
 
     #[test]

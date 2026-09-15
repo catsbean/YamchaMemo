@@ -600,10 +600,11 @@ async setTitleTemplate(typeId: string, content: string) : Promise<Result<null, s
 }
 },
 /**
- * 제목 없이 닫은 노트에 `{날짜} {본문 첫머리}`로 이름을 붙인다.
- * 이미 이름이 있거나 본문이 비었으면 아무것도 하지 않고 원래 rel을 돌려준다.
+ * 제목 없이 떠나는 노트를 정리한다: 아무것도 안 친 빈 노트는 지우고 `None`,
+ * 본문이 있으면 `{날짜} {본문 첫머리}`로 이름을 붙여 새 rel을 돌려준다.
+ * 이미 이름이 있으면 아무것도 하지 않고 원래 rel을 돌려준다.
  */
-async autoTitleNote(relPath: string) : Promise<Result<string, string>> {
+async autoTitleNote(relPath: string) : Promise<Result<string | null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("auto_title_note", { relPath }) };
 } catch (e) {

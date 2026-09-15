@@ -416,6 +416,12 @@ npx tsc --noEmit -p tsconfig.json
 40. **제목을 비운 채 본문으로 가면 머리에 "무제"가 박혔다.** 안내문("비워 두면 본문 첫 줄로")과
     어긋나 보여서, 떠날 때 붙을 이름(`{날짜} {첫 줄}`)을 흐리게 미리 보여 준다
     (`titleFromBody` — 백엔드 `title_from_body`와 같은 규칙, 글쓰기는 자동 명명 대상이 아니다).
+41. **만들어 놓고 아무것도 안 친 무제 노트는 떠날 때 지운다** — 예전엔 빈 `무제.md`가 쌓였다.
+    `auto_title_note`가 부르던 `auto_title_if_untitled` 대신 `settle_untitled`이 정리한다:
+    본문에 글 줄이 없고 frontmatter가 제목 없이 만들 때의 기본값(`normalize_frontmatter`가
+    채우는 것) 그대로면 파일을 지우고 `None`, 아니면 예전처럼 첫 줄로 이름을 붙인다. **휴지통에
+    넣지 않는다** — 넣으면 무제로 가득 찬다. 태그 하나라도 적었으면 지우지 않는다.
+    커맨드 반환형이 `String`→`Option<String>`으로 바뀌었으니 `bindings.ts` 재생성이 필요하다(§2.3).
 
 ---
 
