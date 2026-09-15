@@ -46,7 +46,13 @@ pub struct ReindexReport {
     pub skipped: usize,
     /// 전체를 다시 읽었는가 (첫 실행이거나 검색 색인이 새로 만들어졌을 때)
     pub full: bool,
+    /// 아직 이 기기에 내려받지 않은 클라우드 파일이라 열지 않은 편수.
+    /// 색인에 남은 옛 내용은 그대로 두고, 내려받힌 뒤 따로 따라잡는다.
+    pub offline: usize,
 }
+
+/// 색인 진행 알림 — (처리한 편수, 전체 편수). 시작 화면이 "몇 편 중 몇 편"을 보여 주는 데 쓴다.
+pub type ReindexProgress<'a> = &'a mut dyn FnMut(usize, usize);
 
 /// vault 전체를 다시 인덱싱한다 (SQLite + tantivy).
 pub fn reindex_all(
@@ -54,16 +60,37 @@ pub fn reindex_all(
     indexer: &mut Indexer,
     search: &mut SearchEngine,
 ) -> Result<usize, CoreError> {
+    reindex_all_with(vault, indexer, search, &mut |_, _| {})
+}
+
+/// `reindex_all` + 진행 알림.
+///
+/// 내려받지 않은 클라우드 파일은 **열지 않는다** — 열면 다운로드가 끝날 때까지 여기서
+/// 멈추고, 그게 앱 시작 화면이 얼어붙는 원인이었다(iCloud 동기화 직후 실측 20초+).
+/// 그 편들은 색인에 없는 채로 두고 내려받힌 뒤 `refresh_note`로 따라잡는다.
+pub fn reindex_all_with(
+    vault: &Vault,
+    indexer: &mut Indexer,
+    search: &mut SearchEngine,
+    progress: ReindexProgress<'_>,
+) -> Result<usize, CoreError> {
     indexer.clear()?;
     search.clear()?;
+    let files = vault.list_note_files()?;
+    let total = files.len();
     let mut states = Vec::new();
-    for file in vault.list_note_files()? {
+    for (i, file) in files.iter().enumerate() {
+        progress(i, total);
+        if file.offline {
+            continue;
+        }
         if let Ok(parsed) = vault.parse_full(&file.rel_path) {
             indexer.upsert(&parsed)?;
             search.upsert(&parsed)?;
             states.push((file.rel_path.clone(), file.mtime, file.size));
         }
     }
+    progress(total, total);
     // 신원은 한 번에 몰아서 쓴다 (편마다 쓰면 그때마다 커밋한다)
     indexer.set_note_states(&states)?;
     search.commit()?;
@@ -84,20 +111,52 @@ pub fn reindex_changed(
     indexer: &mut Indexer,
     search: &mut SearchEngine,
 ) -> Result<ReindexReport, CoreError> {
+    reindex_changed_with(vault, indexer, search, &mut |_, _| {})
+}
+
+/// `reindex_changed` + 진행 알림. 내려받지 않은 클라우드 파일은 열지 않는다(`reindex_all_with` 참고).
+pub fn reindex_changed_with(
+    vault: &Vault,
+    indexer: &mut Indexer,
+    search: &mut SearchEngine,
+    progress: ReindexProgress<'_>,
+) -> Result<ReindexReport, CoreError> {
     if search.was_rebuilt() {
-        let indexed = reindex_all(vault, indexer, search)?;
-        return Ok(ReindexReport { indexed, full: true, ..Default::default() });
+        let files = vault.list_note_files()?;
+        let offline = files.iter().filter(|f| f.offline).count();
+        let indexed = reindex_all_with(vault, indexer, search, progress)?;
+        return Ok(ReindexReport { indexed, full: true, offline, ..Default::default() });
     }
 
-    let mut known = indexer.note_states()?;
     let files = vault.list_note_files()?;
+    reindex_files(vault, &files, indexer, search, progress)
+}
+
+/// 증분 색인의 몸통 — 목록을 받아 처리한다. 목록을 따로 받는 건 시험에서 "내려받지 않은
+/// 파일"을 흉내 내기 위해서다 (자리표시자는 클라우드 드라이브 안에서만 만들 수 있다).
+fn reindex_files(
+    vault: &Vault,
+    files: &[crate::vault::NoteFile],
+    indexer: &mut Indexer,
+    search: &mut SearchEngine,
+    progress: ReindexProgress<'_>,
+) -> Result<ReindexReport, CoreError> {
+    let mut known = indexer.note_states()?;
+    let total = files.len();
     let mut report = ReindexReport::default();
     let mut states = Vec::new();
 
-    for file in &files {
+    for (i, file) in files.iter().enumerate() {
+        progress(i, total);
         // 색인이 기억하는 신원과 같으면 열지 않는다
         if known.remove(&file.rel_path) == Some((file.mtime, file.size)) {
             report.skipped += 1;
+            continue;
+        }
+        // 바뀌었지만 아직 내려받지 않았다 — 색인의 옛 내용을 그대로 두고 신원도 갱신하지
+        // 않는다. 그래야 내려받힌 뒤(또는 다음 시작에) 다시 "바뀐 것"으로 잡힌다.
+        if file.offline {
+            report.offline += 1;
             continue;
         }
         if let Ok(parsed) = vault.parse_full(&file.rel_path) {
@@ -107,6 +166,7 @@ pub fn reindex_changed(
             report.indexed += 1;
         }
     }
+    progress(total, total);
     indexer.set_note_states(&states)?;
 
     // 남은 것 = 색인에는 있는데 디스크에 없다 (앱이 꺼진 사이에 지워졌다)
@@ -147,6 +207,48 @@ mod tests {
         let indexer = Indexer::open(&idx.path().join("index.db")).unwrap();
         let search = SearchEngine::open(&idx.path().join("search")).unwrap();
         (Fixture { _dir: dir, idx, vault }, indexer, search)
+    }
+
+    /// 아직 내려받지 않은 클라우드 파일은 열지 않는다 — 열면 다운로드가 끝날 때까지 멈추고,
+    /// 그게 시작 화면이 얼어붙던 원인이다. 색인의 옛 내용과 신원은 그대로 둬서
+    /// 내려받힌 뒤 다시 "바뀐 것"으로 잡히게 한다.
+    #[test]
+    fn 내려받지_않은_노트는_열지_않고_신원도_남기지_않는다() {
+        let (f, mut i, mut s) = setup();
+        let rel = f.vault.create_note("free", "구름 노트", json!({})).unwrap();
+        f.vault.save_note(&rel, json!({}), "옛 본문 자차카타").unwrap();
+        reindex_changed(&f.vault, &mut i, &mut s).unwrap();
+
+        // 앱 밖(다른 기기)에서 고쳐졌고, 이 기기엔 자리표시자만 왔다고 치자
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        f.vault.save_note(&rel, json!({}), "새 본문 파하가나").unwrap();
+        let mut files = f.vault.list_note_files().unwrap();
+        files.iter_mut().for_each(|x| x.offline = true);
+
+        let r = reindex_files(&f.vault, &files, &mut i, &mut s, &mut |_, _| {}).unwrap();
+        assert_eq!(r.offline, 1, "내려받지 않은 파일을 건너뛰지 않았다");
+        assert_eq!(r.indexed, 0, "내려받지 않은 파일을 읽었다");
+        assert_eq!(s.search("자차카타", 10).unwrap().len(), 1, "옛 내용을 지웠다");
+        assert!(s.search("파하가나", 10).unwrap().is_empty());
+
+        // 내려받힌 뒤 다시 돌면 이제야 읽는다 — 신원을 안 남겨 뒀기 때문
+        let r = reindex_changed(&f.vault, &mut i, &mut s).unwrap();
+        assert_eq!(r.indexed, 1, "내려받힌 뒤에도 옛 신원 때문에 건너뛰었다");
+        assert_eq!(s.search("파하가나", 10).unwrap().len(), 1);
+    }
+
+    /// 진행 알림은 0/N부터 N/N까지 온다 — 시작 화면이 "몇 편 중 몇 편"을 보여 주는 근거
+    #[test]
+    fn 진행_알림은_처음과_끝을_모두_알린다() {
+        let (f, mut i, mut s) = setup();
+        for n in 0..3 {
+            f.vault.create_note("free", &format!("노트 {n}"), json!({})).unwrap();
+        }
+        let mut seen = Vec::new();
+        reindex_changed_with(&f.vault, &mut i, &mut s, &mut |d, t| seen.push((d, t))).unwrap();
+        assert_eq!(seen.first(), Some(&(0, 3)));
+        assert_eq!(seen.last(), Some(&(3, 3)));
+        assert_eq!(seen.len(), 4);
     }
 
     /// 파일 신원이 그대로면 열지 않는다 — 이게 증분의 전부다

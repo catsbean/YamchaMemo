@@ -423,6 +423,30 @@ npx tsc --noEmit -p tsconfig.json
     넣지 않는다** — 넣으면 무제로 가득 찬다. 태그 하나라도 적었으면 지우지 않는다.
     커맨드 반환형이 `String`→`Option<String>`으로 바뀌었으니 `bindings.ts` 재생성이 필요하다(§2.3).
 
+**클라우드 드라이브에서 밟은 것 (0.6.2 이후)**
+
+42. **iCloud·OneDrive의 "필요할 때 내려받기" 파일은 읽는 순간 다운로드가 끝날 때까지 막힌다.**
+    다른 기기에서 쓴 노트가 이 PC엔 자리표시자(`FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`)로만
+    와 있는데, 시작 색인이 그걸 열면 iCloud가 굼뜬 만큼 앱이 "불러오는 중"에 얼어 있었다
+    (실측 20초+, CPU는 0.6초). 세 겹으로 막는다: ① `NoteFile.offline`(메타데이터만 보므로
+    다운로드를 일으키지 않는다) — 색인(`reindex_*`)과 목록 요약(`summary_of`)은 이 파일을
+    열지 않는다. ② `set_vault`는 비동기 커맨드 + `spawn_blocking` — 동기 커맨드는 메인
+    스레드에서 돌아 창이 통째로 얼고 진행 이벤트(`vault-open-progress`)도 못 나간다.
+    ③ vault를 연 뒤 별도 스레드(`spawn_hydrate`)가 그 파일들을 읽어(=내려받아) `refresh_note`로
+    색인하고 `vault-hydrated`로 알린다 — 감시(watcher)에만 맡기면 안 된다. 내려받기는 내용이
+    아니라 속성만 바뀌어 변경 알림이 온다는 보장이 없다.
+43. **자리표시자의 임시 요약(`stub_summary`)은 캐시에 넣으면 안 된다.** 내려받혀도 (수정시각,
+    크기)가 그대로라 캐시 키가 같다 — 한 번 넣으면 진짜 내용을 영영 읽지 않는다. 같은 이유로
+    색인도 그 편의 신원(`note_state`)을 남기지 않아서 내려받힌 뒤 다시 "바뀐 것"으로 잡힌다.
+44. **`refresh_note`가 남기던 신원은 밀리초였고 `list_note_files`는 나노초였다.** 그래서 앱에서
+    저장한 편은 다음 시작마다 또 읽혔다(증분의 이득이 그만큼 샜다). 지금은 둘 다 나노초.
+45. **검증법: `attrib +U -P <파일>`로 iCloud 파일을 다시 자리표시자로 만들 수 있다.** 내려받은
+    상태로 되돌리려면 읽은 뒤 `attrib -U +P`. 실제 자리표시자 판별은
+    `YAMCHA_PLACEHOLDER_FILE=<경로> cargo test -p yamcha-core 실제_자리표시자 -- --ignored`.
+    끝까지 보려면 개발 앱을 디버그 포트로 띄워 CDP로 `set_vault`를 부르고
+    `vault-open-progress`·`vault-hydrated`를 모은다 — 경로는 **JSON 파일로** 넘길 것,
+    셸 인자로 넘기면 백슬래시가 지워져 `C:UsersSG…`라는 상대경로 vault가 드라이브 루트에 생긴다.
+
 ---
 
 ## 8. 범위 밖 (하지 말 것)

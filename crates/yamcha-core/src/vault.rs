@@ -155,6 +155,29 @@ pub struct NoteFile {
     /// 수정 시각 (epoch 밀리초). 읽을 수 없으면 0 — 늘 바뀐 것으로 본다.
     pub mtime: i64,
     pub size: i64,
+    /// 클라우드 자리표시자라 본문이 아직 이 기기에 없다 (iCloud·OneDrive "필요할 때 내려받기").
+    /// 읽으면 다운로드가 끝날 때까지 그 자리에서 막히므로, 시작 경로에서는 열지 않는다.
+    pub offline: bool,
+}
+
+/// 파일이 클라우드 자리표시자인가 — 디렉터리 목록엔 보이지만 내용은 서버에만 있다.
+///
+/// Windows의 Cloud Files API(iCloud for Windows·OneDrive)는 이런 파일에
+/// `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`(0x400000)를 세운다. `FILE_ATTRIBUTE_OFFLINE`(0x1000)은
+/// 예전 방식이지만 같은 뜻이라 함께 본다. 메타데이터만 보므로 다운로드를 일으키지 않는다.
+pub fn is_cloud_placeholder(meta: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
+        const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
+        meta.file_attributes() & (FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS) != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = meta;
+        false
+    }
 }
 
 /// 편집기용 노트 전체 내용
@@ -914,6 +937,12 @@ impl Vault {
                 }
             }
         }
+        // 아직 내려받지 않은 파일은 열지 않는다 — 열면 다운로드가 끝날 때까지 여기서 멈춘다.
+        // 이름만으로 만든 임시 요약을 돌려주되 **캐시에는 넣지 않는다**: 내려받혀도 (수정시각, 크기)는
+        // 그대로라 캐시 키가 같아서, 한 번 넣으면 진짜 내용을 영영 읽지 않게 된다.
+        if file.offline {
+            return Some(self.stub_summary(file));
+        }
         let fresh = self
             .summarize(&self.root.join(&file.rel_path), &file.note_type)
             .ok()?;
@@ -924,6 +953,39 @@ impl Vault {
             );
         }
         Some(fresh)
+    }
+
+    /// 내용을 읽지 않고 이름만으로 만든 요약 — 클라우드 자리표시자용.
+    ///
+    /// 제목은 파일 이름(이 앱은 제목을 파일 이름으로 쓴다), 날짜는 파일 이름이 날짜면 그것,
+    /// 아니면 수정 시각. 태그·글자 수·frontmatter는 비운다. 내려받힌 뒤 진짜 요약으로 바뀐다.
+    pub(crate) fn stub_summary(&self, file: &NoteFile) -> NoteSummary {
+        let stem = Path::new(&file.rel_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let looks_like_date = stem.len() == 10
+            && stem.bytes().enumerate().all(|(i, b)| {
+                if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() }
+            });
+        let date = if looks_like_date {
+            stem.clone()
+        } else {
+            let secs = file.mtime / 1_000_000_000;
+            chrono::DateTime::from_timestamp(secs, 0)
+                .map(|t| t.with_timezone(&Local).format("%Y-%m-%d").to_string())
+                .unwrap_or_default()
+        };
+        NoteSummary {
+            rel_path: file.rel_path.clone(),
+            note_type: file.note_type.clone(),
+            title: stem,
+            date,
+            tags: Vec::new(),
+            char_count: 0,
+            entry_count: 0,
+            frontmatter: Value::Object(Map::new()),
+        }
     }
 
     /// 사라진 파일의 요약은 버린다 (안 버리면 캐시가 계속 자란다)
@@ -957,6 +1019,7 @@ impl Vault {
                 .map(|d| d.as_nanos() as i64)
                 .unwrap_or(0),
             size: meta.len() as i64,
+            offline: is_cloud_placeholder(&meta),
         };
         self.summary_of(&file)
             .ok_or_else(|| CoreError::NotFound(rel.to_string()))
@@ -1009,6 +1072,7 @@ impl Vault {
                         note_type: type_id.to_string(),
                         mtime,
                         size: meta.len() as i64,
+                        offline: is_cloud_placeholder(&meta),
                     });
                 }
             }
@@ -2319,6 +2383,68 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let v = Vault::open(dir.path()).unwrap();
         (dir, v)
+    }
+
+    /// 내려받지 않은 클라우드 파일은 **열지 않고** 이름만으로 요약한다. 열면 다운로드가
+    /// 끝날 때까지 멈춘다. 그리고 그 임시 요약을 캐시에 넣으면 안 된다 — 내려받혀도
+    /// (수정시각, 크기)가 그대로라 캐시가 진짜 내용을 영영 안 읽는다.
+    #[test]
+    fn 내려받지_않은_노트는_이름으로만_요약하고_캐시에_넣지_않는다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "구름 위 노트", json!({ "tags": ["태그"] })).unwrap();
+        let mut file = v
+            .list_note_files()
+            .unwrap()
+            .into_iter()
+            .find(|f| f.rel_path == rel)
+            .unwrap();
+        file.offline = true;
+
+        let stub = v.summary_of(&file).unwrap();
+        assert_eq!(stub.title, "구름 위 노트");
+        assert!(stub.tags.is_empty(), "내용을 읽었다");
+        assert!(!stub.date.is_empty(), "날짜가 비었다 — 목록 정렬이 깨진다");
+
+        // 내려받힌 뒤 같은 신원으로 다시 물으면 이제 진짜 내용이어야 한다
+        file.offline = false;
+        let real = v.summary_of(&file).unwrap();
+        assert_eq!(real.tags, vec!["태그"], "임시 요약이 캐시에 눌러앉았다");
+    }
+
+    /// 파일 이름이 날짜면(데일리) 그 날짜를 쓴다 — 내용을 안 읽어도 제자리에 정렬된다
+    #[test]
+    fn 이름만으로_만든_요약은_데일리_날짜를_이름에서_읽는다() {
+        let (_d, v) = vault();
+        let file = NoteFile {
+            rel_path: "Daily/2026/09/2026-09-15.md".into(),
+            note_type: "daily".into(),
+            mtime: 0,
+            size: 0,
+            offline: true,
+        };
+        assert_eq!(v.stub_summary(&file).date, "2026-09-15");
+        assert_eq!(v.stub_summary(&file).title, "2026-09-15");
+    }
+
+    /// 보통 파일은 자리표시자가 아니다 (메타데이터만 보고 판단한다)
+    #[test]
+    fn 보통_파일은_자리표시자가_아니다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "땅 위 노트", json!({})).unwrap();
+        let meta = fs::metadata(v.root().join(&rel)).unwrap();
+        assert!(!is_cloud_placeholder(&meta));
+        assert!(v.list_note_files().unwrap().iter().all(|f| !f.offline));
+    }
+
+    /// 실제 클라우드 자리표시자로 확인한다 — `YAMCHA_PLACEHOLDER_FILE`에 iCloud·OneDrive의
+    /// "필요할 때 내려받기" 파일 경로를 주고 `--ignored`로 돈다. 메타데이터만 보므로
+    /// 다운로드를 일으키지 않는다.
+    #[test]
+    #[ignore]
+    fn 실제_자리표시자를_알아본다() {
+        let p = std::env::var("YAMCHA_PLACEHOLDER_FILE").expect("YAMCHA_PLACEHOLDER_FILE");
+        let meta = fs::metadata(&p).unwrap();
+        assert!(is_cloud_placeholder(&meta), "자리표시자를 못 알아봤다: {p}");
     }
 
     /// 목록 요약은 캐시에서 오지만, **파일이 바뀌면 반드시 새 값이 나와야 한다.**

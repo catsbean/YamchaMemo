@@ -203,6 +203,9 @@ interface VaultStore {
   /** 지정한 시작 탭/글을 못 찾아 대신 홈을 연 이유 — 잠깐 보여주고 지운다 */
   startupNotice: string | null;
   dismissStartupNotice(): void;
+  /** vault를 여는 동안 백엔드가 알려 오는 진행 문구 ("노트 색인 중 12/146"). 시작 화면에 띄운다.
+   *  끝나면 null — 내려받지 않은 노트를 뒤에서 받는 동안은 그 문구가 남는다. */
+  openProgress: string | null;
   /** 꺼 둔 단축키 id 목록 (기본은 전부 켬) */
   shortcutsOff: string[];
   toggleShortcut(id: string): Promise<void>;
@@ -769,6 +772,7 @@ export const useVault = create<VaultStore>((set, get) => {
     dismissStartupNotice() {
       set({ startupNotice: null });
     },
+    openProgress: null,
     shortcutsOff: [],
     async toggleShortcut(id) {
       const off = get().shortcutsOff;
@@ -819,6 +823,21 @@ export const useVault = create<VaultStore>((set, get) => {
     async init() {
       if (initStarted) return;
       initStarted = true;
+      // vault를 여는 동안의 진행 — setVault보다 먼저 걸어야 첫 알림을 놓치지 않는다
+      await listen<{ phase: string; done: number; total: number }>(
+        "vault-open-progress",
+        (e) => {
+          const { phase, done, total } = e.payload;
+          set({
+            openProgress:
+              phase === "index"
+                ? `노트 색인 중 ${done}/${total}`
+                : phase === "hydrate"
+                  ? `클라우드에서 내려받는 중 ${done}/${total}`
+                  : null,
+          });
+        },
+      );
       await guard(async () => {
         const store = await settings();
         const layout = ((await store.get<string>("layout")) ??
@@ -967,6 +986,17 @@ export const useVault = create<VaultStore>((set, get) => {
         }
       });
       set({ initialized: true });
+
+      // 시작 때 내려받지 않았던 노트가 뒤에서 받아졌다 — 이름만으로 만든 임시 요약을
+      // 진짜로 갈아 끼운다. 외부 변경과 달리 "외부에서 수정됨" 경고는 띄우지 않는다:
+      // 내용이 바뀐 게 아니라 이제야 이 기기에 도착한 것뿐이다.
+      await listen<string[]>("vault-hydrated", async (e) => {
+        await get().refresh();
+        const cur = get().current;
+        if (cur && e.payload.includes(cur.rel_path) && !get().dirty) {
+          await get().reloadCurrent();
+        }
+      });
 
       // 외부 파일 변경 이벤트 (파일 감시)
       await listen<string[]>("vault-external-change", async (e) => {

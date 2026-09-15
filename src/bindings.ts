@@ -10,7 +10,11 @@ async coreVersion() : Promise<string> {
     return await TAURI_INVOKE("core_version");
 },
 /**
- * vault 폴더를 열고 (없으면 폴더 구조 생성) 전체 재색인
+ * vault 폴더를 열고 (없으면 폴더 구조 생성) 바뀐 노트를 재색인한다.
+ * 
+ * 비동기 커맨드다. 동기 커맨드는 메인 스레드에서 돌아서, 색인이 오래 걸리면(클라우드
+ * 드라이브가 느릴 때) 창 전체가 "불러오는 중"에 얼어붙고 진행 이벤트도 못 나간다.
+ * 실제 일은 `spawn_blocking`으로 보내고, 진행은 `vault-open-progress`로 알린다.
  */
 async setVault(path: string) : Promise<Result<null, string>> {
     try {

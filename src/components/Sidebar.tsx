@@ -23,6 +23,7 @@ export default function Sidebar({
 }) {
   const {
     vaultPath,
+    openProgress,
     schemas,
     notes,
     todoOpenTotal,
@@ -189,6 +190,13 @@ export default function Sidebar({
         <p className="truncate text-2xs text-neutral-400" title={vaultPath ?? ""}>
           {vaultPath}
         </p>
+        {openProgress && (
+          // 시작 뒤에도 내려받지 않은 노트를 뒤에서 받는 동안은 여기서 알린다 —
+          // 그동안 목록의 그 편들은 이름만 있는 임시 요약이다
+          <p className="truncate text-2xs text-sky-600" title={openProgress}>
+            ☁ {openProgress}
+          </p>
+        )}
         <div className="mt-1 flex items-center gap-3">
           <button
             className="text-2xs text-neutral-500 underline hover:text-neutral-700"

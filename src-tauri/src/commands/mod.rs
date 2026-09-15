@@ -77,13 +77,14 @@ pub(crate) fn refresh_note(ctx: &mut Ctx, rel: &str) -> Result<(), yamcha_core::
             ctx.indexer.upsert(&parsed)?;
             ctx.search.upsert(&parsed)?;
             // 방금 색인한 시점의 파일 신원도 남긴다 — 안 남기면 다음에 앱을 켤 때
-            // 이 편을 또 읽는다 (틀리지는 않지만 증분의 이득이 사라진다)
+            // 이 편을 또 읽는다. list_note_files와 같은 잣대(나노초)여야 한다 — 밀리초로
+            // 남겼더니 신원이 안 맞아 저장한 편마다 다음 시작에 또 읽혔다.
             if let Ok(meta) = std::fs::metadata(ctx.vault.root().join(rel)) {
                 let mtime = meta
                     .modified()
                     .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis() as i64)
+                    .map(|d| d.as_nanos() as i64)
                     .unwrap_or(0);
                 ctx.indexer.set_note_state(rel, mtime, meta.len() as i64)?;
             }
@@ -164,38 +165,68 @@ fn remove_legacy_index(vault_root: &Path) {
     }
 }
 
-/// vault 폴더를 열고 (없으면 폴더 구조 생성) 전체 재색인
+/// vault를 여는 동안의 진행 알림 (`vault-open-progress` 이벤트). 시작 화면이 문구로 보여 준다.
+#[derive(serde::Serialize, Clone)]
+pub struct OpenProgress {
+    /// `index`(바뀐 노트 색인) · `hydrate`(내려받지 않은 노트를 받아 따라잡는 중) · `done`
+    pub phase: &'static str,
+    pub done: usize,
+    pub total: usize,
+}
+
+fn emit_open_progress(app: &tauri::AppHandle, phase: &'static str, done: usize, total: usize) {
+    let _ = app.emit("vault-open-progress", OpenProgress { phase, done, total });
+}
+
+/// vault 폴더를 열고 (없으면 폴더 구조 생성) 바뀐 노트를 재색인한다.
+///
+/// 비동기 커맨드다. 동기 커맨드는 메인 스레드에서 돌아서, 색인이 오래 걸리면(클라우드
+/// 드라이브가 느릴 때) 창 전체가 "불러오는 중"에 얼어붙고 진행 이벤트도 못 나간다.
+/// 실제 일은 `spawn_blocking`으로 보내고, 진행은 `vault-open-progress`로 알린다.
 #[tauri::command]
 #[specta::specta]
-pub fn set_vault(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<(), String> {
+pub async fn set_vault(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || open_vault(&app, &path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn open_vault(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
+    let state = app.state::<AppState>();
     // 로컬 이미지(표지 등)를 asset:// 프로토콜로 표시할 수 있게 vault를 스코프에 허용
     let _ = app
         .asset_protocol_scope()
-        .allow_directory(std::path::Path::new(&path), true);
+        .allow_directory(std::path::Path::new(path), true);
     // 락을 먼저 잡아 동시 호출을 직렬화하고, 기존 Ctx를 놓아
     // tantivy IndexWriter 잠금(LockBusy)을 해제한 뒤 새로 연다.
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
     if let Some(existing) = guard.as_ref() {
-        if existing.vault.root() == std::path::Path::new(&path) {
+        if existing.vault.root() == std::path::Path::new(path) {
             return Ok(()); // 같은 vault 중복 호출 무시
         }
     }
     *guard = None;
-    let vault = Vault::open(&path).map_err(|e| e.to_string())?;
-    let index_dir = index_dir_for(&app, vault.root())?;
+    let vault = Vault::open(path).map_err(|e| e.to_string())?;
+    let index_dir = index_dir_for(app, vault.root())?;
     std::fs::create_dir_all(&index_dir).map_err(|e| e.to_string())?;
     let mut indexer = Indexer::open(&index_dir.join("index.db")).map_err(|e| e.to_string())?;
     let mut search = SearchEngine::open(&index_dir.join("search")).map_err(|e| e.to_string())?;
     remove_legacy_index(vault.root());
-    // 바뀐 노트만 다시 읽는다 — 켤 때마다 전체를 읽으면 2,000편에 11.9초다
-    yamcha_core::reindex_changed(&vault, &mut indexer, &mut search).map_err(|e| e.to_string())?;
+    // 바뀐 노트만 다시 읽는다 — 켤 때마다 전체를 읽으면 2,000편에 11.9초다.
+    // 진행은 25편마다 한 번 알린다 (편마다 보내면 이벤트가 색인보다 비싸진다).
+    let mut progress = |done: usize, total: usize| {
+        if done == total || done.is_multiple_of(25) {
+            emit_open_progress(app, "index", done, total);
+        }
+    };
+    yamcha_core::reindex_changed_with(&vault, &mut indexer, &mut search, &mut progress)
+        .map_err(|e| e.to_string())?;
     // 없어진 노트의 스냅샷을 걷는다. 앱 밖(옵시디언·탐색기)에서 지운 파일은
     // delete_note를 거치지 않아 스냅샷만 남는다 — 놔두면 계속 쌓인다.
+    // 같은 목록에서 아직 내려받지 않은 노트도 추려 둔다 — 열린 뒤 따로 따라잡는다.
+    let mut offline: Vec<String> = Vec::new();
     if let Ok(files) = vault.list_note_files() {
+        offline = files.iter().filter(|f| f.offline).map(|f| f.rel_path.clone()).collect();
         let live: Vec<String> = files.into_iter().map(|f| f.rel_path).collect();
         let _ = yamcha_core::history::prune_orphans(&vault, &live);
     }
@@ -212,11 +243,53 @@ pub fn set_vault(
     crate::watcher::mark_self_write();
     // 파일 감시 시작 (기존 감시는 교체)
     let watcher_state = app.state::<WatcherState>();
-    let handle = crate::watcher::start(app.clone(), root);
+    let handle = crate::watcher::start(app.clone(), root.clone());
     if let Ok(mut w) = watcher_state.0.lock() {
         *w = handle;
     }
+    if offline.is_empty() {
+        emit_open_progress(app, "done", 0, 0);
+    } else {
+        spawn_hydrate(app.clone(), root, offline);
+    }
     Ok(())
+}
+
+/// 아직 내려받지 않은 클라우드 노트를 뒤에서 하나씩 받아 색인에 넣는다.
+///
+/// 시작 경로는 이 파일들을 열지 않았다(열면 다운로드가 끝날 때까지 멈춘다). 여기서는
+/// 별도 스레드가 대신 기다린다 — 읽기 자체가 다운로드를 일으키고, 그동안 앱은 멀쩡히 돈다.
+/// 받은 편은 `refresh_note`로 색인하고 `vault-hydrated`로 알려 목록의 임시 요약을 갈아 끼운다.
+/// 감시(watcher)에만 맡기지 않는 이유: 내려받기는 내용이 바뀌는 게 아니라 속성만 바뀌어
+/// 파일 변경 알림이 온다는 보장이 없다.
+fn spawn_hydrate(app: tauri::AppHandle, root: PathBuf, rels: Vec<String>) {
+    std::thread::spawn(move || {
+        let total = rels.len();
+        let mut batch: Vec<String> = Vec::new();
+        for (i, rel) in rels.iter().enumerate() {
+            emit_open_progress(&app, "hydrate", i, total);
+            if std::fs::read(root.join(rel)).is_err() {
+                continue; // 못 받았다(오프라인 등) — 다음 시작에 다시 "바뀐 것"으로 잡힌다
+            }
+            let state = app.state::<AppState>();
+            let Ok(mut guard) = state.0.lock() else { break };
+            let Some(ctx) = guard.as_mut() else { break };
+            if ctx.vault.root() != root {
+                break; // 그 사이 다른 vault로 옮겼다
+            }
+            if refresh_note(ctx, rel).is_ok() {
+                batch.push(rel.clone());
+            }
+            drop(guard);
+            if batch.len() >= 10 {
+                let _ = app.emit("vault-hydrated", std::mem::take(&mut batch));
+            }
+        }
+        if !batch.is_empty() {
+            let _ = app.emit("vault-hydrated", batch);
+        }
+        emit_open_progress(&app, "done", total, total);
+    });
 }
 
 /// 첫 실행 화면에 제안할 저장 위치 (클라우드 동기화 폴더 등)

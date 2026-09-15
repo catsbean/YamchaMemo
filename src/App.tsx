@@ -28,6 +28,7 @@ export default function App() {
     clearError,
     startupNotice,
     dismissStartupNotice,
+    openProgress,
   } = useVault();
 
   const [searchOpen, setSearchOpen] = useState(false);
@@ -85,9 +86,10 @@ export default function App() {
   }, []);
 
   if (!initialized) {
+    // 백엔드가 진행을 알려 오면 그 문구를 — "불러오는 중"만 오래 떠 있으면 멈춘 것처럼 보인다
     return (
       <div className="flex h-full items-center justify-center text-neutral-400">
-        불러오는 중…
+        {openProgress ?? "불러오는 중…"}
       </div>
     );
   }
