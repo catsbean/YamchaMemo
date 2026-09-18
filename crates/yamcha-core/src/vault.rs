@@ -1034,6 +1034,16 @@ impl Vault {
         Ok(out)
     }
 
+    /// 이 경로가 노트인가 — `.md`이면서 이름이 `_`로 시작하지 않는 것.
+    ///
+    /// `_index.md` 같은 자동 생성 파일은 노트가 아니다. 목록·색인·감시가 모두
+    /// 같은 잣대를 써야 한다 — 감시 경로만 이 판단을 빼먹었더니 `_index.md`가 색인에
+    /// 들어가 타입의 모든 노트에 백링크로 떠올랐다.
+    pub fn is_note_file(rel_path: &str) -> bool {
+        let name = rel_path.rsplit(['/', '\\']).next().unwrap_or(rel_path);
+        name.ends_with(".md") && !name.starts_with('_')
+    }
+
     /// 노트 파일의 경로·수정시각·크기만 훑는다 (**내용은 읽지 않는다**).
     ///
     /// 증분 색인이 "무엇이 바뀌었나"를 판단할 때 쓴다. `list_notes()`는 편마다 파일을
@@ -1055,7 +1065,7 @@ impl Vault {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if path.is_dir() {
                     walk(root, &path, type_id, out)?;
-                } else if name.ends_with(".md") && !name.starts_with('_') {
+                } else if Vault::is_note_file(&name) {
                     let Ok(meta) = entry.metadata() else { continue };
                     // 수정시각을 못 읽는 파일은 늘 바뀐 것으로 본다 (0)
                     let mtime = meta
@@ -2175,7 +2185,7 @@ impl Vault {
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
-            if !name.ends_with(".md") || name.starts_with('_') {
+            if !Vault::is_note_file(&name) {
                 continue;
             }
             let Ok(content) = fs::read_to_string(&path) else {
@@ -2383,6 +2393,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let v = Vault::open(dir.path()).unwrap();
         (dir, v)
+    }
+
+    /// 자동 생성 `_index.md`는 노트가 아니다 — 폴더 안이든 루트든, 구분자가 무엇이든.
+    #[test]
+    fn index_file_is_not_a_note() {
+        assert!(Vault::is_note_file("Free/메모.md"));
+        assert!(Vault::is_note_file("_underscore_folder/메모.md"));
+        assert!(!Vault::is_note_file("Free/_index.md"));
+        assert!(!Vault::is_note_file("Free\\_index.md"));
+        assert!(!Vault::is_note_file("_index.md"));
+        assert!(!Vault::is_note_file("Free/메모.md.tmp"));
+        assert!(!Vault::is_note_file("_attachments/2026-07/보고서.pdf"));
     }
 
     /// 내려받지 않은 클라우드 파일은 **열지 않고** 이름만으로 요약한다. 열면 다운로드가

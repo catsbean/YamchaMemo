@@ -70,9 +70,17 @@ fn with_ctx_write<T>(
 }
 
 /// 노트 변경 후 인덱스 갱신 (파일이 없으면 인덱스에서 제거)
+///
+/// `_index.md`처럼 노트가 아닌 `.md`는 파싱하지 않고 색인에서 뺀다 — 감시가 이 파일의
+/// 바깥 변경(동기화 등)을 넘겨주면 파싱돼 들어가고, 안의 `[[링크]]`가 죄다 백링크가 됐다.
 pub(crate) fn refresh_note(ctx: &mut Ctx, rel: &str) -> Result<(), yamcha_core::CoreError> {
     crate::watcher::mark_self_write();
-    match ctx.vault.parse_full(rel) {
+    let parsed = if Vault::is_note_file(rel) {
+        ctx.vault.parse_full(rel)
+    } else {
+        Err(yamcha_core::CoreError::NotFound(rel.to_string()))
+    };
+    match parsed {
         Ok(parsed) => {
             ctx.indexer.upsert(&parsed)?;
             ctx.search.upsert(&parsed)?;
