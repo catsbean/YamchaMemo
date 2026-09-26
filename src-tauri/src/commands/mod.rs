@@ -75,12 +75,11 @@ fn with_ctx_write<T>(
 /// 바깥 변경(동기화 등)을 넘겨주면 파싱돼 들어가고, 안의 `[[링크]]`가 죄다 백링크가 됐다.
 pub(crate) fn refresh_note(ctx: &mut Ctx, rel: &str) -> Result<(), yamcha_core::CoreError> {
     crate::watcher::mark_self_write();
-    let parsed = if Vault::is_note_file(rel) {
-        ctx.vault.parse_full(rel)
-    } else {
-        Err(yamcha_core::CoreError::NotFound(rel.to_string()))
-    };
-    match parsed {
+    // 노트가 아니면 읽어 볼 것도 없다. 예전 버전이 색인에 넣어 둔 것만 걷어낸다.
+    if !Vault::is_note_file(rel) {
+        return drop_from_index(ctx, rel);
+    }
+    match ctx.vault.parse_full(rel) {
         Ok(parsed) => {
             ctx.indexer.upsert(&parsed)?;
             ctx.search.upsert(&parsed)?;
@@ -96,12 +95,23 @@ pub(crate) fn refresh_note(ctx: &mut Ctx, rel: &str) -> Result<(), yamcha_core::
                     .unwrap_or(0);
                 ctx.indexer.set_note_state(rel, mtime, meta.len() as i64)?;
             }
+            ctx.search.commit()
         }
-        Err(_) => {
-            ctx.indexer.remove(rel)?;
-            ctx.search.remove(rel)?;
-        }
+        // 못 읽었다 = 지워졌거나 지금 쓰이는 중이다 — 색인에서 뺀다
+        Err(_) => drop_from_index(ctx, rel),
     }
+}
+
+/// 색인·검색에서 이 경로를 뺀다. **애초에 색인에 없었으면 아무 일도 하지 않는다.**
+///
+/// 검색 색인 커밋은 디스크 동기화를 거쳐 값이 비싸다. `_index.md`는 노트를 만들거나
+/// 지울 때마다 다시 쓰이고 그때마다 감시를 거쳐 여기로 오는데, 지울 것도 없이 커밋만
+/// 하면 그 값을 늘 치른다 — 그동안 상태 잠금을 쥐고 있어 앱의 모든 커맨드가 기다린다.
+fn drop_from_index(ctx: &mut Ctx, rel: &str) -> Result<(), yamcha_core::CoreError> {
+    if !ctx.indexer.remove(rel)? {
+        return Ok(());
+    }
+    ctx.search.remove(rel)?;
     ctx.search.commit()
 }
 
@@ -539,5 +549,52 @@ mod index_location_tests {
             dot.join("history").join("Free__메모.md").join("20260101-000000-000.md").exists(),
             "히스토리를 지웠다"
         );
+    }
+}
+
+#[cfg(test)]
+mod refresh_note_tests {
+    use super::*;
+
+    fn ctx(vault_root: &Path, index_root: &Path) -> Ctx {
+        Ctx {
+            vault: Vault::open(vault_root).unwrap(),
+            indexer: Indexer::open(&index_root.join("index.db")).unwrap(),
+            search: SearchEngine::open(&index_root.join("search")).unwrap(),
+            todo_cache: dashboard::TodoCache::default(),
+        }
+    }
+
+    /// 노트는 색인에 들어가고 앱이 만든 목록 파일은 들어가지 않는다 — `_index.md`가
+    /// 들어가면 그 안의 `[[링크]]`가 그 분류의 모든 노트에 백링크로 떠올랐다.
+    /// 색인에 없는 것을 또 빼라고 해도 조용히 아무 일도 하지 않는다(검색 색인 커밋 없음).
+    #[test]
+    fn 노트가_아닌_md는_색인에_들어가지_않는다() {
+        let vault_dir = tempfile::tempdir().unwrap();
+        let index_dir = tempfile::tempdir().unwrap();
+        let mut c = ctx(vault_dir.path(), index_dir.path());
+
+        let rel = c
+            .vault
+            .create_note("free", "메모", serde_json::Value::Null)
+            .unwrap();
+        refresh_note(&mut c, &rel).unwrap();
+        c.vault.flush_index_files().unwrap();
+        refresh_note(&mut c, "Free/_index.md").unwrap();
+
+        let states = c.indexer.note_states().unwrap();
+        assert!(states.contains_key(&rel), "노트가 색인에 없다: {states:?}");
+        assert!(
+            !states.contains_key("Free/_index.md"),
+            "목록 파일이 색인에 들어갔다: {states:?}"
+        );
+
+        // 두 번째 호출도 오류 없이 지나간다 (지울 게 없다)
+        refresh_note(&mut c, "Free/_index.md").unwrap();
+
+        // 노트가 사라지면 색인에서도 빠진다
+        std::fs::remove_file(vault_dir.path().join(&rel)).unwrap();
+        refresh_note(&mut c, &rel).unwrap();
+        assert!(!c.indexer.note_states().unwrap().contains_key(&rel));
     }
 }

@@ -191,14 +191,18 @@ impl Indexer {
         Ok(())
     }
 
-    pub fn remove(&mut self, rel_path: &str) -> Result<(), CoreError> {
+    /// 색인에서 이 경로를 뺀다 → **애초에 색인에 있었나**.
+    ///
+    /// 돌려주는 값으로 부르는 쪽이 "지울 게 없었다"를 알 수 있다. 검색 색인 커밋은 디스크
+    /// 동기화를 거쳐 값이 비싸서, 지운 게 없으면 거기까지 가지 않게 하려고 센다.
+    pub fn remove(&mut self, rel_path: &str) -> Result<bool, CoreError> {
         let tx = self.conn.transaction()?;
-        tx.execute("DELETE FROM notes WHERE path = ?1", params![rel_path])?;
+        let hit = tx.execute("DELETE FROM notes WHERE path = ?1", params![rel_path])?;
         tx.execute("DELETE FROM links WHERE src = ?1", params![rel_path])?;
         tx.execute("DELETE FROM tags WHERE path = ?1", params![rel_path])?;
         tx.execute("DELETE FROM note_state WHERE path = ?1", params![rel_path])?;
         tx.commit()?;
-        Ok(())
+        Ok(hit > 0)
     }
 
     pub fn clear(&mut self) -> Result<(), CoreError> {
@@ -938,7 +942,11 @@ mod tests {
         let rel = v.create_note("free", "메모", json!({})).unwrap();
         v.save_note(&rel, json!({"tags": ["t"]}), "[[어딘가]]").unwrap();
         idx.upsert(&v.parse_full(&rel).unwrap()).unwrap();
-        idx.remove(&rel).unwrap();
+        assert!(idx.remove(&rel).unwrap(), "지운 것을 지웠다고 알리지 않았다");
         assert!(idx.all_tags().unwrap().is_empty());
+        // 색인에 없던 경로는 "지운 게 없다"고 알린다 — 부르는 쪽이 검색 색인 커밋을
+        // 건너뛰는 근거다.
+        assert!(!idx.remove(&rel).unwrap());
+        assert!(!idx.remove("Free/_index.md").unwrap());
     }
 }
