@@ -281,8 +281,17 @@ impl SearchEngine {
         Ok(())
     }
 
+    /// 문서를 모두 지운다 (다음 `commit`에 반영).
+    ///
+    /// **`delete_all_documents`를 쓰지 않는다.** 그건 작업 번호(opstamp)를 마지막 커밋이
+    /// 아니라 **writer를 연 시점**으로 되돌린다 (tantivy 0.24: `committed_opstamp`가 커밋 때
+    /// 갱신되지 않는다). 앱은 writer 하나를 세션 내내 쓰므로, 비운 뒤 다시 넣은 문서가
+    /// 세션 앞쪽의 삭제 작업보다 낮은 번호를 받아 그 삭제에 걸려 지워졌다 — 제목을 바꿔
+    /// 예전에 쓰던 경로로 돌아간 노트가 검색에서 사라졌다. 삭제 쿼리는 번호를 새로 받아
+    /// 그보다 앞선 문서만 지우므로 뒤이어 넣는 문서는 건드리지 않는다.
     pub fn clear(&mut self) -> Result<(), CoreError> {
-        self.writer.delete_all_documents()?;
+        self.writer
+            .delete_query(Box::new(tantivy::query::AllQuery))?;
         Ok(())
     }
 
@@ -291,6 +300,27 @@ impl SearchEngine {
         self.writer.commit()?;
         self.reader.reload()?;
         Ok(())
+    }
+
+    /// 검색 색인에 든 **노트** 문서의 경로 전부 (첨부 문서는 뺀다).
+    ///
+    /// 색인이 디스크·목록과 한 몸인지 대조할 때 쓴다. 검색으로는 "빠진 것"을 알 수
+    /// 없다 — 무엇을 물어야 할지 모르기 때문이다.
+    pub fn note_paths(&self) -> Result<std::collections::HashSet<String>, CoreError> {
+        let searcher = self.reader.searcher();
+        let addrs = searcher.search(
+            &tantivy::query::AllQuery,
+            &tantivy::collector::DocSetCollector,
+        )?;
+        let mut out = std::collections::HashSet::with_capacity(addrs.len());
+        for addr in addrs {
+            let doc: TantivyDocument = searcher.doc(addr)?;
+            let get = |f| doc.get_first(f).and_then(|v| v.as_str()).unwrap_or("");
+            if get(self.f_type) != FILE_TYPE {
+                out.insert(get(self.f_path).to_string());
+            }
+        }
+        Ok(out)
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, CoreError> {
@@ -738,6 +768,64 @@ mod tests {
             aliases: aliases.iter().map(|s| s.to_string()).collect(),
             ..note(rel, title, body, &[])
         }
+    }
+
+    /// 색인에 든 노트 경로를 빠짐없이 돌려준다 — 지운 것과 첨부 문서는 빼고.
+    #[test]
+    fn 색인에_든_노트_경로를_돌려준다() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = SearchEngine::open(dir.path()).unwrap();
+        s.upsert(&note("Free/가.md", "가", "본문", &[])).unwrap();
+        s.upsert(&note("Free/나.md", "나", "본문", &[])).unwrap();
+        s.upsert(&ParsedNote {
+            note_type: FILE_TYPE.into(),
+            ..note("_attachments/2026-07/보고서.pdf", "보고서", "본문", &[])
+        })
+        .unwrap();
+        s.commit().unwrap();
+        s.remove("Free/나.md").unwrap();
+        s.commit().unwrap();
+
+        let paths = s.note_paths().unwrap();
+        assert_eq!(paths, ["Free/가.md".to_string()].into_iter().collect());
+    }
+
+    /// 비우고 다시 채운 문서가 **예전 삭제에 걸려 사라지지 않는다**.
+    ///
+    /// 앱은 writer 하나를 세션 내내 쓰고, 제목 바꾸기·옮기기마다 `clear` → 전부 upsert를
+    /// 한다. upsert는 늘 "같은 경로 지우기"를 먼저 하므로, 세션 동안 경로마다 삭제 작업이
+    /// 쌓인다. tantivy의 `delete_all_documents`는 작업 번호를 마지막 커밋이 아니라 writer를
+    /// 연 시점으로 되돌려서, 다시 넣은 문서가 그 예전 삭제보다 낮은 번호를 받고 지워졌다 —
+    /// 글을 몇 번 저장한 뒤 아무 노트나 제목을 바꾸면 그 글들이 검색에서 사라졌다.
+    #[test]
+    fn 비우고_다시_채운_문서가_예전_삭제에_걸리지_않는다() {
+        // 불변식 시험이 찾아 줄여 준 순서 그대로다: "메모"를 세 번 만들고(메모, 메모 (2),
+        // 메모 (3)), (2)를 바깥에서 지우고, (3)→(2)→(3)으로 제목을 두 번 바꾼다.
+        let (a, b, c) = ("Free/메모.md", "Free/메모 (2).md", "Free/메모 (3).md");
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = SearchEngine::open(dir.path()).unwrap();
+        let put = |s: &mut SearchEngine, rel: &str| s.upsert(&note(rel, "메모", "본문", &[])).unwrap();
+        for rel in [a, b, c] {
+            put(&mut s, rel);
+            s.commit().unwrap();
+        }
+        s.remove(b).unwrap();
+        s.commit().unwrap();
+        // 제목 바꾸기마다 전체 재색인 (clear → 전부 upsert → commit)
+        for live in [[b, a], [c, a]] {
+            s.clear().unwrap();
+            for rel in live {
+                put(&mut s, rel);
+            }
+            s.commit().unwrap();
+        }
+
+        let paths = s.note_paths().unwrap();
+        assert_eq!(
+            paths,
+            [c.to_string(), a.to_string()].into_iter().collect(),
+            "다시 채운 문서가 사라졌다"
+        );
     }
 
     /// 별칭으로도 찾을 수 있어야 한다 — 링크로만 닿고 검색은 안 되면
