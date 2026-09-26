@@ -174,13 +174,8 @@ fn index_one(
             // 이 편을 또 읽는다. list_note_files와 같은 잣대(나노초)여야 한다 — 밀리초로
             // 남겼더니 신원이 안 맞아 저장한 편마다 다음 시작에 또 읽혔다.
             if let Ok(meta) = std::fs::metadata(ctx.vault.root().join(rel)) {
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_nanos() as i64)
-                    .unwrap_or(0);
-                states.push((rel.to_string(), mtime, meta.len() as i64));
+                let (mtime, size) = yamcha_core::file_identity(&meta);
+                states.push((rel.to_string(), mtime, size));
             }
             Ok(true)
         }

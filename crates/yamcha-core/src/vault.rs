@@ -216,7 +216,7 @@ pub struct NoteSummary {
 pub struct NoteFile {
     pub rel_path: String,
     pub note_type: String,
-    /// 수정 시각 (epoch 밀리초). 읽을 수 없으면 0 — 늘 바뀐 것으로 본다.
+    /// 수정 시각 (epoch **나노초**, `file_identity`). 읽을 수 없으면 0 — 늘 바뀐 것으로 본다.
     pub mtime: i64,
     pub size: i64,
     /// 클라우드 자리표시자라 본문이 아직 이 기기에 없다 (iCloud·OneDrive "필요할 때 내려받기").
@@ -264,6 +264,22 @@ pub struct SaveResult {
     pub stamp: String,
     /// 우리가 읽은 뒤에 파일이 바뀌어 있어 **아무것도 쓰지 않았다**
     pub conflict: bool,
+}
+
+/// 파일의 신원 — (수정시각 나노초, 크기). 색인이 "무엇이 바뀌었나"를 이것으로 가린다
+/// (시작할 때의 증분 색인, 감시가 넘겨준 변경).
+///
+/// 모든 자리가 **같은 잣대**여야 한다 — 밀리초로 적는 자리가 하나 있었더니 신원이 안 맞아
+/// 저장한 편마다 다음 시작에 또 읽혔다. 그래서 한 곳에서만 만든다.
+/// 수정시각을 못 읽으면 0이다 — 늘 바뀐 것으로 본다.
+pub fn file_identity(meta: &fs::Metadata) -> (i64, i64) {
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0);
+    (mtime, meta.len() as i64)
 }
 
 /// 파일 내용을 가리키는 짧은 지문 (FNV-1a 64비트 + 길이).
@@ -1125,17 +1141,13 @@ impl Vault {
     pub fn note_summary(&self, rel: &str) -> Result<NoteSummary, CoreError> {
         let abs = self.abs(rel)?;
         let meta = fs::metadata(&abs)?;
+        // list_note_files와 같은 잣대여야 캐시가 어긋나지 않는다
+        let (mtime, size) = file_identity(&meta);
         let file = NoteFile {
             rel_path: rel.replace('\\', "/"),
             note_type: self.type_of_rel(rel)?,
-            // list_note_files와 같은 잣대(나노초)여야 캐시가 어긋나지 않는다
-            mtime: meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_nanos() as i64)
-                .unwrap_or(0),
-            size: meta.len() as i64,
+            mtime,
+            size,
             offline: is_cloud_placeholder(&meta),
         };
         self.summary_of(&file)
@@ -1184,13 +1196,7 @@ impl Vault {
                     walk(root, &path, type_id, out)?;
                 } else if Vault::is_note_file(&name) {
                     let Ok(meta) = entry.metadata() else { continue };
-                    // 수정시각을 못 읽는 파일은 늘 바뀐 것으로 본다 (0)
-                    let mtime = meta
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_nanos() as i64)
-                        .unwrap_or(0);
+                    let (mtime, size) = file_identity(&meta);
                     let Ok(rel) = path.strip_prefix(root) else {
                         continue;
                     };
@@ -1198,7 +1204,7 @@ impl Vault {
                         rel_path: rel.to_string_lossy().replace('\\', "/"),
                         note_type: type_id.to_string(),
                         mtime,
-                        size: meta.len() as i64,
+                        size,
                         offline: is_cloud_placeholder(&meta),
                     });
                 }

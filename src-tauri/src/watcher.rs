@@ -51,11 +51,34 @@ pub(crate) fn apply_md_changes(ctx: &mut Ctx, rels: &[String]) -> Vec<String> {
         if notify_as_external(&ctx.vault, rel) {
             external.push(rel.clone());
         }
-        // 노트가 아닌 `.md`도 refresh_note에 넘긴다 — 예전 버전이 색인에
-        // 넣어 둔 `_index.md`를 그쪽에서 걷어낸다.
-        let _ = crate::commands::refresh_note(ctx, rel);
     }
+    // 다시 읽을 것만 모아 **한 번에**(검색 색인 커밋 한 번) 반영한다
+    let stale = needs_reindex(ctx, rels);
+    let _ = crate::commands::refresh_notes(ctx, stale.iter().map(String::as_str));
     external
+}
+
+/// 바뀐 `.md` 중 색인에 다시 넣어야 하는 것 — 색인이 **지금 모습 그대로**(수정시각·크기)
+/// 이미 알고 있는 파일은 뺀다.
+///
+/// 앱이 쓴 파일은 쓰는 그 자리에서 색인까지 마친다. 감시는 그 쓰기도 똑같이 알려 오는데,
+/// 제목 바꾸기가 600편의 링크를 고쳐 쓰자 감시가 600편을 한 편씩(편마다 검색 색인 커밋) 다시
+/// 읽느라 상태 잠금을 1분 넘게 쥐었다 — 진행 창이 닫힌 뒤에 앱이 통째로 멈췄다(실제 앱에서
+/// 잰 값). 사라진 파일과 노트가 아닌 `.md`(`_index.md`)는 신원이 없으니 늘 남는다 — 색인에서
+/// 빼는 길이다(예전 버전이 넣어 둔 `_index.md`도 여기서 걷힌다).
+fn needs_reindex(ctx: &Ctx, rels: &[String]) -> Vec<String> {
+    let known = ctx.indexer.note_states().unwrap_or_default();
+    rels.iter()
+        .filter(|r| r.ends_with(".md"))
+        .filter(|rel| {
+            let now = std::fs::metadata(ctx.vault.root().join(rel))
+                .ok()
+                .map(|m| yamcha_core::file_identity(&m));
+            // 수정시각을 못 읽은 것(0)은 늘 바뀐 것으로 본다
+            !matches!((now, known.get(rel.as_str())), (Some(now), Some(k)) if now == *k && now.0 != 0)
+        })
+        .cloned()
+        .collect()
 }
 
 pub type WatcherHandle = notify_debouncer_full::Debouncer<
@@ -176,6 +199,36 @@ mod tests {
         assert!(
             notify_as_external(&v, &rel),
             "남이 고친 노트를 알리지 않았다"
+        );
+    }
+
+    /// 앱이 방금 쓰고 색인한 파일은 감시가 다시 읽지 않는다 — 제목 바꾸기가 600편을 고쳐
+    /// 쓰자 감시가 600편을 한 편씩 다시 읽느라 앱이 1분 넘게 멈췄다. 남이 고친 파일·사라진
+    /// 파일·노트가 아닌 `.md`는 다시 본다.
+    #[test]
+    fn 앱이_쓰고_색인한_파일은_다시_읽지_않는다() {
+        use crate::commands::{dashboard, notes};
+        let vault_dir = tempfile::tempdir().unwrap();
+        let index_dir = tempfile::tempdir().unwrap();
+        let mut c = Ctx {
+            vault: Vault::open(vault_dir.path()).unwrap(),
+            indexer: yamcha_core::Indexer::open(&index_dir.path().join("index.db")).unwrap(),
+            search: yamcha_core::SearchEngine::open(&index_dir.path().join("search")).unwrap(),
+            todo_cache: dashboard::TodoCache::default(),
+        };
+        let null = serde_json::Value::Null;
+        let mine = notes::create_note_in(&mut c, "free", "내가 쓴 글", null.clone()).unwrap();
+        let theirs = notes::create_note_in(&mut c, "free", "남이 고친 글", null.clone()).unwrap();
+        let gone = notes::create_note_in(&mut c, "free", "사라진 글", null).unwrap();
+        c.vault.flush_index_files().unwrap();
+        std::fs::write(vault_dir.path().join(&theirs), "---\ntype: free\n---\n\n남이 고쳤다").unwrap();
+        std::fs::remove_file(vault_dir.path().join(&gone)).unwrap();
+
+        let rels = vec![mine, theirs.clone(), "Free/_index.md".to_string(), gone.clone()];
+        assert_eq!(
+            needs_reindex(&c, &rels),
+            vec![theirs, "Free/_index.md".to_string(), gone],
+            "앱이 방금 쓴 글까지 다시 읽거나, 다시 읽을 것을 빠뜨렸다"
         );
     }
 }
