@@ -39,6 +39,9 @@ fn visible_in(scope: &str, target: &str) -> bool {
     scope == target || scope == "both"
 }
 
+/// 링크 고치기 규칙 — (옛 이름들, 새 이름). `[[옛]]`·`[[옛|`·`[[옛#`을 새 이름으로.
+type LinkRule = (Vec<String>, String);
+
 /// 제목 바꾸기·옮기기가 **건드린 노트** — 색인은 이만큼만 따라잡으면 된다.
 ///
 /// 예전에는 무엇이 바뀌었는지 몰라서 부르는 쪽이 vault 전체를 다시 색인했다(2,000편에
@@ -653,6 +656,16 @@ impl Vault {
     /// 책·데일리는 파일명·폴더 규칙(연/월, 독서기록 연동)이 확고해 원본·대상
     /// 어느 쪽으로도 이동을 허용하지 않는다.
     pub fn move_note(&self, rel: &str, new_type_id: &str) -> Result<Relocation, CoreError> {
+        self.move_note_with(rel, new_type_id, &mut |_, _| {})
+    }
+
+    /// `move_note` + 진행 알림 — 경로 링크를 고치느라 vault를 훑는 동안 (훑은 노트, 전체).
+    pub fn move_note_with(
+        &self,
+        rel: &str,
+        new_type_id: &str,
+        progress: crate::Progress<'_>,
+    ) -> Result<Relocation, CoreError> {
         let note = self.read_note(rel)?;
         let cur_type = note.note_type.clone();
         if cur_type == new_type_id {
@@ -690,7 +703,7 @@ impl Vault {
         let moved = self.read_note(&dest_rel)?;
         self.save_note(&dest_rel, moved.frontmatter, &moved.body)?;
         // 폴더까지 적어 가리킨 링크는 따라와야 한다 (`[[Free/메모]]` → `[[Writing/메모]]`)
-        let rewritten = self.replace_path_links(rel, &dest_rel)?;
+        let rewritten = self.replace_links(&[Self::path_link_rule(rel, &dest_rel)], progress)?;
 
         self.mark_index_stale(&cur_type);
         self.mark_index_stale(new_type_id);
@@ -699,8 +712,8 @@ impl Vault {
 
     // ---------- 제목 변경 ----------
 
-    /// 파일이 자리를 옮겼을 때 **폴더까지 적어 가리킨 링크**를 새 경로로 고친다
-    /// (`[[Free/메모]]` → `[[Writing/메모]]`).
+    /// 파일이 자리를 옮겼을 때 **폴더까지 적어 가리킨 링크**를 새 경로로 고치는 규칙
+    /// (`[[Free/메모]]` → `[[Writing/메모]]`) — `replace_links`에 넘긴다.
     ///
     /// 이름만 적은 `[[메모]]`는 **일부러 건드리지 않는다.** 옮기고 나면 그 폴더에
     /// 같은 이름의 글이 둘이 될 수 있는데, 그 링크가 원래 있던 글을 가리켰는지
@@ -714,42 +727,67 @@ impl Vault {
     /// 확장자는 **한 번만 뗀다.** 반복해서 떼면 제목이 `메모.md`인 글(`Free/메모.md.md`)에서
     /// `Free/메모`가 나오는데, 그건 **다른 글**(`Free/메모.md`)의 경로 키다. 남의 링크를
     /// 고치면서 정작 이 파일의 링크(`[[Free/메모.md]]`)는 놓친다.
-    fn replace_path_links(&self, old_rel: &str, new_rel: &str) -> Result<Vec<String>, CoreError> {
+    fn path_link_rule(old_rel: &str, new_rel: &str) -> LinkRule {
         let key = |r: &str| r.strip_suffix(".md").unwrap_or(r).to_string();
-        let olds = vec![key(old_rel), old_rel.to_string()];
-        self.replace_links(&olds, &key(new_rel))
+        (vec![key(old_rel), old_rel.to_string()], key(new_rel))
     }
 
-    /// 모든 노트에서 `[[old]]` 링크를 `[[new]]`로 치환 (본문·frontmatter 원문 기준)
+    /// 모든 노트에서 규칙마다 `[[old]]` 링크를 `[[new]]`로 치환 (본문·frontmatter 원문 기준)
     /// → 실제로 고쳐 쓴 노트들.
-    fn replace_links(&self, olds: &[String], new: &str) -> Result<Vec<String>, CoreError> {
+    ///
+    /// 규칙 여럿을 **한 번 훑으며** 모두 적용한다. 제목 바꾸기는 이름 링크와 경로 링크를 둘 다
+    /// 고치는데, 예전에는 규칙마다 vault를 따로 훑어 노트를 두 번씩 읽었고 둘 다 걸린 노트는
+    /// 두 번 썼다. 규칙끼리는 서로의 결과를 건드리지 않는다(이름엔 `/`가 없다) — 따로 훑을
+    /// 때와 결과가 같다. `progress`에는 (훑은 노트, 전체)를 알린다.
+    fn replace_links(
+        &self,
+        rules: &[LinkRule],
+        progress: crate::Progress<'_>,
+    ) -> Result<Vec<String>, CoreError> {
+        let notes = self.list_notes()?;
+        let total = notes.len();
         let mut rewritten = Vec::new();
-        for n in self.list_notes()? {
+        for (i, n) in notes.into_iter().enumerate() {
+            progress(i, total);
             let abs = self.abs(&n.rel_path)?;
             let Ok(content) = fs::read_to_string(&abs) else {
                 continue;
             };
             let mut updated = content.clone();
-            for old in olds {
-                if old == new || old.is_empty() {
-                    continue;
+            for (olds, new) in rules {
+                for old in olds {
+                    if old == new || old.is_empty() {
+                        continue;
+                    }
+                    updated = updated
+                        .replace(&format!("[[{old}]]"), &format!("[[{new}]]"))
+                        .replace(&format!("[[{old}|"), &format!("[[{new}|"))
+                        .replace(&format!("[[{old}#"), &format!("[[{new}#"));
                 }
-                updated = updated
-                    .replace(&format!("[[{old}]]"), &format!("[[{new}]]"))
-                    .replace(&format!("[[{old}|"), &format!("[[{new}|"))
-                    .replace(&format!("[[{old}#"), &format!("[[{new}#"));
             }
             if updated != content {
                 self.atomic_write(&abs, &updated)?;
                 rewritten.push(n.rel_path);
             }
         }
+        progress(total, total);
         Ok(rewritten)
     }
 
     /// 노트 제목 변경: 파일명 변경 + frontmatter title 갱신 + 다른 노트의 위키링크 일괄 수정.
     /// 책은 연결된 독서기록 파일명도 함께 바뀐다. 새 경로와, 링크를 고쳐 쓴 노트들을 돌려준다.
     pub fn rename_note(&self, rel: &str, new_title: &str) -> Result<Relocation, CoreError> {
+        self.rename_note_with(rel, new_title, &mut |_, _| {})
+    }
+
+    /// `rename_note` + 진행 알림 — 링크를 고치느라 vault를 훑는 동안 (훑은 노트, 전체).
+    /// 모두가 가리키는 노트면 수천 편을 고쳐 쓰느라 몇 초가 걸린다 — 화면이 진행을 보여 준다.
+    pub fn rename_note_with(
+        &self,
+        rel: &str,
+        new_title: &str,
+        progress: crate::Progress<'_>,
+    ) -> Result<Relocation, CoreError> {
         let new_title = new_title.trim();
         if new_title.is_empty() {
             return Err(CoreError::Invalid("새 제목을 입력하세요".into()));
@@ -795,14 +833,19 @@ impl Vault {
         fm2.insert("title".into(), json!(new_title));
         self.save_note(&new_rel, Value::Object(fm2), &note.body)?;
 
-        // 링크 일괄 치환: 옛 파일명·옛 제목 → 새 파일명
+        // 링크 일괄 치환: 옛 파일명·옛 제목 → 새 파일명. 제목을 바꾸면 파일명이 바뀌므로
+        // 경로도 바뀐다 — 폴더까지 적은 링크도 따라와야 한다. 둘을 한 번에 훑는다.
         let final_stem = Path::new(&new_rel)
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or(new_stem);
-        let mut rewritten = self.replace_links(&[old_stem, old_title.clone()], &final_stem)?;
-        // 제목을 바꾸면 파일명이 바뀌므로 경로도 바뀐다 — 폴더까지 적은 링크도 따라와야 한다
-        rewritten.extend(self.replace_path_links(rel, &new_rel)?);
+        let rewritten = self.replace_links(
+            &[
+                (vec![old_stem, old_title.clone()], final_stem),
+                Self::path_link_rule(rel, &new_rel),
+            ],
+            progress,
+        )?;
         Ok(Relocation::relocated(new_rel, rewritten))
     }
 

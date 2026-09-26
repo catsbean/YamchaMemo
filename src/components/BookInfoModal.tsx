@@ -38,7 +38,7 @@ export default function BookInfoModal({
   records: string;
   onClose: () => void;
 }) {
-  const { vaultPath, refresh, openNote, notes } = useVault();
+  const { vaultPath, refresh, openNote, notes, runRelocation } = useVault();
   const fm0 = fmObject(note) as Record<string, unknown>;
   const [f, setF] = useState({
     title: fmStr(fm0, "title") || note.rel_path.split("/").pop()?.replace(/\.md$/, "") || "",
@@ -182,7 +182,8 @@ export default function BookInfoModal({
       const newTitle = f.title.trim();
       const oldTitle = fmStr(fm0, "title");
       if (newTitle && newTitle !== oldTitle) {
-        const r = await commands.renameNote(rel, newTitle);
+        // 이 책을 가리키는 글이 많으면 오래 걸린다 — 그때는 진행을 띄운다
+        const r = await runRelocation(() => commands.renameNote(rel, newTitle));
         if (r.status === "ok") finalRel = r.data;
       }
 

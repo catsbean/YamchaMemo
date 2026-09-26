@@ -2,45 +2,70 @@
 
 use super::*;
 
-/// 노트를 다른 분류로 이동 (파일을 새 분류 폴더로 옮기고 type을 갱신) → 새 rel 경로
-#[tauri::command(async)]
+/// 노트를 다른 분류로 이동 (파일을 새 분류 폴더로 옮기고 type을 갱신) → 새 rel 경로.
+///
+/// 비동기 커맨드다(`rename_note`와 같은 까닭) — 진행은 `relocate-progress`로 알린다.
+#[tauri::command]
 #[specta::specta]
-pub fn move_note(
-    state: State<'_, AppState>,
+pub async fn move_note(
+    app: tauri::AppHandle,
     rel_path: String,
     new_type_id: String,
 ) -> Result<String, String> {
-    with_ctx_write(&state, |c| move_note_in(c, &rel_path, &new_type_id))
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut report = relocate_reporter(&app);
+        with_ctx_write(&state, |c| move_note_in(c, &rel_path, &new_type_id, &mut report))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 pub(crate) fn move_note_in(
     c: &mut Ctx,
     rel_path: &str,
     new_type_id: &str,
+    report: RelocateReport<'_>,
 ) -> Result<String, yamcha_core::CoreError> {
-    let moved = c.vault.move_note(rel_path, new_type_id)?;
-    catch_up_relocation(c, rel_path, &moved);
+    let moved = c
+        .vault
+        .move_note_with(rel_path, new_type_id, &mut |d, t| report("links", d, t))?;
+    catch_up_relocation(c, rel_path, &moved, &mut |d, t| report("index", d, t));
     Ok(moved.rel)
 }
 
-/// 노트 제목 변경 (파일명 + 링크 연쇄 수정, 책이면 독서기록도 연동) → 새 rel 경로
-#[tauri::command(async)]
+/// 노트 제목 변경 (파일명 + 링크 연쇄 수정, 책이면 독서기록도 연동) → 새 rel 경로.
+///
+/// **비동기 커맨드다.** 모두가 가리키는 노트면 수천 편의 링크를 고쳐 쓰느라 20초까지
+/// 걸린다. 동기 커맨드는 메인 스레드에서 돌아서 그동안 창이 통째로 얼고 진행 알림도 못
+/// 나간다(`set_vault`가 먼저 겪었다). 일은 `spawn_blocking`으로 보내고 진행은
+/// `relocate-progress`로 알린다.
+#[tauri::command]
 #[specta::specta]
-pub fn rename_note(
-    state: State<'_, AppState>,
+pub async fn rename_note(
+    app: tauri::AppHandle,
     rel_path: String,
     new_title: String,
 ) -> Result<String, String> {
-    with_ctx_write(&state, |c| rename_note_in(c, &rel_path, &new_title))
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut report = relocate_reporter(&app);
+        with_ctx_write(&state, |c| rename_note_in(c, &rel_path, &new_title, &mut report))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 pub(crate) fn rename_note_in(
     c: &mut Ctx,
     rel_path: &str,
     new_title: &str,
+    report: RelocateReport<'_>,
 ) -> Result<String, yamcha_core::CoreError> {
-    let moved = c.vault.rename_note(rel_path, new_title)?;
-    catch_up_relocation(c, rel_path, &moved);
+    let moved = c
+        .vault
+        .rename_note_with(rel_path, new_title, &mut |d, t| report("links", d, t))?;
+    catch_up_relocation(c, rel_path, &moved, &mut |d, t| report("index", d, t));
     Ok(moved.rel)
 }
 
@@ -645,7 +670,7 @@ pub(crate) fn auto_title_note_in(
     match c.vault.settle_untitled(rel_path)? {
         // 이름을 붙였으면 제목 바꾸기와 같다 — `[[무제]]`를 고쳐 쓴 다른 노트들도 따라잡는다
         Some(moved) => {
-            catch_up_relocation(c, rel_path, &moved);
+            catch_up_relocation(c, rel_path, &moved, &mut |_, _| {});
             Ok(Some(moved.rel))
         }
         // 아무것도 안 친 빈 노트라 지웠다

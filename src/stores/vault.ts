@@ -56,6 +56,25 @@ export type ThemeMode = "light" | "dark" | "system";
  *  tab=지정한 메뉴, note=지정한 글. */
 export type StartupMode = "home" | "last" | "tab" | "note";
 
+/** 제목 바꾸기·옮기기의 진행 (`relocate-progress`) — 두 단계다.
+ *  `links`: 다른 노트의 링크를 고쳐 쓰며 vault를 훑는다 (done/total = 훑은 노트/전체)
+ *  `index`: 고쳐 쓴 노트를 검색 색인에 다시 넣는다 (마지막 한 칸은 색인 저장) */
+export type RelocateProgress = {
+  phase: "links" | "index";
+  done: number;
+  total: number;
+};
+
+/** 제목 바꾸기·옮기기가 오래 걸릴 때 띄우는 진행 — **메인 스토어와 따로** 둔다.
+ *
+ *  모두가 가리키는 노트면 수천 편의 링크를 고쳐 쓰느라 20초까지 걸리고, 그동안 진행이 200번쯤
+ *  갱신된다. 메인 스토어에 두었더니 갱신마다 앱 전체(노트 600여 편 목록·백링크 600개)가 다시
+ *  그려져 한 번에 67ms씩, 15초 가운데 13초 동안 화면이 굳었다(실제 앱에서 잰 값). 진행 창만
+ *  이걸 구독한다. 금방 끝나는 흔한 경우엔 null 그대로다(조금 기다렸다가 띄운다). */
+export const useRelocateProgress = create<{ progress: RelocateProgress | null }>(() => ({
+  progress: null,
+}));
+
 /** 고른 모드를 실제 화면에 입힌다 (다크일 때만 <html>에 .dark를 붙인다) */
 export function applyTheme(mode: ThemeMode) {
   const dark =
@@ -206,6 +225,8 @@ interface VaultStore {
   /** vault를 여는 동안 백엔드가 알려 오는 진행 문구 ("노트 색인 중 12/146"). 시작 화면에 띄운다.
    *  끝나면 null — 내려받지 않은 노트를 뒤에서 받는 동안은 그 문구가 남는다. */
   openProgress: string | null;
+  /** 제목 바꾸기·옮기기를 진행 표시와 함께 돌린다 — 스토어 밖(책 정보 창)에서 부를 때 */
+  runRelocation<T>(run: () => Promise<T>): Promise<T>;
   /** 꺼 둔 단축키 id 목록 (기본은 전부 켬) */
   shortcutsOff: string[];
   toggleShortcut(id: string): Promise<void>;
@@ -330,6 +351,14 @@ let relocatingFrom: string | null = null;
 let mirrorTimer: ReturnType<typeof setTimeout> | null = null;
 /** 마지막 변경 뒤 이만큼 잠잠하면 미러로 복제한다 */
 const MIRROR_IDLE_MS = 60_000;
+// 돌고 있는 제목 바꾸기·옮기기 수. 그동안 백엔드는 상태 잠금을 쥐고 있어서, 여기서 잠금이
+// 필요한 동기 커맨드(목록 파일 만들기·미러 복제)를 부르면 메인 스레드가 끝날 때까지 묶여
+// 진행 표시까지 멈춘다 — 타이머들은 이게 0이 될 때까지 미룬다.
+let relocating = 0;
+// 받은 가장 최근 진행 — 화면에 띄우기 전에 온 것도 들고 있다가 띄울 때 쓴다
+let relocateLatest: RelocateProgress | null = null;
+/** 이만큼 지나도 안 끝나면 진행을 띄운다. 흔한 제목 바꾸기(0.1초 안팎)는 깜빡이지 않게 */
+const RELOCATE_SHOW_AFTER_MS = 400;
 // `_index.md` 재생성 디바운스 타이머
 let indexTimer: ReturnType<typeof setTimeout> | null = null;
 /** 마지막 변경 뒤 이만큼 잠잠하면 목록 파일을 다시 만든다 */
@@ -356,10 +385,37 @@ export const useVault = create<VaultStore>((set, get) => {
    *  몇 초 늦게 반영돼도 아무 문제가 없는 파일이라 한가할 때 몰아서 만든다. */
   function scheduleIndexFiles() {
     if (indexTimer) clearTimeout(indexTimer);
-    indexTimer = setTimeout(() => {
+    indexTimer = setTimeout(function fire() {
+      // 제목 바꾸기가 도는 중이면 미룬다 (`relocating` 설명)
+      if (relocating > 0) {
+        indexTimer = setTimeout(fire, INDEX_IDLE_MS);
+        return;
+      }
       indexTimer = null;
       commands.flushIndexFiles().catch(() => {});
     }, INDEX_IDLE_MS);
+  }
+
+  /** 제목 바꾸기·옮기기를 돌린다. 오래 걸리면 진행을 띄운다 — 모두가 가리키는 노트면
+   *  수천 편의 링크를 고쳐 쓰느라 20초까지 걸리는데, 그동안 아무 표시가 없으면 멈춘 줄 안다.
+   *  흔한 경우(0.1초 안팎)엔 아무것도 깜빡이지 않도록 조금 기다렸다가 띄운다. */
+  async function withRelocation<T>(run: () => Promise<T>): Promise<T> {
+    relocating += 1;
+    const show = setTimeout(() => {
+      useRelocateProgress.setState({
+        progress: relocateLatest ?? { phase: "links", done: 0, total: 0 },
+      });
+    }, RELOCATE_SHOW_AFTER_MS);
+    try {
+      return await run();
+    } finally {
+      clearTimeout(show);
+      relocating -= 1;
+      if (relocating === 0) {
+        relocateLatest = null;
+        useRelocateProgress.setState({ progress: null });
+      }
+    }
   }
 
   /** 실제 저장 한 바퀴. 도는 사이에 저장 요청이 또 들어왔으면 최신 내용으로 한 번 더 돈다. */
@@ -453,7 +509,7 @@ export const useVault = create<VaultStore>((set, get) => {
       return await withSaveLock(async () => {
         if (get().dirty) await runSave();
         return await guard(async () => {
-          const moved = unwrap(await relocate());
+          const moved = unwrap(await withRelocation(relocate));
           const fresh = unwrap(await commands.readNote(moved));
           const mid = get().current;
           if (mid && mid.rel_path === cur.rel_path) {
@@ -505,7 +561,12 @@ export const useVault = create<VaultStore>((set, get) => {
     scheduleIndexFiles();
     if (get().mirrors.length === 0) return;
     if (mirrorTimer) clearTimeout(mirrorTimer);
-    mirrorTimer = setTimeout(() => {
+    mirrorTimer = setTimeout(function fire() {
+      // 제목 바꾸기가 도는 중이면 미룬다 (`relocating` 설명)
+      if (relocating > 0) {
+        mirrorTimer = setTimeout(fire, MIRROR_IDLE_MS);
+        return;
+      }
       mirrorTimer = null;
       get().syncMirrors();
     }, MIRROR_IDLE_MS);
@@ -773,6 +834,9 @@ export const useVault = create<VaultStore>((set, get) => {
       set({ startupNotice: null });
     },
     openProgress: null,
+    runRelocation(run) {
+      return withRelocation(run);
+    },
     shortcutsOff: [],
     async toggleShortcut(id) {
       const off = get().shortcutsOff;
@@ -838,6 +902,14 @@ export const useVault = create<VaultStore>((set, get) => {
           });
         },
       );
+      // 제목 바꾸기·옮기기의 진행 — 이 창이 돌리는 중일 때만 받는다(다른 창의 것은 흘린다)
+      await listen<RelocateProgress>("relocate-progress", (e) => {
+        if (relocating === 0) return;
+        relocateLatest = e.payload;
+        if (useRelocateProgress.getState().progress) {
+          useRelocateProgress.setState({ progress: e.payload });
+        }
+      });
       await guard(async () => {
         const store = await settings();
         const layout = ((await store.get<string>("layout")) ??
@@ -1359,7 +1431,9 @@ export const useVault = create<VaultStore>((set, get) => {
       }
       const fromTypeId = get().notes.find((n) => n.rel_path === relPath)?.note_type;
       await guard(async () => {
-        const newRel = unwrap(await commands.moveNote(relPath, newTypeId));
+        const newRel = unwrap(
+          await withRelocation(() => commands.moveNote(relPath, newTypeId)),
+        );
         await get().refresh();
         if (fromTypeId) {
           set({
@@ -1393,7 +1467,9 @@ export const useVault = create<VaultStore>((set, get) => {
       set({ moveUndo: null });
       await guard(async () => {
         const wasOpen = get().current?.rel_path === u.rel;
-        const back = unwrap(await commands.moveNote(u.rel, u.fromTypeId));
+        const back = unwrap(
+          await withRelocation(() => commands.moveNote(u.rel, u.fromTypeId)),
+        );
         await get().refresh();
         if (wasOpen) await get().openNote(back);
       });

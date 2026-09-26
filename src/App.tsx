@@ -5,6 +5,7 @@ import EditorPane from "./components/EditorPane";
 import LinkPickerDialog from "./components/LinkPickerDialog";
 import MissingLinkToast from "./components/MissingLinkToast";
 import MoveUndoToast from "./components/MoveUndoToast";
+import RelocateProgressDialog from "./components/RelocateProgressDialog";
 import SearchModal from "./components/SearchModal";
 import SettingsModal from "./components/SettingsModal";
 import ShortcutHint from "./components/ShortcutHint";
@@ -184,6 +185,7 @@ export default function App() {
       <LinkPickerDialog />
       <MissingLinkToast />
       <MoveUndoToast />
+      <RelocateProgressDialog />
       {startupNotice && (
         <StartupNoticeBanner
           message={startupNotice}

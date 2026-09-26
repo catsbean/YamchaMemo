@@ -141,14 +141,14 @@ fn apply(c: &mut Ctx, model: &mut Model, op: &Op) {
         }
         Op::Rename { note, title } => {
             let Some(rel) = pick(&model.notes, note) else { return };
-            if let Ok(new_rel) = rename_note_in(c, &rel, TITLES[title]) {
+            if let Ok(new_rel) = rename_note_in(c, &rel, TITLES[title], &mut |_, _, _| {}) {
                 model.notes.remove(&rel);
                 model.notes.insert(new_rel);
             }
         }
         Op::Move { note, ty } => {
             let Some(rel) = pick(&model.notes, note) else { return };
-            if let Ok(new_rel) = move_note_in(c, &rel, TYPES[ty]) {
+            if let Ok(new_rel) = move_note_in(c, &rel, TYPES[ty], &mut |_, _, _| {}) {
                 model.notes.remove(&rel);
                 model.notes.insert(new_rel);
             }

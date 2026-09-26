@@ -53,7 +53,10 @@ pub struct ReindexReport {
 }
 
 /// 색인 진행 알림 — (처리한 편수, 전체 편수). 시작 화면이 "몇 편 중 몇 편"을 보여 주는 데 쓴다.
-pub type ReindexProgress<'a> = &'a mut dyn FnMut(usize, usize);
+pub type ReindexProgress<'a> = Progress<'a>;
+
+/// 오래 걸리는 일의 진행 알림 — (한 것, 전체). 화면이 "몇 중 몇"이나 %로 보여 준다.
+pub type Progress<'a> = &'a mut dyn FnMut(usize, usize);
 
 /// vault 전체를 다시 인덱싱한다 (SQLite + tantivy).
 pub fn reindex_all(

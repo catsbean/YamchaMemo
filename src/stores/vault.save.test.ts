@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 
 /** 저장 커맨드를 붙잡아 두는 손잡이 — 저장이 "도는 중"인 상태를 만들어 낸다 */
 let releaseSave: (() => void) | null = null;
@@ -9,6 +9,8 @@ let nextIsConflict = false;
 let releaseRename: (() => void) | null = null;
 const renameCalls: { rel: string; newTitle: string }[] = [];
 let nextRenamedRel = "";
+/** 목록 파일(`_index.md`) 만들기를 부른 횟수 */
+let flushCalls = 0;
 
 vi.mock("../bindings", () => ({
   commands: {
@@ -50,7 +52,10 @@ vi.mock("../bindings", () => ({
     listNotes: async () => ({ status: "ok", data: [] }),
     noteSummary: async () => ({ status: "error", error: "없음" }),
     auditVault: async () => ({ status: "ok", data: [] }),
-    flushIndexFiles: async () => ({ status: "ok", data: null }),
+    flushIndexFiles: async () => {
+      flushCalls += 1;
+      return { status: "ok", data: null };
+    },
     autoTitleNote: async () => ({ status: "ok", data: "" }),
   },
 }));
@@ -73,7 +78,7 @@ vi.mock("../lib/quickCapture", () => ({
   enableCapture: async () => {},
 }));
 
-const { useVault } = await import("./vault");
+const { useVault, useRelocateProgress } = await import("./vault");
 
 /** 노트 하나를 열어 둔 상태로 만든다 (백엔드 없이 스토어만) */
 function openNote(body: string) {
@@ -379,5 +384,77 @@ describe("renameCurrent — 이름 바꾸는 동안 편집", () => {
 
     await Promise.all([renaming, stray]);
     expect(saveCalls.some((c) => c.rel === "Free/메모.md")).toBe(false);
+  });
+});
+
+/** 모두가 가리키는 노트의 제목을 바꾸면 수천 편의 링크를 고쳐 쓰느라 20초까지 걸린다.
+ *  그때만 진행을 띄우고, 흔한 경우(0.1초 안팎)엔 아무것도 깜빡이지 않아야 한다. */
+describe("renameCurrent — 오래 걸릴 때의 진행 표시", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    releaseSave = null;
+    releaseRename = null;
+    saveCalls.length = 0;
+    renameCalls.length = 0;
+    nextIsConflict = false;
+    nextRenamedRel = "Free/새 제목.md";
+    flushCalls = 0;
+    useVault.setState({ error: null });
+    useRelocateProgress.setState({ progress: null });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("금방 끝나면 진행을 띄우지 않는다", async () => {
+    openNote("처음");
+    const renaming = useVault.getState().renameCurrent("새 제목");
+    await vi.waitFor(() => expect(releaseRename).not.toBeNull());
+    await vi.advanceTimersByTimeAsync(100);
+    releaseRename!();
+    await renaming;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(useRelocateProgress.getState().progress).toBeNull();
+  });
+
+  it("오래 걸리면 진행을 띄웠다가, 끝나면 저절로 닫는다", async () => {
+    openNote("처음");
+    const renaming = useVault.getState().renameCurrent("새 제목");
+    await vi.waitFor(() => expect(releaseRename).not.toBeNull());
+    expect(useRelocateProgress.getState().progress).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(500);
+    // 백엔드의 첫 알림이 오기 전이라도 "준비 중"으로 띄운다
+    expect(useRelocateProgress.getState().progress).toEqual({
+      phase: "links",
+      done: 0,
+      total: 0,
+    });
+
+    releaseRename!();
+    await renaming;
+    expect(useRelocateProgress.getState().progress).toBeNull();
+  });
+
+  /** 도는 동안 백엔드는 상태 잠금을 쥐고 있다. 그 사이 목록 파일 만들기(동기 커맨드)를
+   *  부르면 메인 스레드가 끝날 때까지 묶여 진행 표시까지 멈춘다 — 끝날 때까지 미룬다. */
+  it("도는 동안엔 목록 파일 만들기를 미루고, 끝나면 한다", async () => {
+    openNote("처음");
+    // 저장 한 번으로 목록 파일 타이머(5초)를 걸어 둔다
+    useVault.getState().setBody("처음 + 한 줄");
+    const saving = useVault.getState().saveCurrent();
+    await vi.waitFor(() => expect(releaseSave).not.toBeNull());
+    releaseSave!();
+    await saving;
+
+    const renaming = useVault.getState().renameCurrent("새 제목");
+    await vi.waitFor(() => expect(releaseRename).not.toBeNull());
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(flushCalls).toBe(0);
+
+    releaseRename!();
+    await renaming;
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(flushCalls).toBe(1);
   });
 });

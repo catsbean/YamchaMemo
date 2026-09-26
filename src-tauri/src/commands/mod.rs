@@ -206,7 +206,12 @@ fn unindex_one(ctx: &mut Ctx, rel: &str) -> Result<bool, yamcha_core::CoreError>
 /// 못 따라잡았다고 실패를 돌려주면 화면은 "안 됐다"고 믿고 옛 경로를 쥔 채 남는다 — 불변식
 /// 시험이 찾은 상태다. 끝내 못 따라잡으면 건드린 편의 신원을 틀어 두어 다음 시작의 증분
 /// 색인이 다시 읽게(옛 경로는 지우게) 하고 넘어간다.
-pub(crate) fn catch_up_relocation(ctx: &mut Ctx, old_rel: &str, moved: &yamcha_core::Relocation) {
+pub(crate) fn catch_up_relocation(
+    ctx: &mut Ctx,
+    old_rel: &str,
+    moved: &yamcha_core::Relocation,
+    progress: yamcha_core::Progress<'_>,
+) {
     let touched: Vec<&str> = std::iter::once(moved.rel.as_str())
         .chain(moved.rewritten.iter().map(String::as_str))
         .collect();
@@ -216,14 +221,19 @@ pub(crate) fn catch_up_relocation(ctx: &mut Ctx, old_rel: &str, moved: &yamcha_c
         if moved.rel != old_rel {
             dirty |= unindex_one(ctx, old_rel)?;
         }
-        for rel in &touched {
+        // 마지막 한 칸은 커밋이다 — 수천 편이면 그 자체로 시간이 걸려서, 100%를 먼저 띄우면 멈춘 듯 보인다
+        let units = touched.len() + 1;
+        for (i, rel) in touched.iter().enumerate() {
+            progress(i, units);
             dirty |= index_one(ctx, rel, &mut states)?;
         }
+        progress(units - 1, units);
         // 신원은 한 번에 몰아서 쓴다 — 편마다 쓰면 그때마다 SQLite 트랜잭션이 돈다
         ctx.indexer.set_note_states(&states)?;
         if dirty {
             ctx.search.commit()?;
         }
+        progress(units, units);
         Ok(())
     });
     if let Err(e) = caught_up {
@@ -315,6 +325,35 @@ pub struct OpenProgress {
 
 fn emit_open_progress(app: &tauri::AppHandle, phase: &'static str, done: usize, total: usize) {
     let _ = app.emit("vault-open-progress", OpenProgress { phase, done, total });
+}
+
+/// 제목 바꾸기·옮기기의 진행 (`relocate-progress` 이벤트).
+///
+/// 흔한 경우는 0.1초도 안 걸리지만, 모두가 가리키는 노트면 수천 편의 링크를 고쳐 쓰고
+/// 그만큼 다시 색인하느라 20초까지 걸린다(2,000편 실측). 그동안 화면이 멈춘 듯 보이지
+/// 않게 두 단계로 알린다. 화면은 오래 걸릴 때만 띄운다.
+#[derive(serde::Serialize, Clone)]
+pub struct RelocateProgress {
+    /// `links`(다른 노트의 링크 고쳐 쓰기) · `index`(검색 색인 따라잡기)
+    pub phase: &'static str,
+    pub done: usize,
+    pub total: usize,
+}
+
+/// 제목 바꾸기·옮기기가 부르는 진행 알림 — (단계, 한 것, 전체).
+pub(crate) type RelocateReport<'a> = &'a mut dyn FnMut(&'static str, usize, usize);
+
+/// `relocate-progress`를 보내는 알림. **정수 %가 바뀔 때만** 보낸다 — 편마다 보내면
+/// 2,000편에 이벤트 수천 개로, 일보다 알림이 비싸진다.
+fn relocate_reporter(app: &tauri::AppHandle) -> impl FnMut(&'static str, usize, usize) + '_ {
+    let mut last: Option<(&'static str, usize)> = None;
+    move |phase, done, total| {
+        let pct = (done * 100).checked_div(total).unwrap_or(100);
+        if last != Some((phase, pct)) {
+            last = Some((phase, pct));
+            let _ = app.emit("relocate-progress", RelocateProgress { phase, done, total });
+        }
+    }
 }
 
 /// vault 폴더를 열고 (없으면 폴더 구조 생성) 바뀐 노트를 재색인한다.
@@ -741,7 +780,7 @@ mod refresh_note_tests {
             std::fs::set_permissions(&meta, p).unwrap();
         };
         set_readonly(true);
-        let renamed = notes::rename_note_in(&mut c, &rel, "새 이름");
+        let renamed = notes::rename_note_in(&mut c, &rel, "새 이름", &mut |_, _, _| {});
         let states = c.indexer.note_states().unwrap();
         set_readonly(false);
 
@@ -762,6 +801,37 @@ mod refresh_note_tests {
             "검색이 바로잡히지 않았다"
         );
     }
+
+    /// 제목 바꾸기는 두 단계(링크 고쳐 쓰기 → 색인 따라잡기)로 진행을 알리고, 단계마다
+    /// 끝까지 가며 거꾸로 가지 않는다. 오래 걸리는 경우(모두가 가리키는 노트)에 화면이
+    /// 이걸로 %를 보여 준다.
+    #[test]
+    fn 제목_바꾸기는_두_단계로_진행을_알린다() {
+        let vault_dir = tempfile::tempdir().unwrap();
+        let index_dir = tempfile::tempdir().unwrap();
+        let mut c = ctx(vault_dir.path(), index_dir.path());
+        let hub = notes::create_note_in(&mut c, "free", "허브", serde_json::Value::Null).unwrap();
+        for title in ["가", "나", "다"] {
+            let rel = notes::create_note_in(&mut c, "free", title, serde_json::Value::Null).unwrap();
+            let fm = c.vault.read_note(&rel).unwrap().frontmatter;
+            notes::save_note_in(&mut c, &rel, fm, "[[허브]]를 가리킨다", None).unwrap();
+        }
+
+        let mut seen: Vec<(&str, usize, usize)> = Vec::new();
+        notes::rename_note_in(&mut c, &hub, "새 허브", &mut |p, d, t| seen.push((p, d, t))).unwrap();
+
+        let phases: Vec<&str> = seen.iter().map(|s| s.0).collect();
+        let first_index = phases.iter().position(|p| *p == "index").expect("색인 단계가 없다");
+        assert!(phases[..first_index].iter().all(|p| *p == "links"), "{seen:?}");
+        assert!(phases[first_index..].iter().all(|p| *p == "index"), "{seen:?}");
+        for phase in ["links", "index"] {
+            let steps: Vec<usize> = seen.iter().filter(|s| s.0 == phase).map(|s| s.1).collect();
+            assert!(steps.windows(2).all(|w| w[0] <= w[1]), "{phase}이 거꾸로 갔다: {seen:?}");
+        }
+        // 링크: 노트 4편을 훑는다. 색인: 고쳐 쓴 3편 + 옮긴 노트 + 마지막 커밋 한 칸
+        assert_eq!(seen.iter().rfind(|s| s.0 == "links"), Some(&("links", 4, 4)));
+        assert_eq!(seen.last(), Some(&("index", 5, 5)));
+    }
 }
 
 /// 커맨드는 **메인 스레드에서 돌지 않는다** — 소스를 훑어 확인한다.
@@ -769,7 +839,7 @@ mod refresh_note_tests {
 /// Tauri의 동기 커맨드는 메인 스레드에서 돈다. 모든 커맨드가 상태 잠금 하나를 거치는데,
 /// 제목 바꾸기(최대 20초)처럼 오래 쥐는 일이 도는 동안 동기 커맨드 하나(예: 노트를 열자
 /// 백링크 패널이 부른 것)가 그 잠금을 기다리면 **메인 스레드가 묶여** 창이 얼고 진행 알림도
-/// 화면에 닿지 않는다.
+/// 화면에 닿지 않는다 — 실제 앱에서 진행 창이 "준비 중"에 멈춘 채 끝난 까닭이다.
 /// 그래서 모두 `async fn`이거나 `#[tauri::command(async)]`(스레드 풀에서 돈다)여야 한다.
 #[cfg(test)]
 mod command_thread_tests {

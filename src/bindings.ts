@@ -805,7 +805,12 @@ async removeCustomType(id: string) : Promise<Result<null, string>> {
 }
 },
 /**
- * 노트 제목 변경 (파일명 + 링크 연쇄 수정, 책이면 독서기록도 연동) → 새 rel 경로
+ * 노트 제목 변경 (파일명 + 링크 연쇄 수정, 책이면 독서기록도 연동) → 새 rel 경로.
+ * 
+ * **비동기 커맨드다.** 모두가 가리키는 노트면 수천 편의 링크를 고쳐 쓰느라 20초까지
+ * 걸린다. 동기 커맨드는 메인 스레드에서 돌아서 그동안 창이 통째로 얼고 진행 알림도 못
+ * 나간다(`set_vault`가 먼저 겪었다). 일은 `spawn_blocking`으로 보내고 진행은
+ * `relocate-progress`로 알린다.
  */
 async renameNote(relPath: string, newTitle: string) : Promise<Result<string, string>> {
     try {
@@ -816,7 +821,9 @@ async renameNote(relPath: string, newTitle: string) : Promise<Result<string, str
 }
 },
 /**
- * 노트를 다른 분류로 이동 (파일을 새 분류 폴더로 옮기고 type을 갱신) → 새 rel 경로
+ * 노트를 다른 분류로 이동 (파일을 새 분류 폴더로 옮기고 type을 갱신) → 새 rel 경로.
+ * 
+ * 비동기 커맨드다(`rename_note`와 같은 까닭) — 진행은 `relocate-progress`로 알린다.
  */
 async moveNote(relPath: string, newTypeId: string) : Promise<Result<string, string>> {
     try {
