@@ -726,7 +726,9 @@ impl Vault {
         let customs: Vec<&TypeDef> = self.types.iter().filter(|t| !t.builtin).collect();
         let json = serde_json::to_string_pretty(&customs)
             .map_err(|e| CoreError::Invalid(e.to_string()))?;
-        fs::write(self.root.join(TYPES_FILE), json)?;
+        // 노트와 같은 원자적 쓰기를 거친다 — 쓰다 끊긴 `_types.json`은 `Vault::open`이
+        // 조용히 무시하므로, 사용자 정의 분류가 통째로 사라진 것처럼 보인다.
+        self.atomic_write(&self.root.join(TYPES_FILE), &json)?;
         Ok(())
     }
 
@@ -1474,7 +1476,7 @@ impl Vault {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&path, content)?;
+        self.atomic_write(&path, content)?;
         Ok(())
     }
 
@@ -1553,7 +1555,7 @@ impl Vault {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&path, content)?;
+        self.atomic_write(&path, content)?;
         Ok(())
     }
 
@@ -2134,7 +2136,7 @@ impl Vault {
     fn save_callouts(&self, list: &[CalloutDef]) -> Result<(), CoreError> {
         let json = serde_json::to_string_pretty(list)
             .map_err(|e| CoreError::Invalid(format!("콜아웃 저장 실패: {e}")))?;
-        fs::write(self.callouts_path(), json)?;
+        self.atomic_write(&self.callouts_path(), &json)?;
         Ok(())
     }
 
@@ -2985,6 +2987,49 @@ mod tests {
         let note = v.change_kind(&rel, "todo", 0, "회의함", "기록").unwrap();
         assert!(note.body.contains("> [!기록]"), "got: {}", note.body);
         assert!(!note.body.contains("- [ ] 회의함"), "got: {}", note.body);
+    }
+
+    /// 설정·자동 생성 파일도 노트와 같은 원자적 쓰기를 거친다.
+    ///
+    /// 맨 `fs::write`로 쓰면 그 순간 정전·디스크 가득·동기화 잠금에 걸릴 때 파일이 반쯤
+    /// 쓰인 채 남는다. `_types.json`이 그러면 `Vault::open`이 깨진 파일을 조용히 무시해
+    /// 사용자 정의 분류가 통째로 사라지고, 그 폴더의 노트까지 목록에서 빠진다.
+    ///
+    /// 원자적 쓰기(tmp + sync_all + rename)만 자기쓰기 지문을 남기므로, 지문이 있는지로
+    /// 그 경로를 거쳤는지 확인한다 — 파일 감시가 자기 쓰기를 알아보는 데 쓰는 신호와 같다.
+    #[test]
+    fn 설정과_목록_파일도_원자적으로_쓴다() {
+        let (_d, mut v) = vault();
+        v.add_custom_type("기획", "plan", Vec::new(), "").unwrap();
+        assert!(
+            v.is_self_write("_types.json"),
+            "_types.json이 원자적 쓰기를 거치지 않았다"
+        );
+
+        v.add_callout(CalloutDef {
+            label: "메모".into(),
+            icon: "🔖".into(),
+            color: "rose".into(),
+            scope: "daily".into(),
+        })
+        .unwrap();
+        assert!(
+            v.is_self_write("_callouts.json"),
+            "_callouts.json이 원자적 쓰기를 거치지 않았다"
+        );
+
+        v.write_body_template_file("free", "## 오늘\n").unwrap();
+        assert!(
+            v.is_self_write(".yamcha/templates/free.md"),
+            "본문 템플릿이 원자적 쓰기를 거치지 않았다"
+        );
+
+        v.create_note("free", "메모", Value::Null).unwrap();
+        v.flush_index_files().unwrap();
+        assert!(
+            v.is_self_write("Free/_index.md"),
+            "_index.md가 원자적 쓰기를 거치지 않았다 — 감시가 남의 변경으로 본다"
+        );
     }
 
     #[test]

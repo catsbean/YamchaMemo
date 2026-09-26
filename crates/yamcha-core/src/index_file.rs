@@ -24,7 +24,9 @@ pub fn update_index(vault: &Vault, type_id: &str) -> Result<(), CoreError> {
             return Ok(());
         }
     }
-    fs::write(&path, content)?;
+    // 노트와 같은 원자적 쓰기를 거친다 — 반쯤 쓰인 목록 파일을 남기지 않고, 앱이 쓴
+    // 내용의 지문이 남아 파일 감시가 이걸 남의 변경으로 오인하지 않는다.
+    vault.atomic_write(&path, &content)?;
     Ok(())
 }
 
