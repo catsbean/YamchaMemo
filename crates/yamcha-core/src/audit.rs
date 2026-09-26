@@ -289,7 +289,7 @@ fn walk(vault: &Vault, dir: &Path, out: &mut Vec<NoteIssue>) {
             if !is_skipped_dir(&name) {
                 walk(vault, &path, out);
             }
-        } else if name.ends_with(".md") && !name.starts_with('_') {
+        } else if Vault::is_note_file(&name) {
             if let Some(issue) = inspect(vault, &path) {
                 out.push(issue);
             }
@@ -840,5 +840,17 @@ mod tests {
         fs::write(d.path().join("_attachments").join("메모.md"), "본문만").unwrap();
         fs::write(d.path().join(".yamcha").join("trash").join("20260101-000000_지운것.md"), "본문만").unwrap();
         assert!(audit(&v).is_empty());
+    }
+
+    /// 앱이 만든 목록 파일(`_index.md`)은 노트가 아니다 — 점검도 목록·색인과 같은
+    /// `Vault::is_note_file`을 쓴다. frontmatter가 없어서, 잣대가 갈라지면 "frontmatter
+    /// 없음"으로 잡힌다.
+    #[test]
+    fn generated_index_file_is_not_audited() {
+        let (d, v) = setup();
+        v.create_note("free", "메모", json!({})).unwrap();
+        v.flush_index_files().unwrap();
+        assert!(d.path().join("Free").join("_index.md").is_file());
+        assert!(audit(&v).is_empty(), "{:?}", audit(&v));
     }
 }
