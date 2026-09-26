@@ -10,12 +10,18 @@ pub fn move_note(
     rel_path: String,
     new_type_id: String,
 ) -> Result<String, String> {
-    with_ctx_write(&state, |c| {
-        let new_rel = c.vault.move_note(&rel_path, &new_type_id)?;
-        // 폴더·타입이 바뀌므로 전체 재색인
-        yamcha_core::reindex_all(&c.vault, &mut c.indexer, &mut c.search)?;
-        Ok(new_rel)
-    })
+    with_ctx_write(&state, |c| move_note_in(c, &rel_path, &new_type_id))
+}
+
+pub(crate) fn move_note_in(
+    c: &mut Ctx,
+    rel_path: &str,
+    new_type_id: &str,
+) -> Result<String, yamcha_core::CoreError> {
+    let new_rel = c.vault.move_note(rel_path, new_type_id)?;
+    // 폴더·타입이 바뀌므로 전체 재색인
+    yamcha_core::reindex_all(&c.vault, &mut c.indexer, &mut c.search)?;
+    Ok(new_rel)
 }
 
 /// 노트 제목 변경 (파일명 + 링크 연쇄 수정, 책이면 독서기록도 연동) → 새 rel 경로
@@ -26,12 +32,18 @@ pub fn rename_note(
     rel_path: String,
     new_title: String,
 ) -> Result<String, String> {
-    with_ctx_write(&state, |c| {
-        let new_rel = c.vault.rename_note(&rel_path, &new_title)?;
-        // 경로·링크가 광범위하게 바뀌므로 전체 재색인
-        yamcha_core::reindex_all(&c.vault, &mut c.indexer, &mut c.search)?;
-        Ok(new_rel)
-    })
+    with_ctx_write(&state, |c| rename_note_in(c, &rel_path, &new_title))
+}
+
+pub(crate) fn rename_note_in(
+    c: &mut Ctx,
+    rel_path: &str,
+    new_title: &str,
+) -> Result<String, yamcha_core::CoreError> {
+    let new_rel = c.vault.rename_note(rel_path, new_title)?;
+    // 경로·링크가 광범위하게 바뀌므로 전체 재색인
+    yamcha_core::reindex_all(&c.vault, &mut c.indexer, &mut c.search)?;
+    Ok(new_rel)
 }
 
 /// frontmatter 일부 필드만 갱신 (목록 뷰 인라인 편집용)
@@ -173,14 +185,24 @@ pub fn save_note(
     expected_stamp: Option<String>,
 ) -> Result<yamcha_core::SaveResult, String> {
     with_ctx(&state, |c| {
-        let r = c
-            .vault
-            .save_note_checked(&rel_path, frontmatter, &body, expected_stamp.as_deref())?;
-        if !r.conflict {
-            refresh_note(c, &rel_path)?;
-        }
-        Ok(r)
+        save_note_in(c, &rel_path, frontmatter, &body, expected_stamp.as_deref())
     })
+}
+
+pub(crate) fn save_note_in(
+    c: &mut Ctx,
+    rel_path: &str,
+    frontmatter: serde_json::Value,
+    body: &str,
+    expected_stamp: Option<&str>,
+) -> Result<yamcha_core::SaveResult, yamcha_core::CoreError> {
+    let r = c
+        .vault
+        .save_note_checked(rel_path, frontmatter, body, expected_stamp)?;
+    if !r.conflict {
+        refresh_note(c, rel_path)?;
+    }
+    Ok(r)
 }
 
 /// 노트 생성 → 생성된 rel 경로 반환
@@ -192,22 +214,31 @@ pub fn create_note(
     title: String,
     fields: serde_json::Value,
 ) -> Result<String, String> {
-    with_ctx(&state, |c| {
-        let rel = c.vault.create_note(&note_type, &title, fields)?;
-        refresh_note(c, &rel)?;
-        Ok(rel)
-    })
+    with_ctx(&state, |c| create_note_in(c, &note_type, &title, fields))
+}
+
+pub(crate) fn create_note_in(
+    c: &mut Ctx,
+    note_type: &str,
+    title: &str,
+    fields: serde_json::Value,
+) -> Result<String, yamcha_core::CoreError> {
+    let rel = c.vault.create_note(note_type, title, fields)?;
+    refresh_note(c, &rel)?;
+    Ok(rel)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn delete_note(state: State<'_, AppState>, rel_path: String) -> Result<(), String> {
-    with_ctx_write(&state, |c| {
-        c.vault.delete_note(&rel_path)?;
-        c.indexer.remove(&rel_path)?;
-        c.search.remove(&rel_path)?;
-        c.search.commit()
-    })
+    with_ctx_write(&state, |c| delete_note_in(c, &rel_path))
+}
+
+pub(crate) fn delete_note_in(c: &mut Ctx, rel_path: &str) -> Result<(), yamcha_core::CoreError> {
+    c.vault.delete_note(rel_path)?;
+    c.indexer.remove(rel_path)?;
+    c.search.remove(rel_path)?;
+    c.search.commit()
 }
 
 /// 오늘의 데일리노트 열기 (없으면 생성)

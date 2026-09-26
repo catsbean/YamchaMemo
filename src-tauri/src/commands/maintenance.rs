@@ -66,11 +66,13 @@ pub fn list_trash(state: State<'_, AppState>) -> Result<Vec<yamcha_core::TrashIt
 #[tauri::command]
 #[specta::specta]
 pub fn restore_trash(state: State<'_, AppState>, file_name: String) -> Result<String, String> {
-    with_ctx_write(&state, |c| {
-        let rel = c.vault.restore_trash(&file_name)?;
-        refresh_note(c, &rel)?;
-        Ok(rel)
-    })
+    with_ctx_write(&state, |c| restore_trash_in(c, &file_name))
+}
+
+pub(crate) fn restore_trash_in(c: &mut Ctx, file_name: &str) -> Result<String, yamcha_core::CoreError> {
+    let rel = c.vault.restore_trash(file_name)?;
+    refresh_note(c, &rel)?;
+    Ok(rel)
 }
 
 /// 휴지통에서 retention_days보다 오래된 항목 영구 삭제 (0이면 안 함) → 삭제 개수

@@ -10,7 +10,7 @@ use notify_debouncer_full::{new_debouncer, notify::RecursiveMode, DebounceEventR
 use tauri::{AppHandle, Emitter, Manager};
 use yamcha_core::Vault;
 
-use crate::commands::AppState;
+use crate::commands::{AppState, Ctx};
 
 static LAST_SELF_WRITE_MS: AtomicU64 = AtomicU64::new(0);
 const SUPPRESS_WINDOW_MS: u64 = 2500;
@@ -39,6 +39,23 @@ fn suppressed() -> bool {
 /// 무관한 파일 때문에, 새 노트를 만들 때마다 손을 멈춘 5초 뒤에 그 값을 치르고 있었다.
 fn notify_as_external(vault: &Vault, rel: &str) -> bool {
     Vault::is_note_file(rel) && !vault.is_self_write(rel)
+}
+
+/// 바뀐 `.md`를 색인에 반영하고, 그중 프론트에 알릴 것(남이 고친 노트)을 돌려준다.
+///
+/// 감시 콜백에서 떼어 둔 것은 시험이 감시와 **같은 길**로 바깥 변경을 흘려보내게
+/// 하려는 것이다 (`invariants` 시험).
+pub(crate) fn apply_md_changes(ctx: &mut Ctx, rels: &[String]) -> Vec<String> {
+    let mut external = Vec::new();
+    for rel in rels.iter().filter(|r| r.ends_with(".md")) {
+        if notify_as_external(&ctx.vault, rel) {
+            external.push(rel.clone());
+        }
+        // 노트가 아닌 `.md`도 refresh_note에 넘긴다 — 예전 버전이 색인에
+        // 넣어 둔 `_index.md`를 그쪽에서 걷어낸다.
+        let _ = crate::commands::refresh_note(ctx, rel);
+    }
+    external
 }
 
 pub type WatcherHandle = notify_debouncer_full::Debouncer<
@@ -87,14 +104,7 @@ pub fn start(app: AppHandle, root: PathBuf) -> Option<WatcherHandle> {
             let mut external: Vec<String> = Vec::new();
             if let Ok(mut guard) = state.0.lock() {
                 if let Some(ctx) = guard.as_mut() {
-                    for rel in rels.iter().filter(|r| r.ends_with(".md")) {
-                        if notify_as_external(&ctx.vault, rel) {
-                            external.push(rel.clone());
-                        }
-                        // 노트가 아닌 `.md`도 refresh_note에 넘긴다 — 예전 버전이 색인에
-                        // 넣어 둔 `_index.md`를 그쪽에서 걷어낸다.
-                        let _ = crate::commands::refresh_note(ctx, rel);
-                    }
+                    external = apply_md_changes(ctx, &rels);
                 }
             }
             // 노트가 아닌 것(첨부·_types.json)은 지문을 남기는 길이 없어 예전대로 시각으로 가린다
