@@ -32,7 +32,8 @@ pub use indexer::{Backlink, Indexer, NoteRef, TagCount};
 pub use schema::{Builtin, EntryKind, FieldDef, FieldKind, TypeDef};
 pub use search::{SearchEngine, SearchFilter, SearchHit, SearchScope, FILE_TYPE};
 pub use vault::{
-    fingerprint, CalloutDef, NoteContent, NoteSummary, ParsedNote, SaveResult, TrashItem, Vault,
+    fingerprint, CalloutDef, NoteContent, NoteSummary, ParsedNote, Relocation, SaveResult,
+    TrashItem, Vault,
 };
 
 /// 증분 색인 결과

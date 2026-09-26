@@ -18,10 +18,9 @@ pub(crate) fn move_note_in(
     rel_path: &str,
     new_type_id: &str,
 ) -> Result<String, yamcha_core::CoreError> {
-    let new_rel = c.vault.move_note(rel_path, new_type_id)?;
-    // 폴더·타입이 바뀌므로 전체 재색인
-    yamcha_core::reindex_all(&c.vault, &mut c.indexer, &mut c.search)?;
-    Ok(new_rel)
+    let moved = c.vault.move_note(rel_path, new_type_id)?;
+    catch_up_relocation(c, rel_path, &moved);
+    Ok(moved.rel)
 }
 
 /// 노트 제목 변경 (파일명 + 링크 연쇄 수정, 책이면 독서기록도 연동) → 새 rel 경로
@@ -40,10 +39,9 @@ pub(crate) fn rename_note_in(
     rel_path: &str,
     new_title: &str,
 ) -> Result<String, yamcha_core::CoreError> {
-    let new_rel = c.vault.rename_note(rel_path, new_title)?;
-    // 경로·링크가 광범위하게 바뀌므로 전체 재색인
-    yamcha_core::reindex_all(&c.vault, &mut c.indexer, &mut c.search)?;
-    Ok(new_rel)
+    let moved = c.vault.rename_note(rel_path, new_title)?;
+    catch_up_relocation(c, rel_path, &moved);
+    Ok(moved.rel)
 }
 
 /// frontmatter 일부 필드만 갱신 (목록 뷰 인라인 편집용)
@@ -637,16 +635,23 @@ pub fn auto_title_note(
     state: State<'_, AppState>,
     rel_path: String,
 ) -> Result<Option<String>, String> {
-    with_ctx_write(&state, |c| {
-        let settled = c.vault.settle_untitled(&rel_path)?;
-        if settled.as_deref() != Some(rel_path.as_str()) {
-            c.indexer.remove(&rel_path)?;
-            c.search.remove(&rel_path)?;
+    with_ctx_write(&state, |c| auto_title_note_in(c, &rel_path))
+}
+
+pub(crate) fn auto_title_note_in(
+    c: &mut Ctx,
+    rel_path: &str,
+) -> Result<Option<String>, yamcha_core::CoreError> {
+    match c.vault.settle_untitled(rel_path)? {
+        // 이름을 붙였으면 제목 바꾸기와 같다 — `[[무제]]`를 고쳐 쓴 다른 노트들도 따라잡는다
+        Some(moved) => {
+            catch_up_relocation(c, rel_path, &moved);
+            Ok(Some(moved.rel))
         }
-        match &settled {
-            Some(new_rel) => refresh_note(c, new_rel)?,
-            None => c.search.commit()?,
+        // 아무것도 안 친 빈 노트라 지웠다
+        None => {
+            refresh_note(c, rel_path)?;
+            Ok(None)
         }
-        Ok(settled)
-    })
+    }
 }

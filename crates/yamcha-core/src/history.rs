@@ -442,7 +442,7 @@ mod tests {
         put(&v, &rel, "옛 제목 시절의 내용");
         snapshot(&v, &rel, None, EAGER).unwrap();
 
-        let new_rel = v.rename_note(&rel, "새 제목").unwrap();
+        let new_rel = v.rename_note(&rel, "새 제목").unwrap().rel;
         assert_ne!(new_rel, rel, "이름이 안 바뀌었다");
         assert!(
             !list(&v, &new_rel).unwrap().is_empty(),

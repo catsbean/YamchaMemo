@@ -39,6 +39,36 @@ fn visible_in(scope: &str, target: &str) -> bool {
     scope == target || scope == "both"
 }
 
+/// 제목 바꾸기·옮기기가 **건드린 노트** — 색인은 이만큼만 따라잡으면 된다.
+///
+/// 예전에는 무엇이 바뀌었는지 몰라서 부르는 쪽이 vault 전체를 다시 색인했다(2,000편에
+/// 13초, 그동안 상태 잠금을 쥐어 앱이 멈췄다). 바꾼 쪽이 제일 잘 안다 — 여기서 알려 준다.
+/// 돌려주는 값으로 받게 해서, 부르는 쪽이 고쳐 쓴 노트를 모른 척할 수 없게 한다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Relocation {
+    /// 노트의 (새) 경로. 이름이 그대로면 원래 경로다.
+    pub rel: String,
+    /// 링크를 고쳐 쓴 **다른** 노트들
+    pub rewritten: Vec<String>,
+}
+
+impl Relocation {
+    fn unchanged(rel: &str) -> Self {
+        Relocation {
+            rel: rel.to_string(),
+            rewritten: Vec::new(),
+        }
+    }
+
+    /// 새 경로 + 고쳐 쓴 노트들. 겹친 것과 노트 자신(스스로를 가리킨 링크)은 뺀다.
+    fn relocated(rel: String, mut rewritten: Vec<String>) -> Self {
+        rewritten.sort();
+        rewritten.dedup();
+        rewritten.retain(|r| *r != rel);
+        Relocation { rel, rewritten }
+    }
+}
+
 /// 휴지통에 있는 삭제된 노트 한 건
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct TrashItem {
@@ -601,11 +631,12 @@ impl Vault {
     }
 
     /// 노트를 다른 분류로 옮긴다. 파일을 새 분류의 폴더로 옮기고(파일명 충돌 시
-    /// 유니크 접미사) frontmatter의 `type`을 새로 정규화한다. 새 rel 경로를 반환.
+    /// 유니크 접미사) frontmatter의 `type`을 새로 정규화한다. 새 경로와, 경로 링크를 고쳐
+    /// 쓴 노트들을 돌려준다.
     ///
     /// 책·데일리는 파일명·폴더 규칙(연/월, 독서기록 연동)이 확고해 원본·대상
     /// 어느 쪽으로도 이동을 허용하지 않는다.
-    pub fn move_note(&self, rel: &str, new_type_id: &str) -> Result<String, CoreError> {
+    pub fn move_note(&self, rel: &str, new_type_id: &str) -> Result<Relocation, CoreError> {
         let note = self.read_note(rel)?;
         let cur_type = note.note_type.clone();
         if cur_type == new_type_id {
@@ -643,11 +674,11 @@ impl Vault {
         let moved = self.read_note(&dest_rel)?;
         self.save_note(&dest_rel, moved.frontmatter, &moved.body)?;
         // 폴더까지 적어 가리킨 링크는 따라와야 한다 (`[[Free/메모]]` → `[[Writing/메모]]`)
-        self.replace_path_links(rel, &dest_rel)?;
+        let rewritten = self.replace_path_links(rel, &dest_rel)?;
 
         self.mark_index_stale(&cur_type);
         self.mark_index_stale(new_type_id);
-        Ok(dest_rel)
+        Ok(Relocation::relocated(dest_rel, rewritten))
     }
 
     // ---------- 제목 변경 ----------
@@ -667,14 +698,16 @@ impl Vault {
     /// 확장자는 **한 번만 뗀다.** 반복해서 떼면 제목이 `메모.md`인 글(`Free/메모.md.md`)에서
     /// `Free/메모`가 나오는데, 그건 **다른 글**(`Free/메모.md`)의 경로 키다. 남의 링크를
     /// 고치면서 정작 이 파일의 링크(`[[Free/메모.md]]`)는 놓친다.
-    fn replace_path_links(&self, old_rel: &str, new_rel: &str) -> Result<(), CoreError> {
+    fn replace_path_links(&self, old_rel: &str, new_rel: &str) -> Result<Vec<String>, CoreError> {
         let key = |r: &str| r.strip_suffix(".md").unwrap_or(r).to_string();
         let olds = vec![key(old_rel), old_rel.to_string()];
         self.replace_links(&olds, &key(new_rel))
     }
 
     /// 모든 노트에서 `[[old]]` 링크를 `[[new]]`로 치환 (본문·frontmatter 원문 기준)
-    fn replace_links(&self, olds: &[String], new: &str) -> Result<(), CoreError> {
+    /// → 실제로 고쳐 쓴 노트들.
+    fn replace_links(&self, olds: &[String], new: &str) -> Result<Vec<String>, CoreError> {
+        let mut rewritten = Vec::new();
         for n in self.list_notes()? {
             let abs = self.abs(&n.rel_path)?;
             let Ok(content) = fs::read_to_string(&abs) else {
@@ -692,14 +725,15 @@ impl Vault {
             }
             if updated != content {
                 self.atomic_write(&abs, &updated)?;
+                rewritten.push(n.rel_path);
             }
         }
-        Ok(())
+        Ok(rewritten)
     }
 
     /// 노트 제목 변경: 파일명 변경 + frontmatter title 갱신 + 다른 노트의 위키링크 일괄 수정.
-    /// 책은 연결된 독서기록 파일명도 함께 바뀐다. 새 rel 경로를 반환.
-    pub fn rename_note(&self, rel: &str, new_title: &str) -> Result<String, CoreError> {
+    /// 책은 연결된 독서기록 파일명도 함께 바뀐다. 새 경로와, 링크를 고쳐 쓴 노트들을 돌려준다.
+    pub fn rename_note(&self, rel: &str, new_title: &str) -> Result<Relocation, CoreError> {
         let new_title = new_title.trim();
         if new_title.is_empty() {
             return Err(CoreError::Invalid("새 제목을 입력하세요".into()));
@@ -750,10 +784,10 @@ impl Vault {
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or(new_stem);
-        self.replace_links(&[old_stem, old_title.clone()], &final_stem)?;
+        let mut rewritten = self.replace_links(&[old_stem, old_title.clone()], &final_stem)?;
         // 제목을 바꾸면 파일명이 바뀌므로 경로도 바뀐다 — 폴더까지 적은 링크도 따라와야 한다
-        self.replace_path_links(rel, &new_rel)?;
-        Ok(new_rel)
+        rewritten.extend(self.replace_path_links(rel, &new_rel)?);
+        Ok(Relocation::relocated(new_rel, rewritten))
     }
 
     fn save_custom_types(&self) -> Result<(), CoreError> {
@@ -1718,19 +1752,20 @@ impl Vault {
     }
 
     /// 제목 없이 떠나는 노트를 정리한다. 아무것도 안 친 빈 노트면 **지우고** `None`,
-    /// 아니면 `{날짜} {본문 첫머리}`로 이름을 붙여(`auto_title_if_untitled`) rel을 돌려준다.
+    /// 아니면 `{날짜} {본문 첫머리}`로 이름을 붙여(`auto_title_if_untitled`) 새 경로(와 링크를
+    /// 고쳐 쓴 노트들)를 돌려준다.
     ///
     /// "빈"의 기준은 이름을 지어낼 글 줄이 없고(`title_from_body`) frontmatter도 제목 없이
     /// 만들었을 때의 기본값(`normalize_frontmatter`가 채우는 것) 그대로인 것이다.
     /// 만들어 놓고 돌아선 노트라 휴지통에도 넣지 않는다 — 넣으면 휴지통이 무제로 가득 찬다.
-    pub fn settle_untitled(&self, rel: &str) -> Result<Option<String>, CoreError> {
+    pub fn settle_untitled(&self, rel: &str) -> Result<Option<Relocation>, CoreError> {
         let note = self.read_note(rel)?;
         let locked = matches!(
             Builtin::from_id(&note.note_type),
             Some(Builtin::Daily) | Some(Builtin::Book)
         );
         if locked || !Self::is_untitled(rel, &note) {
-            return Ok(Some(rel.to_string()));
+            return Ok(Some(Relocation::unchanged(rel)));
         }
         // 제목 없이 만들면 frontmatter는 기본값뿐이다 — 거기서 벗어난 칸이 있으면 사용자가 적은 것
         let mut fm = note.frontmatter.as_object().cloned().unwrap_or_default();
@@ -1757,19 +1792,19 @@ impl Vault {
 
     /// 제목을 정하지 않고 닫은 노트에 이름을 붙여 준다.
     /// 이미 이름이 있으면 그대로 두고, 없을 때만 `{날짜} {본문 첫머리}`로 바꾼다.
-    /// 바뀌었으면 새 rel, 아니면 원래 rel을 돌려준다.
-    pub fn auto_title_if_untitled(&self, rel: &str) -> Result<String, CoreError> {
+    /// 바뀌었으면 새 경로(와 링크를 고쳐 쓴 노트들), 아니면 원래 경로를 돌려준다.
+    pub fn auto_title_if_untitled(&self, rel: &str) -> Result<Relocation, CoreError> {
         let note = self.read_note(rel)?;
         if !Self::supports_title_prefix(&note.note_type) {
-            return Ok(rel.to_string());
+            return Ok(Relocation::unchanged(rel));
         }
         if !Self::is_untitled(rel, &note) {
-            return Ok(rel.to_string());
+            return Ok(Relocation::unchanged(rel));
         }
 
         let head = Self::title_from_body(&note.body);
         if head.is_empty() {
-            return Ok(rel.to_string()); // 본문도 비었으면 건드리지 않는다
+            return Ok(Relocation::unchanged(rel)); // 본문도 비었으면 건드리지 않는다
         }
         let date = note
             .frontmatter
@@ -2790,7 +2825,7 @@ mod tests {
             .collect();
         assert!(listed.contains(&rel), "만든 노트가 목록에 없다: {listed:?}");
 
-        let moved = v.rename_note(&rel, "_다시").unwrap();
+        let moved = v.rename_note(&rel, "_다시").unwrap().rel;
         assert_eq!(moved, "Free/다시.md");
         let listed: Vec<String> = v
             .list_notes()
@@ -3378,7 +3413,7 @@ mod tests {
             .create_note("meeting", "주간 회의", serde_json::json!({}))
             .unwrap();
 
-        let new_rel = v.move_note(&rel, "archive").unwrap();
+        let new_rel = v.move_note(&rel, "archive").unwrap().rel;
         assert_eq!(new_rel, "자료집/주간 회의.md");
         assert!(v.read_note(&rel).is_err());
         let moved = v.read_note(&new_rel).unwrap();
@@ -3416,7 +3451,7 @@ mod tests {
         )
         .unwrap();
 
-        let moved = v.move_note(&target, "meeting").unwrap();
+        let moved = v.move_note(&target, "meeting").unwrap().rel;
         assert_eq!(moved, "회의록/메모.md");
 
         let body = v.read_note(&linker).unwrap().body;
@@ -3465,7 +3500,7 @@ mod tests {
         .unwrap();
 
         // '메모.md' 쪽만 옮긴다
-        assert_eq!(v.move_note(&dotmd, "meeting").unwrap(), "회의록/메모.md.md");
+        assert_eq!(v.move_note(&dotmd, "meeting").unwrap().rel, "회의록/메모.md.md");
 
         let body = v.read_note(&linker).unwrap().body;
         // 안 옮긴 글을 가리키던 링크는 그대로
@@ -3481,7 +3516,7 @@ mod tests {
         let linker = v.create_note("free", "링크하는 글", serde_json::json!({})).unwrap();
         v.save_note(&linker, serde_json::json!({}), "여기 [[옛 제목]] 참고").unwrap();
 
-        let new_rel = v.rename_note(&target, "새 제목").unwrap();
+        let new_rel = v.rename_note(&target, "새 제목").unwrap().rel;
         assert_eq!(new_rel, "Free/새 제목.md");
         assert!(v.read_note(&target).is_err());
         let renamed = v.read_note(&new_rel).unwrap();
@@ -3499,7 +3534,7 @@ mod tests {
             .unwrap();
         v.append_reading_entry(&book, EntryKind::Excerpt, "기록").unwrap();
 
-        let new_book = v.rename_note(&book, "새 책").unwrap();
+        let new_book = v.rename_note(&book, "새 책").unwrap().rel;
         assert_eq!(new_book, "Books/새 책.md");
         assert!(v.read_note(&book).is_err());
         let r = v.read_note(&new_book).unwrap();
@@ -3540,7 +3575,7 @@ mod tests {
 
         v.save_note(&rel, serde_json::json!({}), "# 오늘 배운 것\n\n본문이 이어진다")
             .unwrap();
-        let new_rel = v.auto_title_if_untitled(&rel).unwrap();
+        let new_rel = v.auto_title_if_untitled(&rel).unwrap().rel;
         assert_eq!(new_rel, format!("Free/{today} 오늘 배운 것.md"));
     }
 
@@ -3550,11 +3585,11 @@ mod tests {
         // 이름이 있으면 그대로
         let named = v.create_note("free", "이미 제목 있음", serde_json::json!({})).unwrap();
         v.save_note(&named, serde_json::json!({}), "본문").unwrap();
-        assert_eq!(v.auto_title_if_untitled(&named).unwrap(), named);
+        assert_eq!(v.auto_title_if_untitled(&named).unwrap().rel, named);
 
         // 본문이 비었으면 이름을 지어낼 근거가 없으니 그대로
         let empty = v.create_note("free", "", serde_json::json!({})).unwrap();
-        assert_eq!(v.auto_title_if_untitled(&empty).unwrap(), empty);
+        assert_eq!(v.auto_title_if_untitled(&empty).unwrap().rel, empty);
     }
 
     #[test]
@@ -3562,7 +3597,7 @@ mod tests {
         let (_d, v) = vault();
         // 만들어 놓고 아무것도 안 친 노트는 사라진다 — 휴지통에도 남기지 않는다
         let blank = v.create_note("free", "", serde_json::json!({})).unwrap();
-        assert_eq!(v.settle_untitled(&blank).unwrap(), None);
+        assert_eq!(v.settle_untitled(&blank).unwrap().map(|r| r.rel), None);
         assert!(!v.root.join(&blank).exists());
         let trashed = fs::read_dir(v.root.join(".yamcha/trash"))
             .map(|d| d.count())
@@ -3572,21 +3607,21 @@ mod tests {
         // 본문이 있으면 예전처럼 첫 줄로 이름을 붙인다
         let typed = v.create_note("free", "", serde_json::json!({})).unwrap();
         v.save_note(&typed, serde_json::json!({}), "장보기 목록").unwrap();
-        let named = v.settle_untitled(&typed).unwrap().unwrap();
+        let named = v.settle_untitled(&typed).unwrap().unwrap().rel;
         assert!(named.ends_with("장보기 목록.md"), "{named}");
 
         // 본문은 비었어도 태그를 적었으면 지우지 않는다
         let tagged = v.create_note("free", "", serde_json::json!({ "tags": ["요리"] })).unwrap();
-        assert_eq!(v.settle_untitled(&tagged).unwrap(), Some(tagged.clone()));
+        assert_eq!(v.settle_untitled(&tagged).unwrap().map(|r| r.rel), Some(tagged.clone()));
         assert!(v.root.join(&tagged).exists());
 
         // 글쓰기는 자동 명명 대상이 아니지만 빈 무제는 똑같이 정리한다
         let piece = v.create_note("writing", "", serde_json::json!({})).unwrap();
-        assert_eq!(v.settle_untitled(&piece).unwrap(), None);
+        assert_eq!(v.settle_untitled(&piece).unwrap().map(|r| r.rel), None);
 
         // 이름을 지은 노트는 비어 있어도 건드리지 않는다
         let named_empty = v.create_note("free", "메모", serde_json::json!({})).unwrap();
-        assert_eq!(v.settle_untitled(&named_empty).unwrap(), Some(named_empty.clone()));
+        assert_eq!(v.settle_untitled(&named_empty).unwrap().map(|r| r.rel), Some(named_empty.clone()));
         assert!(v.root.join(&named_empty).exists());
     }
 
@@ -3597,7 +3632,7 @@ mod tests {
         // 빈 체크박스·헤딩만 있는 줄은 건너뛰고 실제 내용이 있는 첫 줄을 쓴다
         v.save_note(&rel, serde_json::json!({}), "## 할 일\n\n- [ ] \n- [ ] 장보기\n")
             .unwrap();
-        let new_rel = v.auto_title_if_untitled(&rel).unwrap();
+        let new_rel = v.auto_title_if_untitled(&rel).unwrap().rel;
         assert!(new_rel.ends_with("할 일.md"), "{new_rel}");
     }
 

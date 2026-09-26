@@ -74,10 +74,73 @@ fn with_ctx_write<T>(
 /// `_index.md`처럼 노트가 아닌 `.md`는 파싱하지 않고 색인에서 뺀다 — 감시가 이 파일의
 /// 바깥 변경(동기화 등)을 넘겨주면 파싱돼 들어가고, 안의 `[[링크]]`가 죄다 백링크가 됐다.
 pub(crate) fn refresh_note(ctx: &mut Ctx, rel: &str) -> Result<(), yamcha_core::CoreError> {
+    refresh_notes(ctx, std::iter::once(rel))
+}
+
+/// 여러 편을 한 번에 색인에 반영한다 — **검색 색인 커밋은 끝에 한 번만.**
+///
+/// 커밋은 디스크 동기화를 거쳐 편마다 하기엔 비싸다. 제목 바꾸기처럼 한 번에 여러 편이
+/// 바뀌는 자리(링크를 고쳐 쓴 노트들)에서 편마다 커밋하면 그 값이 편수만큼 쌓인다.
+pub(crate) fn refresh_notes<'a>(
+    ctx: &mut Ctx,
+    rels: impl IntoIterator<Item = &'a str>,
+) -> Result<(), yamcha_core::CoreError> {
+    let rels: Vec<&str> = rels.into_iter().collect();
+    with_index_retry(ctx, |ctx, force| {
+        let mut dirty = force;
+        let mut states = Vec::new();
+        for rel in &rels {
+            dirty |= index_one(ctx, rel, &mut states)?;
+        }
+        // 신원은 한 번에 몰아서 쓴다 — 편마다 쓰면 그때마다 SQLite 트랜잭션이 돈다
+        ctx.indexer.set_note_states(&states)?;
+        if dirty {
+            ctx.search.commit()?;
+        }
+        Ok(())
+    })
+}
+
+/// 색인 갱신을 몇 번 다시 해 본다.
+///
+/// Windows에서는 백신·검색 색인기가 갓 쓴 파일을 잠깐 쥐면 검색 색인 커밋이 "액세스가
+/// 거부되었습니다(os error 5)"로 드물게 실패한다 — 불변식 시험에서 수백 번에 한 번 났고,
+/// 그때 제목 바꾸기는 파일을 옮겨 놓고 실패를 돌려줬다. vault가 자기 파일에 쓰는
+/// `retry_while_locked`와 같은 처방이다: 실패하면 검색 쪽을 마지막 커밋으로 되돌리고 처음부터
+/// 다시 한다. 갱신은 몇 번을 해도 결과가 같다(upsert·지우기).
+///
+/// 다시 할 때(`force`)는 커밋을 거르지 않는다 — SQLite 쪽은 이미 반영돼 "지울 게 없다"고
+/// 답하지만, 검색 쪽은 방금 되돌려졌기 때문이다.
+fn with_index_retry(
+    ctx: &mut Ctx,
+    mut update: impl FnMut(&mut Ctx, bool) -> Result<(), yamcha_core::CoreError>,
+) -> Result<(), yamcha_core::CoreError> {
+    const BACKOFF_MS: [u64; 4] = [20, 50, 120, 300];
     crate::watcher::mark_self_write();
+    let mut last = match update(ctx, false) {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
+    for ms in BACKOFF_MS {
+        ctx.search.rollback()?;
+        std::thread::sleep(Duration::from_millis(ms));
+        match update(ctx, true) {
+            Ok(()) => return Ok(()),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+/// 한 편을 색인에 반영한다 (커밋은 부르는 쪽이) → 검색 색인을 건드렸나.
+fn index_one(
+    ctx: &mut Ctx,
+    rel: &str,
+    states: &mut Vec<(String, i64, i64)>,
+) -> Result<bool, yamcha_core::CoreError> {
     // 노트가 아니면 읽어 볼 것도 없다. 예전 버전이 색인에 넣어 둔 것만 걷어낸다.
     if !Vault::is_note_file(rel) {
-        return drop_from_index(ctx, rel);
+        return unindex_one(ctx, rel);
     }
     match ctx.vault.parse_full(rel) {
         Ok(parsed) => {
@@ -93,26 +156,65 @@ pub(crate) fn refresh_note(ctx: &mut Ctx, rel: &str) -> Result<(), yamcha_core::
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_nanos() as i64)
                     .unwrap_or(0);
-                ctx.indexer.set_note_state(rel, mtime, meta.len() as i64)?;
+                states.push((rel.to_string(), mtime, meta.len() as i64));
             }
-            ctx.search.commit()
+            Ok(true)
         }
         // 못 읽었다 = 지워졌거나 지금 쓰이는 중이다 — 색인에서 뺀다
-        Err(_) => drop_from_index(ctx, rel),
+        Err(_) => unindex_one(ctx, rel),
     }
 }
 
-/// 색인·검색에서 이 경로를 뺀다. **애초에 색인에 없었으면 아무 일도 하지 않는다.**
+/// 색인·검색에서 이 경로를 뺀다 (커밋은 부르는 쪽이) → **애초에 색인에 있었나**.
 ///
-/// 검색 색인 커밋은 디스크 동기화를 거쳐 값이 비싸다. `_index.md`는 노트를 만들거나
-/// 지울 때마다 다시 쓰이고 그때마다 감시를 거쳐 여기로 오는데, 지울 것도 없이 커밋만
-/// 하면 그 값을 늘 치른다 — 그동안 상태 잠금을 쥐고 있어 앱의 모든 커맨드가 기다린다.
-fn drop_from_index(ctx: &mut Ctx, rel: &str) -> Result<(), yamcha_core::CoreError> {
-    if !ctx.indexer.remove(rel)? {
-        return Ok(());
-    }
+/// 없었으면 부르는 쪽이 커밋을 거른다. 검색 색인 커밋은 디스크 동기화를 거쳐 값이 비싸다.
+/// `_index.md`는 노트를 만들거나 지울 때마다 다시 쓰이고 그때마다 감시를 거쳐 여기로 오는데,
+/// 지울 것도 없이 커밋만 하면 그 값을 늘 치른다 — 그동안 상태 잠금을 쥐어 앱이 기다린다.
+/// 검색 쪽 지우기는 늘 걸어 둔다: 값이 거의 없고, 되돌린 뒤 다시 할 때 빠지면 안 된다.
+fn unindex_one(ctx: &mut Ctx, rel: &str) -> Result<bool, yamcha_core::CoreError> {
+    let had = ctx.indexer.remove(rel)?;
     ctx.search.remove(rel)?;
-    ctx.search.commit()
+    Ok(had)
+}
+
+/// 제목 바꾸기·옮기기 뒤 색인을 따라잡는다 — 옛 경로를 빼고, 새 경로와 링크를 고쳐 쓴
+/// 노트만 다시 읽는다. 검색 색인 커밋은 한 번.
+///
+/// 예전에는 vault 전체를 다시 색인했다 — 2,000편에 13초(release 실측), 그동안 상태 잠금을
+/// 쥐어 앱이 통째로 멈췄다. 무엇을 건드렸는지는 바꾼 쪽(`Relocation`)이 알려 준다.
+///
+/// **실패를 돌려주지 않는다.** 이 자리에 왔을 때 파일은 이미 새 자리에 있다. 색인(파생물)을
+/// 못 따라잡았다고 실패를 돌려주면 화면은 "안 됐다"고 믿고 옛 경로를 쥔 채 남는다 — 불변식
+/// 시험이 찾은 상태다. 끝내 못 따라잡으면 건드린 편의 신원을 틀어 두어 다음 시작의 증분
+/// 색인이 다시 읽게(옛 경로는 지우게) 하고 넘어간다.
+pub(crate) fn catch_up_relocation(ctx: &mut Ctx, old_rel: &str, moved: &yamcha_core::Relocation) {
+    let touched: Vec<&str> = std::iter::once(moved.rel.as_str())
+        .chain(moved.rewritten.iter().map(String::as_str))
+        .collect();
+    let caught_up = with_index_retry(ctx, |ctx, force| {
+        let mut states = Vec::new();
+        let mut dirty = force;
+        if moved.rel != old_rel {
+            dirty |= unindex_one(ctx, old_rel)?;
+        }
+        for rel in &touched {
+            dirty |= index_one(ctx, rel, &mut states)?;
+        }
+        // 신원은 한 번에 몰아서 쓴다 — 편마다 쓰면 그때마다 SQLite 트랜잭션이 돈다
+        ctx.indexer.set_note_states(&states)?;
+        if dirty {
+            ctx.search.commit()?;
+        }
+        Ok(())
+    });
+    if let Err(e) = caught_up {
+        eprintln!("색인 따라잡기 실패 — 다음 시작에 다시 읽는다: {e}");
+        let stale: Vec<(String, i64, i64)> = std::iter::once(old_rel)
+            .chain(touched.iter().copied())
+            .map(|r| (r.to_string(), -1, -1))
+            .collect();
+        let _ = ctx.indexer.set_note_states(&stale);
+    }
 }
 
 #[tauri::command]
@@ -596,5 +698,47 @@ mod refresh_note_tests {
         std::fs::remove_file(vault_dir.path().join(&rel)).unwrap();
         refresh_note(&mut c, &rel).unwrap();
         assert!(!c.indexer.note_states().unwrap().contains_key(&rel));
+    }
+
+    /// 검색 색인 커밋이 끝내 실패해도 제목 바꾸기는 **성공을 돌려준다** — 파일은 이미 새
+    /// 자리에 있다. 실패를 돌려주면 화면이 옛 경로를 쥔 채 남는다(불변식 시험이 찾은 상태).
+    /// 못 따라잡은 편은 다음 시작의 증분 색인이 바로잡는다.
+    #[test]
+    #[cfg(windows)]
+    fn 색인_커밋이_실패해도_제목_바꾸기는_성공한다() {
+        let vault_dir = tempfile::tempdir().unwrap();
+        let index_dir = tempfile::tempdir().unwrap();
+        let mut c = ctx(vault_dir.path(), index_dir.path());
+        let rel = notes::create_note_in(&mut c, "free", "메모", serde_json::Value::Null).unwrap();
+
+        // 커밋이 meta.json을 갈아 끼우지 못하게 막는다 — Windows는 읽기 전용 파일을 덮어쓰지
+        // 않고 "액세스가 거부되었습니다(os error 5)"를 돌려준다. 실제로 난 오류와 같다.
+        let meta = index_dir.path().join("search").join("meta.json");
+        let set_readonly = |on: bool| {
+            let mut p = std::fs::metadata(&meta).unwrap().permissions();
+            p.set_readonly(on);
+            std::fs::set_permissions(&meta, p).unwrap();
+        };
+        set_readonly(true);
+        let renamed = notes::rename_note_in(&mut c, &rel, "새 이름");
+        let states = c.indexer.note_states().unwrap();
+        set_readonly(false);
+
+        let new_rel = renamed.expect("파일은 옮겨졌는데 실패를 돌려줬다");
+        assert_eq!(new_rel, "Free/새 이름.md");
+        assert!(vault_dir.path().join(&new_rel).is_file());
+        // 실패 경로를 정말 탔는가 — 다음 시작에 다시 읽히도록 신원이 틀어져 있어야 한다
+        assert_eq!(states.get(&new_rel), Some(&(-1, -1)), "커밋이 실패하지 않았다: {states:?}");
+        assert_eq!(states.get(&rel), Some(&(-1, -1)), "옛 경로가 다음 시작에 지워지지 않는다");
+
+        // 다음 시작: 증분 색인이 바로잡는다
+        yamcha_core::reindex_changed(&c.vault, &mut c.indexer, &mut c.search).unwrap();
+        let states = c.indexer.note_states().unwrap();
+        assert!(states.contains_key(&new_rel) && !states.contains_key(&rel), "{states:?}");
+        assert_eq!(
+            c.search.note_paths().unwrap(),
+            [new_rel].into_iter().collect(),
+            "검색이 바로잡히지 않았다"
+        );
     }
 }

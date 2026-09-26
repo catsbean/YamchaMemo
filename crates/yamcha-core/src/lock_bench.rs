@@ -150,6 +150,50 @@ mod bench {
         let n = v.flush_index_files().unwrap();
         println!("⑥ flush_index_files: {}ms, {n}종류", t.elapsed().as_millis());
 
+        // ⑦ 전체 재색인 — 제목 바꾸기·옮기기마다 치르는 값 (clear → 전부 upsert → commit).
+        // 두 번 돈다: 두 번째가 "이미 가득 찬 색인을 비우고 다시 채우는" 실제 상황이다.
+        for k in 1..=2 {
+            let t = Instant::now();
+            let n = crate::reindex_all(&v, &mut indexer, &mut search).unwrap();
+            println!(
+                "⑦-{k} reindex_all (제목 바꾸기·옮기기): {}ms, {n}편",
+                t.elapsed().as_millis()
+            );
+        }
+
+        // ⑧ 제목 바꾸기 한 번 — 파일 이동·링크 고쳐 쓰기와, 색인을 따라잡는 값을 따로 잰다.
+        // 따라잡기는 앱(`catch_up_relocation`)과 같다: 옛 경로를 빼고 새 경로와 링크를 고쳐 쓴
+        // 노트만 다시 읽은 뒤, 검색 색인은 한 번만 커밋한다. ⑦(전체 재색인)이 예전 값이다.
+        let mut rename_once = |label: &str, target: &str, title: &str| {
+            let t = Instant::now();
+            let moved = v.rename_note(target, title).unwrap();
+            println!(
+                "{label}-a rename_note (이동 + 링크 고쳐 쓰기): {}ms, 고쳐 쓴 노트 {}편",
+                t.elapsed().as_millis(),
+                moved.rewritten.len()
+            );
+            let t = Instant::now();
+            indexer.remove(target).unwrap();
+            search.remove(target).unwrap();
+            for rel in std::iter::once(&moved.rel).chain(&moved.rewritten) {
+                let parsed = v.parse_full(rel).unwrap();
+                indexer.upsert(&parsed).unwrap();
+                search.upsert(&parsed).unwrap();
+            }
+            search.commit().unwrap();
+            println!(
+                "{label}-b 색인 따라잡기 (건드린 노트만): {}ms, {}편",
+                t.elapsed().as_millis(),
+                1 + moved.rewritten.len()
+            );
+        };
+        // 아무도 가리키지 않는 노트 — 흔한 경우
+        let lonely = v.list_note_files().unwrap()[1].rel_path.clone();
+        rename_once("⑧", &lonely, "제목을 바꾼 노트");
+        // ⑨ 거의 모든 노트가 가리키는 노트 — 가장 나쁜 경우 (본문마다 `[[다른 노트]]`가 있다)
+        let hub = v.create_note("free", "다른 노트", json!({})).unwrap();
+        rename_once("⑨", &hub, "모두가 가리키는 노트");
+
         v.set_history_policy(crate::HistoryPolicy::default());
         println!("===\n");
     }

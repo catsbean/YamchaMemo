@@ -295,6 +295,15 @@ impl SearchEngine {
         Ok(())
     }
 
+    /// 마지막 커밋 뒤의 변경을 모두 버린다 — 커밋이 실패했을 때 처음부터 다시 하려고.
+    ///
+    /// 커밋이 실패한 뒤 writer가 어떤 상태인지는 tantivy가 약속하지 않는다. 되돌리기는
+    /// "마지막 커밋 때와 같은 상태"를 약속하므로, 거기서부터 같은 갱신을 다시 하면 된다.
+    pub fn rollback(&mut self) -> Result<(), CoreError> {
+        self.writer.rollback()?;
+        Ok(())
+    }
+
     /// 변경사항 반영 (배치 후 한 번 호출)
     pub fn commit(&mut self) -> Result<(), CoreError> {
         self.writer.commit()?;
