@@ -47,7 +47,7 @@ fn entries_of_book(n: &NoteSummary, body: &str) -> Vec<ReadingEntry> {
 }
 
 /// 전체 책의 기록을 엔트리 단위로 펼쳐 반환한다 (정렬·필터는 화면에서).
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn list_entries(state: State<'_, AppState>) -> Result<Vec<ReadingEntry>, String> {
     with_ctx(&state, |c| {
@@ -130,7 +130,7 @@ pub struct TodoCache(std::collections::HashMap<String, TodoCacheEntry>);
 ///
 /// 비용은 할 일 수가 아니라 **노트 수**에 붙는다(파일을 연다). 실측값과 근거는
 /// `TodoCache`의 설명과 아래 `todo_scan_bench`에 있다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn list_todos(state: State<'_, AppState>, limit: u32, done: bool) -> Result<TodoPage, String> {
     with_ctx(&state, |c| {
@@ -264,7 +264,7 @@ pub struct DailyDigest {
 }
 
 /// 데일리노트 요약. `date`는 `YYYY-MM-DD`.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn daily_digest(state: State<'_, AppState>, date: String) -> Result<DailyDigest, String> {
     with_ctx(&state, |c| {
@@ -389,7 +389,7 @@ fn is_ymd(s: &str) -> bool {
 ///
 /// **필터는 일부러 여기서 걸지 않는다.** 종류 칩 하나를 껐다 켤 때마다 파일을
 /// 다시 읽을 이유가 없다 — 백엔드는 기간을 주고, 좁히는 일은 화면이 한다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn review_range(
     state: State<'_, AppState>,

@@ -3,7 +3,7 @@
 use super::*;
 
 /// 노트를 다른 분류로 이동 (파일을 새 분류 폴더로 옮기고 type을 갱신) → 새 rel 경로
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn move_note(
     state: State<'_, AppState>,
@@ -24,7 +24,7 @@ pub(crate) fn move_note_in(
 }
 
 /// 노트 제목 변경 (파일명 + 링크 연쇄 수정, 책이면 독서기록도 연동) → 새 rel 경로
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn rename_note(
     state: State<'_, AppState>,
@@ -45,7 +45,7 @@ pub(crate) fn rename_note_in(
 }
 
 /// frontmatter 일부 필드만 갱신 (목록 뷰 인라인 편집용)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn update_frontmatter(
     state: State<'_, AppState>,
@@ -59,7 +59,7 @@ pub fn update_frontmatter(
 }
 
 /// 이미지 파일을 책 표지로 첨부하고 frontmatter cover에 기록 → 표지 rel 경로 반환
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn attach_cover(
     state: State<'_, AppState>,
@@ -91,7 +91,7 @@ pub fn attach_cover(
 }
 
 /// 외부 파일을 일반 첨부로 복사 → rel 경로 반환
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn import_attachment(state: State<'_, AppState>, src_path: String) -> Result<String, String> {
     with_ctx_write(&state, |c| {
@@ -100,7 +100,7 @@ pub fn import_attachment(state: State<'_, AppState>, src_path: String) -> Result
 }
 
 /// 클립보드에서 붙여넣은 이미지 저장 (base64) → rel 경로 반환
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn save_pasted_image(
     state: State<'_, AppState>,
@@ -114,7 +114,7 @@ pub fn save_pasted_image(
 }
 
 /// 클립보드/붙여넣기 이미지를 책 표지로 저장하고 frontmatter cover 갱신 → 표지 rel 경로
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn attach_cover_pasted(
     state: State<'_, AppState>,
@@ -147,7 +147,7 @@ pub fn attach_cover_pasted(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn list_notes(state: State<'_, AppState>) -> Result<Vec<NoteSummary>, String> {
     with_ctx(&state, |c| c.vault.list_notes())
@@ -155,13 +155,13 @@ pub fn list_notes(state: State<'_, AppState>) -> Result<Vec<NoteSummary>, String
 
 /// 노트 한 편의 요약 — 저장 뒤 목록에서 그 줄만 갈아끼울 때.
 /// 자동저장마다 `list_notes`로 전체를 다시 실어 나르지 않으려고 둔다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn note_summary(state: State<'_, AppState>, rel_path: String) -> Result<NoteSummary, String> {
     with_ctx(&state, |c| c.vault.note_summary(&rel_path))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn read_note(state: State<'_, AppState>, rel_path: String) -> Result<NoteContent, String> {
     with_ctx(&state, |c| c.vault.read_note(&rel_path))
@@ -173,7 +173,7 @@ pub fn read_note(state: State<'_, AppState>, rel_path: String) -> Result<NoteCon
 /// 파일이 그대로인지 확인하고, 그 사이에 누가 고쳤으면 **쓰지 않고** `conflict`로
 /// 돌려준다 — 같은 저장소를 두 곳에서 열어 둔 사이에 남의 수정을 조용히 덮는 것을
 /// 막는다. 사용자가 "내 편집 유지"를 골라 일부러 덮어쓸 때는 `null`을 준다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn save_note(
     state: State<'_, AppState>,
@@ -204,7 +204,7 @@ pub(crate) fn save_note_in(
 }
 
 /// 노트 생성 → 생성된 rel 경로 반환
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn create_note(
     state: State<'_, AppState>,
@@ -226,7 +226,7 @@ pub(crate) fn create_note_in(
     Ok(rel)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn delete_note(state: State<'_, AppState>, rel_path: String) -> Result<(), String> {
     with_ctx_write(&state, |c| delete_note_in(c, &rel_path))
@@ -240,7 +240,7 @@ pub(crate) fn delete_note_in(c: &mut Ctx, rel_path: &str) -> Result<(), yamcha_c
 }
 
 /// 오늘의 데일리노트 열기 (없으면 생성)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn open_today_daily(state: State<'_, AppState>) -> Result<String, String> {
     with_ctx(&state, |c| {
@@ -251,7 +251,7 @@ pub fn open_today_daily(state: State<'_, AppState>) -> Result<String, String> {
 }
 
 /// 특정 날짜의 데일리노트 열기 (없으면 생성)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn open_daily(state: State<'_, AppState>, date: String) -> Result<String, String> {
     with_ctx(&state, |c| {
@@ -262,7 +262,7 @@ pub fn open_daily(state: State<'_, AppState>, date: String) -> Result<String, St
 }
 
 /// 책 노트 → 연결된 독서기록 찾기/생성
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn reading_for_book(
     state: State<'_, AppState>,
@@ -276,7 +276,7 @@ pub fn reading_for_book(
 }
 
 /// 독서기록에 엔트리 추가 → 갱신된 노트 반환
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn append_reading_entry(
     state: State<'_, AppState>,
@@ -292,7 +292,7 @@ pub fn append_reading_entry(
 }
 
 /// 데일리노트 빠른 입력 (할 일/기록/느낌) → 갱신된 노트 반환
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn append_daily_entry(
     state: State<'_, AppState>,
@@ -311,7 +311,7 @@ pub fn append_daily_entry(
 ///
 /// 앱 화면을 거치지 않고 불릴 수 있으므로(전역 단축키 → 작은 창) **여기서 스스로
 /// 오늘 일지를 만든다.**
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn quick_capture(state: State<'_, AppState>, text: String) -> Result<String, String> {
     let text = text.trim().to_string();
@@ -354,7 +354,7 @@ pub(crate) fn todos_of_body(body: &str) -> Vec<NoteTodo> {
 }
 
 /// 일지의 할 일 목록 (`## 할 일` 섹션, 없으면 본문 전체). 완료·미완료 모두.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn note_todos(state: State<'_, AppState>, rel_path: String) -> Result<Vec<NoteTodo>, String> {
     with_ctx(&state, |c| {
@@ -363,7 +363,7 @@ pub fn note_todos(state: State<'_, AppState>, rel_path: String) -> Result<Vec<No
 }
 
 /// 할 일 완료 여부 토글 → 갱신된 노트
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn toggle_todo(
     state: State<'_, AppState>,
@@ -380,7 +380,7 @@ pub fn toggle_todo(
 }
 
 /// 할 일 내용 수정 (완료 여부 유지) → 갱신된 노트
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn update_todo(
     state: State<'_, AppState>,
@@ -399,7 +399,7 @@ pub fn update_todo(
 }
 
 /// 할 일 삭제 → 갱신된 노트
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn delete_todo(
     state: State<'_, AppState>,
@@ -415,7 +415,7 @@ pub fn delete_todo(
 }
 
 /// 사용자 정의 종류로 기록 추가 → 갱신된 노트
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn append_callout(
     state: State<'_, AppState>,
@@ -432,7 +432,7 @@ pub fn append_callout(
 
 /// 항목 종류 변경. `source`는 "entry"(기록 콜아웃) 또는 "todo".
 /// `new_kind`가 "할 일"이면 체크박스로 바뀌며 섹션도 함께 옮겨진다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn change_kind(
     state: State<'_, AppState>,
@@ -452,14 +452,14 @@ pub fn change_kind(
 }
 
 /// vault에 저장된 사용자 정의 콜아웃 목록
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn list_callouts(state: State<'_, AppState>) -> Result<Vec<yamcha_core::CalloutDef>, String> {
     with_ctx(&state, |c| Ok(c.vault.list_callouts()))
 }
 
 /// 사용자 정의 콜아웃 추가 → 갱신된 목록
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn add_callout(
     state: State<'_, AppState>,
@@ -469,7 +469,7 @@ pub fn add_callout(
 }
 
 /// 사용자 정의 콜아웃 제거 → 갱신된 목록 (이미 쓴 노트 내용은 건드리지 않는다)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn remove_callout(
     state: State<'_, AppState>,
@@ -546,7 +546,7 @@ pub(crate) fn blocks_of_body(body: &str) -> Vec<NoteBlock> {
 }
 
 /// 보기 화면용 블록 목록.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn note_blocks(state: State<'_, AppState>, rel_path: String) -> Result<Vec<NoteBlock>, String> {
     with_ctx(&state, |c| {
@@ -556,7 +556,7 @@ pub fn note_blocks(state: State<'_, AppState>, rel_path: String) -> Result<Vec<N
 
 /// 기록 콜아웃 한 건의 본문 수정 (종류·날짜 유지) → 갱신된 노트.
 /// `expected_text`는 화면에서 보던 내용 — 그 사이 파일이 바뀌었으면 거부한다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn update_entry(
     state: State<'_, AppState>,
@@ -575,7 +575,7 @@ pub fn update_entry(
 }
 
 /// 기록 콜아웃 한 건 삭제 → 갱신된 노트. `expected_text`가 다르면 거부한다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn delete_entry(
     state: State<'_, AppState>,
@@ -591,14 +591,14 @@ pub fn delete_entry(
 }
 
 /// 노트 본문 템플릿 읽기 (kind: "daily"|"free"|"writing"). 커스텀 없으면 기본값.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn get_note_template(state: State<'_, AppState>, kind: String) -> Result<String, String> {
     with_ctx(&state, |c| c.vault.read_body_template_file(&kind))
 }
 
 /// 데일리/자유노트 본문 템플릿 저장 (빈 내용이면 기본값으로 되돌림)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn set_note_template(
     state: State<'_, AppState>,
@@ -609,14 +609,14 @@ pub fn set_note_template(
 }
 
 /// 타입별 제목 머릿글 템플릿 조회 (쓸 수 없는 타입이면 빈 문자열)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn get_title_template(state: State<'_, AppState>, type_id: String) -> Result<String, String> {
     with_ctx(&state, |c| c.vault.read_title_template(&type_id))
 }
 
 /// 타입별 제목 머릿글 템플릿 저장
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn set_title_template(
     state: State<'_, AppState>,
@@ -629,7 +629,7 @@ pub fn set_title_template(
 /// 제목 없이 떠나는 노트를 정리한다: 아무것도 안 친 빈 노트는 지우고 `None`,
 /// 본문이 있으면 `{날짜} {본문 첫머리}`로 이름을 붙여 새 rel을 돌려준다.
 /// 이미 이름이 있으면 아무것도 하지 않고 원래 rel을 돌려준다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn auto_title_note(
     state: State<'_, AppState>,

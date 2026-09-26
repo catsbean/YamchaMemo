@@ -329,11 +329,12 @@ pub async fn enrich_books(
 
         // 저장 (락 짧게)
         report.processed += 1;
-        let apply = {
+        // 잠금은 작업 스레드를 쥔 채 기다리지 않게 `blocking`으로 (`with_ctx` 설명)
+        let apply = blocking(|| -> Result<_, String> {
             let mut guard = state.0.lock().map_err(|e| e.to_string())?;
             let ctx = guard.as_mut().ok_or("vault가 설정되지 않았습니다")?;
-            apply_enrichment(ctx, c, doc.as_ref(), &kyobo, cover_bytes)
-        };
+            Ok(apply_enrichment(ctx, c, doc.as_ref(), &kyobo, cover_bytes))
+        })?;
         match apply {
             Ok((meta, intro, genre)) => {
                 if meta || intro || genre {
@@ -703,7 +704,7 @@ pub async fn enrich_apply_one(
 }
 
 /// 진행 중인 일괄 자동채우기를 취소 요청한다 (다음 루프에서 중단).
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn cancel_enrich() {
     ENRICH_CANCEL.store(true, Ordering::Relaxed);
@@ -711,6 +712,11 @@ pub fn cancel_enrich() {
 
 /// 부실한 책 후보 스냅샷 (enrich_books / enrich_preview 공용)
 fn snapshot_candidates(state: &State<'_, AppState>) -> Result<Vec<Cand>, String> {
+    // 잠금은 작업 스레드를 쥔 채 기다리지 않게 (`with_ctx` 설명)
+    blocking(|| collect_candidates(state))
+}
+
+fn collect_candidates(state: &State<'_, AppState>) -> Result<Vec<Cand>, String> {
     let guard = state.0.lock().map_err(|e| e.to_string())?;
     let ctx = guard.as_ref().ok_or("vault가 설정되지 않았습니다")?;
     let mut v = Vec::new();

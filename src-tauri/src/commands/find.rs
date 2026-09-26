@@ -3,7 +3,7 @@
 use super::*;
 
 /// 전문검색 (제목·본문·태그, 한국어 부분 문자열 지원). filter가 비면 전체 검색.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn search(
     state: State<'_, AppState>,
@@ -14,7 +14,7 @@ pub fn search(
 }
 
 /// 현재 노트를 가리키는 노트들 (백링크)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn get_backlinks(
     state: State<'_, AppState>,
@@ -27,7 +27,7 @@ pub fn get_backlinks(
 }
 
 /// 백링크 + 문맥 (링크로 이어진 것과 제목만 언급한 것)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn get_backlinks_detailed(
     state: State<'_, AppState>,
@@ -41,7 +41,7 @@ pub fn get_backlinks_detailed(
 
 /// 태그 이름 바꾸기 / 병합 → 바뀐 노트 수.
 /// `to`가 이미 쓰이는 태그면 그게 곧 병합이다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn rename_tag(state: State<'_, AppState>, from: String, to: String) -> Result<u32, String> {
     with_ctx(&state, |c| {
@@ -59,14 +59,14 @@ pub fn rename_tag(state: State<'_, AppState>, from: String, to: String) -> Resul
 }
 
 /// 전체 태그와 사용 횟수
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn get_tags(state: State<'_, AppState>) -> Result<Vec<TagCount>, String> {
     with_ctx(&state, |c| c.indexer.all_tags())
 }
 
 /// 특정 태그가 달린 노트들
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn notes_by_tag(state: State<'_, AppState>, tag: String) -> Result<Vec<NoteRef>, String> {
     with_ctx(&state, |c| c.indexer.notes_by_tag(&tag))
@@ -90,7 +90,7 @@ fn tag_input_of(parsed: &yamcha_core::ParsedNote) -> yamcha_core::TagInput {
 }
 
 /// 자동 태그 제안 — 저장 전 초안(에디터·담기 창)용. 파일을 읽지 않고 넘어온 내용만 본다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn suggest_tags_for_text(
     state: State<'_, AppState>,
@@ -104,7 +104,7 @@ pub fn suggest_tags_for_text(
 
 /// 자동 태그 제안 — 여러 노트를 한 번에 (태그 없는 노트 일괄 정리 화면용).
 /// vocab을 한 번만 읽고 IPC도 한 번으로 끝낸다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn suggest_tags_batch(
     state: State<'_, AppState>,
@@ -125,7 +125,7 @@ pub fn suggest_tags_batch(
 }
 
 /// 태그가 하나도 없는 노트들 (자동 태그 일괄 정리 화면용)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn untagged_notes(state: State<'_, AppState>) -> Result<Vec<NoteRef>, String> {
     with_ctx(&state, |c| c.indexer.untagged_notes())

@@ -32,8 +32,9 @@ notify-debouncer-full = "0.5"
 yamcha-core = { path = "../crates/yamcha-core" }
 tauri-plugin-global-shortcut = "2.3.2"
 # 스크랩(7-3)의 숨은 창 왕복 — eval_with_callback 결과를 oneshot으로 받고 timeout을 건다.
-# tokio 런타임 자체는 tauri가 이미 돌리고 있으므로 sync·time만 있으면 된다.
-tokio = { version = "1", features = ["sync", "time"] }
+# tokio 런타임 자체는 tauri가 돌린다. rt-multi-thread는 `block_in_place`(상태 잠금을 기다리는
+# 커맨드가 런타임의 작업 스레드를 다 차지하지 않게 한다 — `with_ctx`) 때문이다.
+tokio = { version = "1", features = ["sync", "time", "rt-multi-thread"] }
 url = "2"
 # 웹 스크랩 본문 추출 (7-0에서 검증) — 갈래①(원본 HTML)·갈래②(숨은 창 렌더링) 둘 다
 # 같은 파이프라인을 쓴다. htmd가 HTML→마크다운을 맡는다.

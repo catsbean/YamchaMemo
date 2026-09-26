@@ -163,7 +163,7 @@ fn resolve_scrap_type<'a>(vault: &Vault, requested: &'a str) -> &'a str {
 /// 스크랩 저장 — `type_id` 분류로 만들고 frontmatter에 `source`(원본 URL)를 심는다.
 /// `create_note`가 만드는 기본 템플릿 본문을 실제 스크랩 본문으로 갈아끼운다 —
 /// frontmatter는 create_note가 정규화해 둔 것을 그대로 유지한다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn save_scrap(
     state: State<'_, AppState>,

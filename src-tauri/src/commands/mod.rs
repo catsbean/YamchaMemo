@@ -49,13 +49,35 @@ pub struct AppState(pub Mutex<Option<Ctx>>);
 /// 파일 감시 핸들 (set_vault 시 교체)
 pub struct WatcherState(pub Mutex<Option<crate::watcher::WatcherHandle>>);
 
+/// 상태 잠금을 잡고 일한다 — 모든 커맨드가 여기를 지난다.
+///
+/// 커맨드는 메인 스레드가 아니라 비동기 런타임의 **작업 스레드**에서 돈다(`#[tauri::command(async)]`,
+/// `command_thread_tests`). 그 스레드를 쥔 채 잠금을 기다리면, 제목 바꾸기(최대 20초)처럼
+/// 오래 쥐는 일이 도는 동안 노트를 열며 부른 커맨드 몇 개가 작업 스레드를 다 차지해
+/// 잠금과 무관한 커맨드까지 멈췄다(실제 앱에서 7초). `block_in_place`로 런타임에 "이 스레드는
+/// 막힌다"고 알려, 기다리는 동안 다른 일은 딴 스레드로 옮겨 가게 한다.
 fn with_ctx<T>(
     state: &State<'_, AppState>,
     f: impl FnOnce(&mut Ctx) -> Result<T, yamcha_core::CoreError>,
 ) -> Result<T, String> {
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    let ctx = guard.as_mut().ok_or("vault가 설정되지 않았습니다")?;
-    f(ctx).map_err(|e| e.to_string())
+    blocking(|| {
+        let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+        let ctx = guard.as_mut().ok_or("vault가 설정되지 않았습니다")?;
+        f(ctx).map_err(|e| e.to_string())
+    })
+}
+
+/// 막힐 수 있는 일(상태 잠금 기다리기·그 안의 일)을 런타임에 알리고 돈다.
+///
+/// 작업 스레드면 `block_in_place`로 감싸고, 그 밖(`spawn_blocking` 스레드·시험)이면 그냥 돈다 —
+/// `block_in_place`는 스레드 하나짜리 런타임에서 부르면 멈추므로 어디서 도는지 먼저 본다.
+pub(crate) fn blocking<R>(f: impl FnOnce() -> R) -> R {
+    match tokio::runtime::Handle::try_current() {
+        Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(f)
+        }
+        _ => f(),
+    }
 }
 
 /// 쓰기 커맨드용: 감시 억제 마킹 후 실행
@@ -219,7 +241,7 @@ pub(crate) fn catch_up_relocation(ctx: &mut Ctx, old_rel: &str, moved: &yamcha_c
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn core_version() -> String {
     yamcha_core::version()
@@ -423,7 +445,7 @@ pub struct StorageDir {
 
 /// 존재하는 클라우드 동기화 폴더를 감지해 제안 목록으로 반환한다.
 /// 마지막 항목은 항상 문서 폴더. 없는 경로는 건너뛴다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn detect_storage_dirs() -> Vec<StorageDir> {
     let mut out: Vec<StorageDir> = Vec::new();
@@ -489,7 +511,7 @@ pub fn detect_storage_dirs() -> Vec<StorageDir> {
     out
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn get_vault_path(state: State<'_, AppState>) -> Option<String> {
     state
@@ -501,7 +523,7 @@ pub fn get_vault_path(state: State<'_, AppState>) -> Option<String> {
 }
 
 /// 타입 정의 목록 (내장 + 사용자 정의). vault가 없으면 내장만.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn get_schemas(state: State<'_, AppState>) -> Vec<TypeDef> {
     state
@@ -513,7 +535,7 @@ pub fn get_schemas(state: State<'_, AppState>) -> Vec<TypeDef> {
 }
 
 /// 사용자 정의 분류 추가
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn add_custom_type(
     state: State<'_, AppState>,
@@ -528,7 +550,7 @@ pub fn add_custom_type(
 }
 
 /// 사용자 정의 분류의 본문 템플릿 수정 (생성 후에도 언제든 변경 가능)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn update_custom_type_template(
     state: State<'_, AppState>,
@@ -541,7 +563,7 @@ pub fn update_custom_type_template(
 }
 
 /// 목록 줄에 값을 내보일 칸 고르기 — 켠 칸만 이름으로 넘긴다 (나머지는 꺼진다)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn update_custom_type_list_fields(
     state: State<'_, AppState>,
@@ -552,7 +574,7 @@ pub fn update_custom_type_list_fields(
 }
 
 /// 사용자 정의 분류 제거 — 내부 노트는 자유노트로 이동
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn remove_custom_type(state: State<'_, AppState>, id: String) -> Result<(), String> {
     with_ctx_write(&state, |c| {
@@ -564,7 +586,7 @@ pub fn remove_custom_type(state: State<'_, AppState>, id: String) -> Result<(), 
 
 /// 내보내기 파일 쓰기 — 사용자가 저장 대화상자에서 고른 경로에 그대로 쓴다.
 /// (vault 밖이어도 된다. 사용자가 직접 고른 자리이므로)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 #[allow(clippy::disallowed_methods)] // vault 밖, 사용자가 고른 자리 — 끊기면 다시 내보내면 된다
 pub fn write_export(path: String, contents: String) -> Result<(), String> {
@@ -574,7 +596,7 @@ pub fn write_export(path: String, contents: String) -> Result<(), String> {
 /// 템플릿 미리보기 — 오늘 날짜로 자리표시자를 채워 돌려준다.
 /// 화면에서 직접 치환하지 않고 이 명령을 쓰는 이유는, 실제로 노트를 만들 때와
 /// 똑같은 함수를 거쳐야 미리보기가 거짓말을 하지 않기 때문이다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn preview_template(content: String, title: String) -> Result<String, String> {
     let today = yamcha_core::Vault::today();
@@ -583,7 +605,7 @@ pub fn preview_template(content: String, title: String) -> Result<String, String
 }
 
 /// 전체 재색인 (인덱스 손상 대비 수동 명령)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn reindex(state: State<'_, AppState>) -> Result<u32, String> {
     with_ctx(&state, |c| {
@@ -743,6 +765,111 @@ mod refresh_note_tests {
             c.search.note_paths().unwrap(),
             [new_rel].into_iter().collect(),
             "검색이 바로잡히지 않았다"
+        );
+    }
+}
+
+/// 커맨드는 **메인 스레드에서 돌지 않는다** — 소스를 훑어 확인한다.
+///
+/// Tauri의 동기 커맨드는 메인 스레드에서 돈다. 모든 커맨드가 상태 잠금 하나를 거치는데,
+/// 제목 바꾸기(최대 20초)처럼 오래 쥐는 일이 도는 동안 동기 커맨드 하나(예: 노트를 열자
+/// 백링크 패널이 부른 것)가 그 잠금을 기다리면 **메인 스레드가 묶여** 창이 얼고 진행 알림도
+/// 화면에 닿지 않는다.
+/// 그래서 모두 `async fn`이거나 `#[tauri::command(async)]`(스레드 풀에서 돈다)여야 한다.
+#[cfg(test)]
+mod command_thread_tests {
+    #[test]
+    fn 모든_커맨드는_메인_스레드_밖에서_돈다() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands");
+        let mut offenders = Vec::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).unwrap();
+            let lines: Vec<&str> = src.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if !line.trim_start().starts_with("#[tauri::command") {
+                    continue;
+                }
+                let async_attr = line.contains("(async)");
+                let Some(sig) = lines[i + 1..].iter().find(|l| l.trim_start().starts_with("pub ")) else {
+                    continue;
+                };
+                if !async_attr && !sig.contains("async fn") {
+                    let file = path.file_name().unwrap().to_string_lossy().to_string();
+                    offenders.push(format!("{file}: {}", sig.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "메인 스레드에서 도는 동기 커맨드 — `#[tauri::command(async)]`를 달아라:\n{}",
+            offenders.join("\n")
+        );
+    }
+}
+
+#[cfg(test)]
+mod blocking_tests {
+    use super::blocking;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    /// 어디서 불러도 멈추지 않는다 — 런타임 밖, 작업 스레드, `spawn_blocking` 스레드,
+    /// 스레드 하나짜리 런타임(`block_in_place`를 그냥 부르면 여기서 멈춘다).
+    #[test]
+    fn 어디서_불러도_돈다() {
+        assert_eq!(blocking(|| 1), 1);
+        let mt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .build()
+            .unwrap();
+        assert_eq!(
+            mt.block_on(async { tokio::spawn(async { blocking(|| 2) }).await.unwrap() }),
+            2
+        );
+        assert_eq!(
+            mt.block_on(async { tokio::task::spawn_blocking(|| blocking(|| 3)).await.unwrap() }),
+            3
+        );
+        let ct = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        assert_eq!(ct.block_on(async { blocking(|| 4) }), 4);
+    }
+
+    /// 작업 스레드보다 많은 커맨드가 잠금을 기다려도 다른 일은 곧바로 돈다 — 고친 까닭.
+    /// (그냥 기다리면 작업 스레드가 다 묶여, 잠금이 풀릴 때까지 무엇도 돌지 못했다.)
+    #[test]
+    fn 작업_스레드가_모두_잠금을_기다려도_다른_일은_돈다() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .build()
+            .unwrap();
+        let lock = Arc::new(Mutex::new(()));
+        let held = lock.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _g = held.lock().unwrap();
+            tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(800));
+        });
+        rx.recv().unwrap();
+
+        let waited = rt.block_on(async {
+            for _ in 0..4 {
+                let l = lock.clone();
+                tokio::spawn(async move { blocking(|| drop(l.lock().unwrap())) });
+            }
+            std::thread::sleep(Duration::from_millis(100)); // 넷이 작업 스레드를 잡을 틈
+            let start = Instant::now();
+            tokio::spawn(async {}).await.unwrap();
+            start.elapsed()
+        });
+        holder.join().unwrap();
+        assert!(
+            waited < Duration::from_millis(400),
+            "잠금과 무관한 일이 {waited:?} 기다렸다 — 작업 스레드가 잠금에 묶였다"
         );
     }
 }

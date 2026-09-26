@@ -17,7 +17,7 @@ pub(crate) fn file_index_active() -> bool {
 }
 
 /// 첨부 색인 현황 (색인된 수 · 스캔본 · 암호 · 실패)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn file_index_status(state: State<'_, AppState>) -> Result<FileIndexStatus, String> {
     with_ctx(&state, |c| yamcha_core::file_index::status_of(&c.indexer))
@@ -49,7 +49,7 @@ impl yamcha_core::file_index::IndexAccess for StateAccess<'_> {
 ///
 /// 진행 상황은 `file-index-progress`, 끝나면 `file-index-done` 이벤트로 알린다.
 /// 이미 추출해 둔 문서는 캐시에서 즉시 채우므로 두 번째부터는 사실상 즉시 끝난다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn build_file_index(app: tauri::AppHandle) -> Result<(), String> {
     if FILE_INDEX_RUNNING.swap(true, Ordering::SeqCst) {
@@ -162,7 +162,7 @@ pub(crate) fn refresh_attachments(app: &tauri::AppHandle, rels: &[String]) {
 }
 
 /// 첨부를 색인에서 뺀다 (토글 끄기). 추출 캐시는 남겨 다시 켤 때 즉시 복구한다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn drop_file_index(state: State<'_, AppState>) -> Result<(), String> {
     FILE_INDEX_CANCEL.store(true, Ordering::SeqCst);
@@ -174,7 +174,7 @@ pub fn drop_file_index(state: State<'_, AppState>) -> Result<(), String> {
 
 /// 추출 캐시를 비우고 처음부터 다시 읽는다 (설정의 "문서 다시 읽기").
 /// 깨졌던 파일이 고쳐졌거나 추출기가 개선됐을 때 쓴다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn reset_file_index(state: State<'_, AppState>) -> Result<(), String> {
     FILE_INDEX_ON.store(false, Ordering::SeqCst);

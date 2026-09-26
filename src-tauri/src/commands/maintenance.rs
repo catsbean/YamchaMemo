@@ -3,7 +3,7 @@
 use super::*;
 
 /// 미러 폴더들로 동기화 (vault 우선, 미러가 더 새로우면 충돌 보고)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn mirror_sync(
     state: State<'_, AppState>,
@@ -29,7 +29,7 @@ pub fn mirror_sync(
 ///
 /// 저장할 때마다 만들면 vault 전체를 다시 읽게 되어(실측 2,000편에 345ms) 자동저장이
 /// 도는 내내 앱이 멈춘다. 그래서 저장은 표시만 하고, 손을 멈췄을 때 프론트가 이걸 부른다.
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn flush_index_files(state: State<'_, AppState>) -> Result<u32, String> {
     with_ctx_write(&state, |c| {
@@ -38,7 +38,7 @@ pub fn flush_index_files(state: State<'_, AppState>) -> Result<u32, String> {
 }
 
 /// 미러 충돌 해결: pull=true면 미러 내용을 vault로 가져오고 재색인
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn mirror_resolve(
     state: State<'_, AppState>,
@@ -56,14 +56,14 @@ pub fn mirror_resolve(
 }
 
 /// 휴지통 목록
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn list_trash(state: State<'_, AppState>) -> Result<Vec<yamcha_core::TrashItem>, String> {
     with_ctx(&state, |c| c.vault.list_trash())
 }
 
 /// 휴지통에서 노트 복구 → 복구된 rel 경로
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn restore_trash(state: State<'_, AppState>, file_name: String) -> Result<String, String> {
     with_ctx_write(&state, |c| restore_trash_in(c, &file_name))
@@ -76,21 +76,21 @@ pub(crate) fn restore_trash_in(c: &mut Ctx, file_name: &str) -> Result<String, y
 }
 
 /// 휴지통에서 retention_days보다 오래된 항목 영구 삭제 (0이면 안 함) → 삭제 개수
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn purge_trash(state: State<'_, AppState>, retention_days: u32) -> Result<u32, String> {
     with_ctx(&state, |c| c.vault.purge_trash(retention_days))
 }
 
 /// vault에서 규격에 어긋난 노트를 찾는다 (고치지는 않는다)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn audit_vault(state: State<'_, AppState>) -> Result<Vec<yamcha_core::NoteIssue>, String> {
     with_ctx(&state, |c| Ok(yamcha_core::audit::audit(&c.vault)))
 }
 
 /// 점검 항목 한 건 수리 → (바뀌었을 수 있는) rel 경로
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn fix_issue(
     state: State<'_, AppState>,
@@ -109,14 +109,14 @@ pub fn fix_issue(
 }
 
 /// 파싱 못 하는 파일의 원문 읽기 (수리 화면 전용)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn read_raw(state: State<'_, AppState>, rel_path: String) -> Result<String, String> {
     with_ctx(&state, |c| c.vault.read_raw(&rel_path))
 }
 
 /// 파일 원문 그대로 쓰기 (수리 화면 전용 — 정규화하지 않는다)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn write_raw(
     state: State<'_, AppState>,
@@ -132,7 +132,7 @@ pub fn write_raw(
 }
 
 /// 노트의 스냅샷 목록 (최신 우선)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn list_history(
     state: State<'_, AppState>,
@@ -142,7 +142,7 @@ pub fn list_history(
 }
 
 /// 스냅샷 원문 (미리보기용)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn read_history(
     state: State<'_, AppState>,
@@ -155,7 +155,7 @@ pub fn read_history(
 }
 
 /// 해당 스냅샷으로 되돌린다 (되돌리기 직전 상태도 스냅샷으로 남는다)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn restore_history(
     state: State<'_, AppState>,
@@ -170,14 +170,14 @@ pub fn restore_history(
 }
 
 /// 스냅샷 전부 삭제 → 지운 개수
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn purge_history(state: State<'_, AppState>) -> Result<u32, String> {
     with_ctx(&state, |c| yamcha_core::history::purge_all(&c.vault))
 }
 
 /// 스냅샷 보관 정책 변경 (설정에서 호출)
-#[tauri::command]
+#[tauri::command(async)]
 #[specta::specta]
 pub fn set_history_policy(
     state: State<'_, AppState>,
