@@ -41,8 +41,20 @@ pnpm install
 pnpm tauri dev                      # 개발 실행 (Vite + Tauri)
 pnpm test                           # 프론트 테스트 (vitest)
 cargo test                          # Rust 테스트 (yamcha-core + yamcha-app)
+cargo clippy --workspace --all-targets -- -D warnings   # CI와 같은 lint
 pnpm exec tsc --noEmit -p tsconfig.json   # 타입체크
+PROPTEST_CASES=1000 cargo test -p yamcha-app invariants   # 불변식 시험을 깊게
 ```
+
+지켜야 할 것 두 가지 — 둘 다 CI가 확인한다.
+
+- **vault 파일은 원자적으로만 쓴다.** `Vault::atomic_write(_bytes)`·`atomic_copy`를 쓴다.
+  맨 `fs::write`·`fs::copy`는 `clippy.toml`이 막는다. 정말 필요하면 그 자리에
+  `#[allow(clippy::disallowed_methods)]`와 까닭을 적는다.
+- **디스크·목록·색인·검색은 한 몸이다.** `src-tauri/src/invariants.rs`가 만들기·저장·제목 바꾸기·
+  옮기기·지우기·복구·바깥 편집을 무작위로 섞어 매 단계 확인한다. 커맨드를 새로 만들면 몸통을
+  `&mut Ctx`를 받는 `*_in` 함수로 두고, 시험의 조작에도 넣는다. 실패하면 줄어든 재현이
+  `src-tauri/proptest-regressions/`에 남으니 함께 커밋한다.
 
 ### 스택
 

@@ -1,5 +1,7 @@
 mod commands;
 mod watcher;
+#[cfg(test)]
+mod invariants;
 
 use std::sync::Mutex;
 
