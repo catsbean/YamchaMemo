@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use notify_debouncer_full::{new_debouncer, notify::RecursiveMode, DebounceEventResult};
 use tauri::{AppHandle, Emitter, Manager};
+use yamcha_core::Vault;
 
 use crate::commands::AppState;
 
@@ -28,6 +29,16 @@ pub fn mark_self_write() {
 
 fn suppressed() -> bool {
     now_ms().saturating_sub(LAST_SELF_WRITE_MS.load(Ordering::Relaxed)) < SUPPRESS_WINDOW_MS
+}
+
+/// 프론트에 "외부에서 바뀌었다"고 알릴 노트인가 — 목록·색인과 **같은 잣대**를 쓴다.
+///
+/// 노트가 아닌 `.md`는 알리지 않는다. `_index.md`는 앱이 스스로 만드는 목록 파일인데
+/// `fs::write`로 쓰여 자기쓰기 지문이 남지 않아 늘 남의 변경으로 보였다. 한 번 알리면
+/// 모든 창이 vault를 통째로 다시 읽는다(목록·점검·할 일) — 노트도 아니고 열린 글과도
+/// 무관한 파일 때문에, 새 노트를 만들 때마다 손을 멈춘 5초 뒤에 그 값을 치르고 있었다.
+fn notify_as_external(vault: &Vault, rel: &str) -> bool {
+    Vault::is_note_file(rel) && !vault.is_self_write(rel)
 }
 
 pub type WatcherHandle = notify_debouncer_full::Debouncer<
@@ -77,9 +88,11 @@ pub fn start(app: AppHandle, root: PathBuf) -> Option<WatcherHandle> {
             if let Ok(mut guard) = state.0.lock() {
                 if let Some(ctx) = guard.as_mut() {
                     for rel in rels.iter().filter(|r| r.ends_with(".md")) {
-                        if !ctx.vault.is_self_write(rel) {
+                        if notify_as_external(&ctx.vault, rel) {
                             external.push(rel.clone());
                         }
+                        // 노트가 아닌 `.md`도 refresh_note에 넘긴다 — 예전 버전이 색인에
+                        // 넣어 둔 `_index.md`를 그쪽에서 걷어낸다.
                         let _ = crate::commands::refresh_note(ctx, rel);
                     }
                 }
@@ -113,4 +126,45 @@ pub fn start(app: AppHandle, root: PathBuf) -> Option<WatcherHandle> {
         .watch(&watch_root, RecursiveMode::Recursive)
         .ok()?;
     Some(debouncer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 앱이 스스로 만든 `_index.md`는 "외부에서 바뀌었다"고 알리지 않는다.
+    /// (자기쓰기 지문이 남지 않는 파일이라, 노트인지부터 먼저 걸러야 한다.)
+    /// 남이 고친 노트는 그대로 알린다.
+    #[test]
+    fn 앱이_만든_목록파일은_외부_변경으로_알리지_않는다() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = Vault::open(dir.path()).unwrap();
+        let rel = v
+            .create_note("free", "메모", serde_json::Value::Null)
+            .unwrap();
+        v.flush_index_files().unwrap();
+        assert!(
+            dir.path().join("Free").join("_index.md").is_file(),
+            "_index.md가 만들어지지 않았다"
+        );
+
+        assert!(
+            !notify_as_external(&v, "Free/_index.md"),
+            "앱이 만든 목록 파일을 남의 변경으로 알렸다"
+        );
+        assert!(
+            !notify_as_external(&v, &rel),
+            "방금 내가 저장한 노트를 남의 변경으로 알렸다"
+        );
+
+        std::fs::write(
+            dir.path().join(&rel),
+            "---\ntype: free\n---\n\n남이 고쳤다",
+        )
+        .unwrap();
+        assert!(
+            notify_as_external(&v, &rel),
+            "남이 고친 노트를 알리지 않았다"
+        );
+    }
 }
