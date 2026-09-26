@@ -51,14 +51,48 @@ pub struct TrashItem {
 }
 
 /// 휴지통 파일명(`{YYYYMMDD-HHMMSS}_이름.md`)의 스탬프를 삭제 시각으로 파싱. 형식이 다르면 None.
+/// 같은 초에 같은 이름을 또 지우면 스탬프 뒤에 순번이 붙는다(`…-2_이름.md`) — 앞 15자만 본다.
 fn parse_trash_datetime(file_name: &str) -> Option<chrono::DateTime<Local>> {
-    let stamp = file_name.split_once('_')?.0;
+    let stamp = file_name.split_once('_')?.0.get(..15)?;
     let naive = chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%d-%H%M%S").ok()?;
     naive.and_local_timezone(Local).single()
 }
 
+/// 휴지통 자리 — 같은 초에 같은 이름의 글을 또 지워도 앞의 것을 덮지 않는다.
+///
+/// 스탬프가 초 단위라 `Free/메모.md`와 `Writing/메모.md`를 1초 안에 지우면 이름이 같아진다.
+/// `fs::rename`은 대상이 있으면 **덮어쓰므로**(Windows도), 그대로 두면 먼저 지운 글이
+/// 휴지통에서 조용히 사라져 되살릴 길이 없었다.
+fn unique_trash_path(trash: &Path, stamp: &str, name: &str) -> PathBuf {
+    let first = trash.join(format!("{stamp}_{name}"));
+    if !first.exists() {
+        return first;
+    }
+    (2u32..)
+        .map(|i| trash.join(format!("{stamp}-{i}_{name}")))
+        .find(|p| !p.exists())
+        .expect("순번은 끝이 없다")
+}
+
+/// 휴지통 항목의 시간 순서 — (스탬프, 같은 초 안의 순번).
+fn trash_order(file_name: &str) -> (String, u32) {
+    let stamp = file_name.split_once('_').map_or(file_name, |(s, _)| s);
+    let base = stamp.get(..15).unwrap_or(stamp).to_string();
+    let seq = stamp
+        .get(15..)
+        .and_then(|s| s.strip_prefix('-'))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    (base, seq)
+}
+
 /// "YYYYMMDD-HHMMSS" 스탬프를 "YYYY-MM-DD HH:MM"로 변환. 형식이 다르면 원문 반환.
+/// 같은 초의 순번(`-2`)은 화면에 보일 까닭이 없어 떼고 읽는다.
 fn format_trash_stamp(stamp: &str) -> String {
+    let stamp = match stamp.get(15..) {
+        Some(rest) if rest.starts_with('-') => &stamp[..15],
+        _ => stamp,
+    };
     if stamp.len() == 15 && stamp.as_bytes().get(8) == Some(&b'-') {
         format!(
             "{}-{}-{} {}:{}",
@@ -1301,7 +1335,7 @@ impl Vault {
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "note.md".into());
-        fs::rename(&abs, trash.join(format!("{stamp}_{name}")))?;
+        fs::rename(&abs, unique_trash_path(&trash, &stamp.to_string(), &name))?;
         // 스냅샷을 남겨 두면 지운 글의 본문이 최대 20벌 vault 안에 계속 남는다.
         // 파일 자체는 휴지통에 통째로 있으므로 되돌릴 길은 그대로다.
         let _ = crate::history::clear_note(self, rel);
@@ -1333,8 +1367,9 @@ impl Vault {
                 deleted_at: format_trash_stamp(&stamp),
             });
         }
-        // 파일명이 시간 스탬프로 시작하므로 내림차순 = 최근순
-        out.sort_by(|a, b| b.file_name.cmp(&a.file_name));
+        // 스탬프 → 같은 초 안의 순번 순으로 내림차순 = 최근순.
+        // 파일명 그대로 견주면 `…-2_`('-')가 `…_`('_')보다 앞에 와서 같은 초의 순서가 뒤집힌다.
+        out.sort_by_key(|t| std::cmp::Reverse(trash_order(&t.file_name)));
         Ok(out)
     }
 
@@ -3210,6 +3245,48 @@ mod tests {
         fs::write(trash.join("20200101-000000_또오래된.md"), "old").unwrap();
         assert_eq!(v.purge_trash(0).unwrap(), 0);
         assert_eq!(v.list_trash().unwrap().len(), 2);
+    }
+
+    /// 같은 초에 같은 이름의 글을 둘 지워도 휴지통에 둘 다 남는다 — 예전에는 뒤의 것이
+    /// 앞의 것을 덮어써서, 먼저 지운 글을 되살릴 길이 없었다.
+    #[test]
+    fn 같은_초에_같은_이름을_지워도_휴지통에서_덮이지_않는다() {
+        // 시각에 기대지 않고 충돌을 만든다: 이미 그 자리에 파일이 있다
+        let (_d, v) = vault();
+        let trash = v.root().join(".yamcha/trash");
+        fs::create_dir_all(&trash).unwrap();
+        fs::write(trash.join("20260926-104812_메모.md"), "먼저 지운 글").unwrap();
+        let next = unique_trash_path(&trash, "20260926-104812", "메모.md");
+        assert_eq!(next, trash.join("20260926-104812-2_메모.md"));
+        fs::write(&next, "나중에 지운 글").unwrap();
+        assert_eq!(
+            unique_trash_path(&trash, "20260926-104812", "메모.md"),
+            trash.join("20260926-104812-3_메모.md")
+        );
+
+        // 순번이 붙어도 목록·표시·되살리기·보존기한이 모두 제대로 읽는다
+        let items = v.list_trash().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].file_name, "20260926-104812-2_메모.md", "같은 초 안에서 최근 것이 위로");
+        assert_eq!(items[0].original_name, "메모.md");
+        assert_eq!(items[0].deleted_at, "2026-09-26 10:48");
+        assert!(parse_trash_datetime(&items[0].file_name).is_some());
+
+        // 실제 삭제로도: 이름이 같은 두 글을 연달아 지운다
+        let a = v.create_note("free", "같은 이름", Value::Null).unwrap();
+        let b = v.create_note("writing", "같은 이름", Value::Null).unwrap();
+        v.delete_note(&a).unwrap();
+        v.delete_note(&b).unwrap();
+        let same: Vec<_> = v
+            .list_trash()
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.original_name == "같은 이름.md")
+            .collect();
+        assert_eq!(same.len(), 2, "먼저 지운 글이 휴지통에서 덮였다");
+        for t in same {
+            v.restore_trash(&t.file_name).unwrap();
+        }
     }
 
     #[test]
