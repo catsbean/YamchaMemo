@@ -566,6 +566,7 @@ pub fn remove_custom_type(state: State<'_, AppState>, id: String) -> Result<(), 
 /// (vault 밖이어도 된다. 사용자가 직접 고른 자리이므로)
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::disallowed_methods)] // vault 밖, 사용자가 고른 자리 — 끊기면 다시 내보내면 된다
 pub fn write_export(path: String, contents: String) -> Result<(), String> {
     std::fs::write(&path, contents).map_err(|e| format!("파일을 쓰지 못했습니다: {e}"))
 }
@@ -597,6 +598,7 @@ pub fn reindex(state: State<'_, AppState>) -> Result<u32, String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // 시험은 옛 색인 파일을 흉내 내려고 맨 쓰기를 쓴다
 mod index_location_tests {
     use super::*;
 

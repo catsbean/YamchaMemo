@@ -520,6 +520,7 @@ fn move_to_free(vault: &Vault, rel: &str) -> Result<String, CoreError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // 시험은 바깥 편집·깨진 파일을 흉내 내려고 맨 쓰기를 쓴다
 mod tests {
     use super::*;
     use serde_json::json;

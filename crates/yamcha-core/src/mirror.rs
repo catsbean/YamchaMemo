@@ -130,7 +130,7 @@ fn sync_file(src: &Path, dst: &Path) -> Result<SyncOutcome, CoreError> {
         if let Some(parent) = dst.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::copy(src, dst)?;
+        copy_to_mirror(src, dst)?;
         return Ok(SyncOutcome::Copied);
     }
     // 내용이 같으면 스킵
@@ -145,7 +145,7 @@ fn sync_file(src: &Path, dst: &Path) -> Result<SyncOutcome, CoreError> {
     if newer_in_mirror {
         Ok(SyncOutcome::Conflict)
     } else {
-        fs::copy(src, dst)?;
+        copy_to_mirror(src, dst)?;
         Ok(SyncOutcome::Copied)
     }
 }
@@ -160,20 +160,31 @@ pub fn resolve(
     let src = vault.root().join(rel);
     let dst = target_root.join(rel);
     if pull {
-        if let Some(parent) = src.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(&dst, &src)?;
+        // vault의 노트를 덮어쓴다 — 쓰다 끊기면 노트가 반쯤 쓰인 채 남으므로 원자적으로
+        vault.atomic_copy(&dst, &src)?;
     } else {
         if let Some(parent) = dst.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::copy(&src, &dst)?;
+        copy_to_mirror(&src, &dst)?;
     }
     Ok(())
 }
 
+/// vault → 미러 복사. **원자적 쓰기의 예외다.**
+///
+/// 미러는 다른 드라이브일 수 있어 vault의 `.yamcha/tmp`를 거쳐서는 갈아 끼울(rename) 수
+/// 없고, 임시 파일을 미러 폴더에 만들면 클라우드 동기화가 그 찰나의 파일까지 실어 나른다 —
+/// vault가 임시 파일을 노트 폴더 밖으로 뺀 까닭과 같다. 끊겨서 반쯤 쓰인 사본은 다음
+/// 동기화가 내용이 다르다고 보고 다시 덮어쓴다.
+fn copy_to_mirror(src: &Path, dst: &Path) -> Result<(), CoreError> {
+    #[allow(clippy::disallowed_methods)] // 위 설명 — 미러 쪽은 원자적 쓰기의 예외
+    fs::copy(src, dst)?;
+    Ok(())
+}
+
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // 시험은 바깥 편집·깨진 파일을 흉내 내려고 맨 쓰기를 쓴다
 mod tests {
     use super::*;
     use serde_json::json;

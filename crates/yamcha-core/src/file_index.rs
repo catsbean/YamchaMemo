@@ -294,6 +294,7 @@ pub fn status_of(indexer: &Indexer) -> Result<FileIndexStatus, CoreError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // 시험은 바깥 편집·깨진 파일을 흉내 내려고 맨 쓰기를 쓴다
 mod tests {
     use super::*;
     // zip fixture를 만드는 테스트에서만 쓴다 (docs를 끄면 그 테스트가 빠진다)

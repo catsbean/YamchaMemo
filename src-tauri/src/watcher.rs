@@ -139,6 +139,7 @@ pub fn start(app: AppHandle, root: PathBuf) -> Option<WatcherHandle> {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // 시험은 남이 고친 노트를 흉내 내려고 맨 쓰기를 쓴다
 mod tests {
     use super::*;
 

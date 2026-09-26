@@ -128,7 +128,8 @@ pub fn snapshot(
     if path.exists() {
         return Ok(false); // 같은 밀리초 — 사실상 같은 저장
     }
-    fs::write(&path, &current)?;
+    // 되살릴 때 기대는 사본이다 — 쓰다 끊긴 반쪽짜리가 복원 지점으로 뜨면 안 된다
+    vault.atomic_write_bytes(&path, current.as_bytes())?;
 
     // 개수 제한
     let mut all = stamps(vault, rel);

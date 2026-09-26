@@ -1,0 +1,13 @@
+# vault 파일은 원자적 쓰기(`Vault::atomic_write`)로만 쓴다.
+#
+# 맨 `fs::write`는 쓰다 끊기면(정전·디스크 가득·동기화 잠금) 반쯤 쓰인 파일을 남긴다 —
+# `_types.json`이 그러면 사용자 정의 분류가 통째로 사라진 것처럼 보였다. 자기쓰기 지문도
+# 안 남아서 파일 감시가 앱의 쓰기를 남의 변경으로 본다(`_index.md`가 그랬다).
+# 원자적 쓰기는 골라 쓰는 게 아니라 **우회가 안 되는** 것이어야 한다.
+#
+# 정말 필요한 자리(늘 새 이름으로 쓰는 파일, vault 밖, 시험)는 그 자리에
+# `#[allow(clippy::disallowed_methods)]`와 까닭을 적는다.
+disallowed-methods = [
+    { path = "std::fs::write", reason = "vault에는 Vault::atomic_write(_bytes)로 쓴다 — 반쯤 쓰인 파일과 자기쓰기 지문 누락을 막는다. 꼭 필요하면 #[allow(clippy::disallowed_methods)]와 까닭을 적는다" },
+    { path = "std::fs::copy", reason = "vault 안으로는 Vault::atomic_copy로 복사한다 — 덮어쓰다 끊기면 있던 파일까지 깨진다. 꼭 필요하면 #[allow(clippy::disallowed_methods)]와 까닭을 적는다" },
+]

@@ -895,22 +895,7 @@ impl Vault {
     /// rename 전에 `sync_all`로 내용을 디스크에 확정한다. 안 하면 정전 시 rename만 살아남아
     /// 빈 파일이 남을 수 있다.
     pub(crate) fn atomic_write(&self, abs: &Path, content: &str) -> Result<(), CoreError> {
-        use std::io::Write;
-
-        if let Some(parent) = abs.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let tmp = self.tmp_path_for(abs);
-        retry_while_locked(|| {
-            let mut f = fs::File::create(&tmp)?;
-            f.write_all(content.as_bytes())?;
-            f.sync_all()
-        })?;
-        // 실패하면 tmp를 치우고 원본은 그대로 둔다 (반쯤 지워진 상태를 남기지 않는다)
-        if let Err(e) = retry_while_locked(|| fs::rename(&tmp, abs)) {
-            let _ = fs::remove_file(&tmp);
-            return Err(e.into());
-        }
+        self.atomic_write_bytes(abs, content.as_bytes())?;
         // 방금 쓴 내용을 적어 둔다 — 파일 감시가 이걸로 자기 쓰기를 알아본다
         if let Ok(rel) = abs.strip_prefix(&self.root) {
             if let Ok(mut map) = self.self_writes.lock() {
@@ -919,6 +904,52 @@ impl Vault {
                     fingerprint(content),
                 );
             }
+        }
+        Ok(())
+    }
+
+    /// 파일을 vault 안으로 원자적으로 복사한다 — `atomic_write_bytes`와 같되 통째로 메모리에
+    /// 올리지 않고 흘려 복사한다(첨부는 클 수 있다). 임시 파일은 vault의 `.yamcha/tmp`라
+    /// 대상과 같은 드라이브이고, 그래서 갈아 끼우기(rename)가 원자적이다.
+    pub(crate) fn atomic_copy(&self, src: &Path, abs: &Path) -> Result<(), CoreError> {
+        if let Some(parent) = abs.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let tmp = self.tmp_path_for(abs);
+        retry_while_locked(|| {
+            #[allow(clippy::disallowed_methods)] // 임시 파일로 복사하고 아래에서 갈아 끼운다
+            fs::copy(src, &tmp)?;
+            // Windows는 읽기 전용으로 연 파일의 버퍼를 비우게 해 주지 않는다 — 쓰기로 연다
+            fs::OpenOptions::new().write(true).open(&tmp)?.sync_all()
+        })?;
+        if let Err(e) = retry_while_locked(|| fs::rename(&tmp, abs)) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e.into());
+        }
+        Ok(())
+    }
+
+    /// 원자적 쓰기의 몸통 (위 설명 그대로) — 자기쓰기 지문은 남기지 않는다.
+    ///
+    /// 노트가 아닌 파일(표지·붙여 넣은 그림·스냅샷)에 쓴다. 지문은 파일 감시가 **노트**의
+    /// 자기 쓰기를 알아보는 데만 쓰이고, 스냅샷처럼 늘 새 이름인 파일까지 적으면 지문 표만
+    /// 세션 내내 자란다.
+    pub(crate) fn atomic_write_bytes(&self, abs: &Path, bytes: &[u8]) -> Result<(), CoreError> {
+        use std::io::Write;
+
+        if let Some(parent) = abs.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let tmp = self.tmp_path_for(abs);
+        retry_while_locked(|| {
+            let mut f = fs::File::create(&tmp)?;
+            f.write_all(bytes)?;
+            f.sync_all()
+        })?;
+        // 실패하면 tmp를 치우고 원본은 그대로 둔다 (반쯤 지워진 상태를 남기지 않는다)
+        if let Err(e) = retry_while_locked(|| fs::rename(&tmp, abs)) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e.into());
         }
         Ok(())
     }
@@ -2385,7 +2416,8 @@ impl Vault {
         let dir = self.root.join("_attachments").join("covers");
         fs::create_dir_all(&dir)?;
         let dest = dir.join(format!("{}.{ext}", Self::sanitize_filename(book_title)));
-        fs::copy(src, &dest)?;
+        // 표지를 바꾸면 같은 이름을 덮어쓴다 — 쓰다 끊기면 있던 표지까지 깨진다
+        self.atomic_copy(src, &dest)?;
         Ok(self.rel_of(&dest))
     }
 
@@ -2400,7 +2432,8 @@ impl Vault {
         let dir = self.root.join("_attachments").join("covers");
         fs::create_dir_all(&dir)?;
         let dest = dir.join(format!("{}.{ext}", Self::sanitize_filename(book_title)));
-        fs::write(&dest, bytes)?;
+        // 표지를 바꾸면 같은 이름을 덮어쓴다 — 쓰다 끊기면 있던 표지까지 깨진다
+        self.atomic_write_bytes(&dest, bytes)?;
         Ok(self.rel_of(&dest))
     }
 
@@ -2431,7 +2464,8 @@ impl Vault {
             });
             i += 1;
         }
-        fs::copy(src, &dest)?;
+        // 새 이름이라 덮을 것은 없지만, 디스크에 닿기 전에 링크가 먼저 붙으면 끊긴 첨부가 남는다
+        self.atomic_copy(src, &dest)?;
         Ok(self.rel_of(&dest))
     }
 
@@ -2448,7 +2482,8 @@ impl Vault {
             dest = dir.join(format!("paste-{stamp} ({i}).{ext}"));
             i += 1;
         }
-        fs::write(&dest, bytes)?;
+        // 새 이름이라 덮을 것은 없지만, 디스크에 닿기 전에 링크가 먼저 붙으면 끊긴 그림이 남는다
+        self.atomic_write_bytes(&dest, bytes)?;
         Ok(self.rel_of(&dest))
     }
 }
@@ -2472,6 +2507,7 @@ fn replace_inline_tag(body: &str, from: &str, to: &str) -> String {
 
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // 시험은 바깥 편집·깨진 파일을 흉내 내려고 맨 쓰기를 쓴다
 mod tests {
     use super::*;
     use crate::schema::{FieldDef, FieldKind};
