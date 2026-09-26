@@ -115,7 +115,9 @@ fn with_index_retry(
     ctx: &mut Ctx,
     mut update: impl FnMut(&mut Ctx, bool) -> Result<(), yamcha_core::CoreError>,
 ) -> Result<(), yamcha_core::CoreError> {
-    const BACKOFF_MS: [u64; 4] = [20, 50, 120, 300];
+    // 커밋 자체가 잠깐 막힌 것은 `SearchEngine::commit`이 이미 기다려 준다(~1초). 여기까지
+    // 온 것은 그보다 오래 막혔거나 다른 까닭이다 — 두 번만 더 해 보고, 상태 잠금을 오래 쥐지 않는다.
+    const BACKOFF_MS: [u64; 2] = [100, 400];
     crate::watcher::mark_self_write();
     let mut last = match update(ctx, false) {
         Ok(()) => return Ok(()),

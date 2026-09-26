@@ -305,8 +305,27 @@ impl SearchEngine {
     }
 
     /// 변경사항 반영 (배치 후 한 번 호출)
+    ///
+    /// 커밋은 매번 `meta.json`을 새로 써서 갈아 끼운다. Windows에서 백신·검색 색인기가 갓 쓴
+    /// `meta.json`을 검사하느라 잠깐 쥐고 있으면 그 갈아 끼우기가 "액세스가 거부되었습니다
+    /// (os error 5)"로 실패한다 — 드물고(부하가 걸리면 수백 번에 한 번) 조금 기다리면 풀린다.
+    /// 실패한 커밋 뒤 **그대로 다시 커밋하면** 반영된다(새 조각은 이미 올라가 있고 meta만 못
+    /// 썼다 — 읽기 전용 meta.json으로 확인했다). vault의 `retry_while_locked`와 같은 간격이다.
     pub fn commit(&mut self) -> Result<(), CoreError> {
-        self.writer.commit()?;
+        const BACKOFF_MS: [u64; 5] = [20, 50, 120, 300, 600];
+        let mut waits = BACKOFF_MS.iter();
+        loop {
+            match self.writer.commit() {
+                Ok(_) => break,
+                Err(tantivy::TantivyError::IoError(e)) if crate::vault::is_transient_lock(&e) => {
+                    let Some(ms) = waits.next() else {
+                        return Err(tantivy::TantivyError::IoError(e).into());
+                    };
+                    std::thread::sleep(std::time::Duration::from_millis(*ms));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
         self.reader.reload()?;
         Ok(())
     }
@@ -777,6 +796,42 @@ mod tests {
             aliases: aliases.iter().map(|s| s.to_string()).collect(),
             ..note(rel, title, body, &[])
         }
+    }
+
+    /// 커밋이 잠깐 막혀도 기다렸다가 반영한다 — 갓 쓴 meta.json을 백신·검색 색인기가 검사하느라
+    /// 쥐고 있는 상황. 읽기 전용 meta.json으로 실제와 같은 오류(os error 5)를 만들고 100ms 뒤에
+    /// 풀어 준다. 그 사이의 실패한 커밋을 **그대로 다시** 해도 조각이 빠지지 않아야 한다 —
+    /// 다시 열었을 때(디스크의 meta.json)까지 확인한다.
+    #[test]
+    #[cfg(windows)]
+    fn 커밋이_잠깐_막혀도_기다렸다가_반영한다() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = SearchEngine::open(dir.path()).unwrap();
+        s.upsert(&note("Free/가.md", "가", "본문", &[])).unwrap();
+        s.commit().unwrap();
+        let meta = dir.path().join("meta.json");
+        let set_readonly = |path: &Path, on: bool| {
+            let mut p = std::fs::metadata(path).unwrap().permissions();
+            p.set_readonly(on);
+            std::fs::set_permissions(path, p).unwrap();
+        };
+        set_readonly(&meta, true);
+        s.upsert(&note("Free/나.md", "나", "본문", &[])).unwrap();
+        let held = meta.clone();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            set_readonly(&held, false);
+        });
+        s.commit().expect("잠깐 막힌 커밋을 다시 하지 않았다");
+        release.join().unwrap();
+
+        let both: std::collections::HashSet<String> =
+            ["Free/가.md".to_string(), "Free/나.md".to_string()].into_iter().collect();
+        assert_eq!(s.note_paths().unwrap(), both);
+        drop(s);
+        let reopened = SearchEngine::open(dir.path()).unwrap();
+        assert!(!reopened.was_rebuilt(), "다시 연 색인이 깨져 있었다");
+        assert_eq!(reopened.note_paths().unwrap(), both, "다시 열었더니 조각이 빠졌다");
     }
 
     /// 색인에 든 노트 경로를 빠짐없이 돌려준다 — 지운 것과 첨부 문서는 빼고.

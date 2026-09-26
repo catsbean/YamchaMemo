@@ -165,7 +165,7 @@ fn ensure_aliases_field(fields: &mut Vec<crate::schema::FieldDef>) {
 /// 클라우드 동기화·백신이 파일을 **잠깐** 붙들고 있어서 나는 오류인가.
 /// 윈도우: 5 ACCESS_DENIED · 32 SHARING_VIOLATION · 33 LOCK_VIOLATION.
 /// 권한이 아예 없거나 디스크가 찬 것과는 다르다 — 그건 기다려 봐야 소용없다.
-fn is_transient_lock(e: &std::io::Error) -> bool {
+pub(crate) fn is_transient_lock(e: &std::io::Error) -> bool {
     matches!(e.raw_os_error(), Some(5) | Some(32) | Some(33))
         || e.kind() == std::io::ErrorKind::PermissionDenied
 }
