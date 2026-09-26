@@ -451,7 +451,7 @@ impl Vault {
                 "`{id}`는 화면이 이미 쓰는 이름입니다. 다른 타입 ID를 지어 주세요"
             )));
         }
-        let folder = Self::sanitize_filename(label);
+        let folder = Self::sanitize_note_stem(label);
         if self
             .types
             .iter()
@@ -689,7 +689,7 @@ impl Vault {
             .map(String::from)
             .unwrap_or_else(|| old_stem.clone());
 
-        let new_stem = Self::sanitize_filename(new_title);
+        let new_stem = Self::sanitize_note_stem(new_title);
 
         // 파일 이동
         let abs_old = self.abs(rel)?;
@@ -754,6 +754,22 @@ impl Vault {
             "무제".to_string()
         } else {
             s
+        }
+    }
+
+    /// 노트·폴더 이름용 정리 — `sanitize_filename`에 **앞의 `_`를 떼는** 규칙을 더한다.
+    ///
+    /// 이 앱은 `_`로 시작하는 `.md`를 노트로 보지 않는다(`is_note_file`). 목록·색인·검색·
+    /// 점검이 모두 그 잣대를 쓰므로, 제목이 `_`로 시작하면 파일은 멀쩡히 만들어지는데 앱
+    /// 안에서는 어디에도 없는 글이 된다 — 목록에도 없고 검색에도 안 걸리고 점검도 조용하다.
+    /// 만드는 쪽에서 미리 떼어 그런 글이 생기지 않게 한다.
+    pub fn sanitize_note_stem(name: &str) -> String {
+        let s = Self::sanitize_filename(name);
+        let stripped = s.trim_start_matches('_').trim().to_string();
+        if stripped.is_empty() {
+            "무제".to_string()
+        } else {
+            stripped
         }
     }
 
@@ -1563,16 +1579,16 @@ impl Vault {
         let (abs, body): (PathBuf, String) = match Builtin::from_id(type_id) {
             Some(Builtin::Daily) => return self.open_daily(&today),
             Some(Builtin::Book) => {
-                let title = Self::sanitize_filename(title);
+                let title = Self::sanitize_note_stem(title);
                 fm.insert("title".into(), json!(title));
                 let abs = self.unique_path(&self.root.join(&def.folder), &title);
                 (abs, template::render_template(&def.template, &today, &title))
             }
             Some(Builtin::Free) | Some(Builtin::Writing) | None => {
                 // 자유노트·글쓰기·사용자 정의 타입은 제목 = 파일명
-                let raw = Self::sanitize_filename(title);
+                let raw = Self::sanitize_note_stem(title);
                 let title =
-                    Self::sanitize_filename(&self.apply_title_prefix(type_id, &today, &raw));
+                    Self::sanitize_note_stem(&self.apply_title_prefix(type_id, &today, &raw));
                 if title != "무제" {
                     fm.insert("title".into(), json!(title));
                 }
@@ -2714,6 +2730,38 @@ mod tests {
         assert_eq!(Vault::sanitize_filename("a/b:c*d?e"), "a b c d e");
         assert_eq!(Vault::sanitize_filename("이름..."), "이름");
         assert_eq!(Vault::sanitize_filename("   "), "무제");
+    }
+
+    /// `_`로 시작하는 제목은 앱이 노트로 보지 않는 파일명을 만든다 — 목록·검색·점검에서
+    /// 한꺼번에 사라진다. 만들 때와 제목을 바꿀 때 모두 앞의 `_`를 떼어 그걸 막는다.
+    #[test]
+    fn 밑줄로_시작하는_제목도_목록에_남는다() {
+        assert_eq!(Vault::sanitize_note_stem("_초안"), "초안");
+        assert_eq!(Vault::sanitize_note_stem("__임시"), "임시");
+        assert_eq!(Vault::sanitize_note_stem("_ "), "무제");
+        assert_eq!(Vault::sanitize_note_stem("초_안"), "초_안");
+
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "_초안", Value::Null).unwrap();
+        assert_eq!(rel, "Free/초안.md");
+        assert!(Vault::is_note_file(&rel));
+        let listed: Vec<String> = v
+            .list_notes()
+            .unwrap()
+            .into_iter()
+            .map(|n| n.rel_path)
+            .collect();
+        assert!(listed.contains(&rel), "만든 노트가 목록에 없다: {listed:?}");
+
+        let moved = v.rename_note(&rel, "_다시").unwrap();
+        assert_eq!(moved, "Free/다시.md");
+        let listed: Vec<String> = v
+            .list_notes()
+            .unwrap()
+            .into_iter()
+            .map(|n| n.rel_path)
+            .collect();
+        assert!(listed.contains(&moved), "제목을 바꾼 노트가 목록에 없다: {listed:?}");
     }
 
     #[test]
