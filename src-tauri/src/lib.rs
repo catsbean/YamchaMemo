@@ -133,6 +133,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // 자동 업데이트 — 설정 > 버전에서 새 버전을 받아 설치하고(서명을 확인한다) 다시 켠다.
+        // 어디서 받는지·공개 키는 tauri.conf.json의 plugins.updater에 있다.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppState(Mutex::new(None)))
         .manage(WatcherState(Mutex::new(None)))
         .invoke_handler(builder.invoke_handler())

@@ -14,6 +14,32 @@ YamchaMemo 새 버전을 내보내는 절차입니다. 데스크톱(Windows·mac
 
 > ⚠️ 키를 소스에 되돌려 넣지 마세요. 실수로 커밋되면 즉시 재발급해야 합니다.
 
+## 준비: 업데이트 서명 키 (최초 1회)
+
+앱은 설정 > 버전의 [새 버전 확인]에서 새 판을 **받아 설치하고 다시 켭니다**(`tauri-plugin-updater`).
+받은 설치본이 진짜 우리 것인지는 서명으로 확인합니다 — 그래서 릴리스 빌드마다 서명 키가 필요합니다.
+
+1. 키 만들기 (한 번만, 비밀번호를 묻습니다):
+   ```powershell
+   pnpm tauri signer generate -w "$env:USERPROFILE.tauriyamcha-updater.key"
+   ```
+   `yamcha-updater.key`(비밀 키)와 `yamcha-updater.key.pub`(공개 키)가 생깁니다.
+2. **공개 키**는 `src-tauri/tauri.conf.json`의 `plugins.updater.pubkey`에 들어 있습니다(저장소에 올라가도 됩니다).
+3. **비밀 키**는 GitHub 저장소 Settings → Secrets and variables → Actions에 둘을 등록합니다:
+   - `TAURI_SIGNING_PRIVATE_KEY` — `yamcha-updater.key` 파일 내용 전체
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — 1번에서 정한 비밀번호
+
+> ⚠️ **비밀 키를 잃어버리면 이미 설치된 앱은 다시는 자동 업데이트를 받지 못합니다**(새 키로 서명한 판을
+> 믿지 않습니다). 키 파일과 비밀번호를 안전한 곳(비밀번호 관리자 등)에 따로 보관하세요. 저장소에 올리지 마세요.
+
+로컬에서 설치본을 만들 때(`pnpm release:win`)도 같은 두 값을 환경 변수로 줘야 합니다 — 없으면
+"공개 키는 있는데 비밀 키가 없다"며 빌드가 멈춥니다.
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content "$env:USERPROFILE.tauriyamcha-updater.key" -Raw
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<비밀번호>"
+pnpm release:win
+```
+
 ## 릴리스
 
 ### ①·② `scripts\release.bat` 실행
@@ -33,6 +59,14 @@ YamchaMemo 새 버전을 내보내는 절차입니다. 데스크톱(Windows·mac
 
 GitHub Actions가 Windows·macOS 빌드를 끝내면 **Release 초안**이 만들어집니다.
 Releases 탭에서 첨부물(설치본)을 확인하고, 문제 없으면 **Publish release**를 눌러 공개합니다.
+
+첨부물에 `latest.json`과 설치본마다의 `.sig`가 있는지도 봅니다. 앱은
+`https://github.com/catsbean/YamchaMemo/releases/latest/download/latest.json`을 보므로
+**공개(Publish)한 뒤에야** 설치된 앱이 새 판을 봅니다(초안은 안 보입니다). 릴리스 설명(본문)은
+업데이트 창에 그대로 보이니 사용자가 읽을 말로 적습니다.
+
+> 자동 업데이트는 **업데이터가 들어간 판(0.7.0)부터** 동작합니다. 그 전 판을 쓰는 사람은 0.7.0을
+> 한 번 손으로 설치해야 합니다 — 옛 판의 [새 버전 확인]은 릴리스 페이지 링크만 줍니다.
 
 ## 로컬 빌드 (수동)
 
@@ -72,5 +106,5 @@ yamcha-core = { path = "../crates/yamcha-core", default-features = false }
 
 - [ ] **코드 서명** — Windows 인증서 / Apple Developer ID로 서명해 "알 수 없는 게시자" 경고 제거.
 - [ ] **notarization** — macOS 공증(`xcrun notarytool`)으로 Gatekeeper 통과.
-- [ ] **자동 업데이트(updater)** — `tauri-plugin-updater` 도입 + 서명 키 + 배포 채널.
+- [x] **자동 업데이트(updater)** — 0.7.0. 위 "업데이트 서명 키" 참고.
 - [ ] **모바일 초기화** — `pnpm tauri android init` / `pnpm tauri ios init` 후 별도 빌드 파이프라인.

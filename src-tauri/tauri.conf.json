@@ -46,6 +46,18 @@
         "languages": ["Korean"],
         "installMode": "currentUser"
       }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU2NDhGMkRDOUY3NTAxQ0IKUldUTEFYV2YzUEpJVmd1amFycWF4OWNnOGJqSXBGNnUyNUgvcEZDMnBlbkxIN2UyRkU0L1lsa0YK",
+      "endpoints": [
+        "https://github.com/catsbean/YamchaMemo/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

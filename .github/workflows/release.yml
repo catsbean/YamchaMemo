@@ -63,6 +63,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # 저장소 Secrets에 등록된 카카오 REST API 키 (없으면 교보 검색만 동작)
           YAMCHA_KAKAO_KEY: ${{ secrets.YAMCHA_KAKAO_KEY }}
+          # 자동 업데이트 서명 키 (docs/RELEASE.md "업데이트 서명 키"). 설치본마다 .sig를 만들고
+          # tauri-action이 latest.json을 릴리스에 올린다 — 앱은 이 파일을 보고 새 버전을 받는다.
+          # 없으면 빌드가 실패한다(tauri.conf.json에 공개 키가 있으므로).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "YamchaMemo ${{ github.ref_name }}"
