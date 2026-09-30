@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { typeLabel, useVault } from "../stores/vault";
 import { fmStr } from "../lib/note";
+import { finishedIn } from "../lib/readingStats";
 import {
   moveMenuItems,
   noteItemHandlers,
@@ -49,12 +50,8 @@ export default function HomeDashboard() {
   const stats = useMemo(() => {
     const books = notes.filter((n) => n.note_type === "book");
     const readingNow = books.filter((b) => fmStr(b, "status") === "reading");
-    const finishedThisYear = books.filter(
-      (b) =>
-        fmStr(b, "status") === "finished" &&
-        (fmStr(b, "finished").startsWith(String(year)) ||
-          (!fmStr(b, "finished") && b.date.startsWith(String(year)))),
-    );
+    // 책장 [통계]와 같은 규칙 — 완독일, 비었으면 노트 날짜
+    const finishedThisYear = finishedIn(books, String(year));
     const wishlist = books.filter((b) => fmStr(b, "status") === "wishlist");
 
     const pieces = notes.filter((n) => n.note_type === "writing");

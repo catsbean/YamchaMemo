@@ -19,6 +19,7 @@ import {
 } from "../lib/sort";
 import SortControl, { useSort } from "./SortControl";
 import BookCreateDialog from "./BookCreateDialog";
+import BookStats from "./BookStats";
 import BookSearchDialog from "./BookSearchDialog";
 import EnrichDialog from "./EnrichDialog";
 import ExportBooksDialog from "./ExportBooksDialog";
@@ -39,7 +40,7 @@ const BOOK_SORTS: SortOption[] = [
 /** 아이콘만 있는 툴바 버튼 — 폭이 좁아져도 줄바꿈되지 않게 정사각으로 고정한다 */
 const ICON_BTN =
   "flex h-7 w-7 shrink-0 items-center justify-center rounded border border-neutral-300 text-sm text-neutral-600 hover:border-neutral-500 hover:bg-neutral-50";
-type ViewMode = "grid" | "list";
+type ViewMode = "grid" | "list" | "stats";
 
 /** 저자 문자열을 개별 저자로 분리 (쉼표·세미콜론·가운뎃점) */
 function splitAuthors(s: string): string[] {
@@ -102,7 +103,7 @@ function buildAuthorGroups(books: NoteSummary[]): [string, NoteSummary[]][] {
   return entries;
 }
 
-/** 서재: 책장(그리드) / 목록(표+대량입력) 두 가지 뷰 */
+/** 서재: 책장(그리드) / 목록(표+대량입력) / 통계 세 가지 뷰 */
 export default function Bookshelf({ compact = false }: { compact?: boolean }) {
   const { notes } = useVault();
   const [view, setView] = useState<ViewMode>("grid");
@@ -148,6 +149,17 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
             onClick={() => setView("list")}
           >
             목록
+          </button>
+          <button
+            className={`rounded px-2.5 py-1 ${
+              view === "stats"
+                ? "bg-neutral-800 text-white"
+                : "text-neutral-500 hover:bg-neutral-100"
+            }`}
+            onClick={() => setView("stats")}
+            title="해마다·달마다 몇 권, 어떤 분야를, 몇 점으로 읽었나"
+          >
+            통계
           </button>
           {/* 아래는 아이콘만 남긴다 — 3단 보기처럼 폭이 좁아지면 글씨까지 있는
               버튼들이 줄바꿈되며 툴바가 무너졌다. 설명은 툴팁으로 남긴다. */}
@@ -196,8 +208,10 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
           sort={sort}
           onSort={setSort}
         />
-      ) : (
+      ) : view === "list" ? (
         <ListView books={books} sort={sort} onSort={setSort} />
+      ) : (
+        <BookStats books={books} />
       )}
 
       {creating && <BookCreateDialog onClose={() => setCreating(false)} />}
