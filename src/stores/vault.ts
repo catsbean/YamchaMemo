@@ -142,6 +142,9 @@ interface VaultStore {
    *  책은 작가로, 회의록은 날짜로 보다가 메뉴를 옮길 때마다 다시 고르면 성가시다. */
   sorts: Record<string, SortSpec>;
   setSort(scope: string, spec: SortSpec): Promise<void>;
+  /** 목록 화면마다 마지막으로 고른 묶기(`lib/group.ts`의 key). 정렬과 같은 까닭으로 분류마다 */
+  groupings: Record<string, string>;
+  setGrouping(scope: string, key: string): Promise<void>;
   /** 휴지통 자동삭제 보존 일수 (0 = 안 함) */
   trashRetentionDays: number;
   setTrashRetention(days: number): Promise<void>;
@@ -668,6 +671,13 @@ export const useVault = create<VaultStore>((set, get) => {
       const store = await settings();
       await store.set("listSorts", sorts);
     },
+    groupings: {},
+    async setGrouping(scope, key) {
+      const groupings = { ...get().groupings, [scope]: key };
+      set({ groupings });
+      const store = await settings();
+      await store.set("listGroups", groupings);
+    },
     callouts: [],
     async refreshCallouts() {
       const r = await commands.listCallouts();
@@ -943,6 +953,8 @@ export const useVault = create<VaultStore>((set, get) => {
         // (없어진 사용자 칸일 수 있다) 여기서는 담아만 두고 화면에서 다듬는다
         const sorts =
           (await store.get<Record<string, SortSpec>>("listSorts")) ?? {};
+        const groupings =
+          (await store.get<Record<string, string>>("listGroups")) ?? {};
         const trashRetentionDays =
           (await store.get<number>("trashRetentionDays")) ?? 7;
         const historyMax = (await store.get<number>("historyMax")) ?? 20;
@@ -988,6 +1000,7 @@ export const useVault = create<VaultStore>((set, get) => {
           deleteConfirm,
           bookPickerView,
           sorts,
+          groupings,
           trashRetentionDays,
           historyMax,
           historyIntervalSecs,

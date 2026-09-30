@@ -19,6 +19,7 @@ import ReviewDashboard from "./ReviewDashboard";
 import ReviewModal from "./ReviewModal";
 import SortControl, { useSort } from "./SortControl";
 import { DATE_SORT, TITLE_SORT, sortNotes, type SortOption } from "../lib/sort";
+import { groupNotes, groupOptions, normalizeGroup } from "../lib/group";
 import TagBrowser from "./TagBrowser";
 import TodoDashboard from "./TodoDashboard";
 import WritingDashboard from "./WritingDashboard";
@@ -63,8 +64,17 @@ function hostOf(url: string): string {
 const QUICK_CREATE = new Set(["free"]);
 
 function ListDashboard({ noteType }: { noteType: string }) {
-  const { schemas, notes, current, openNote, openToday, createUntitled, moveNoteTo } =
-    useVault();
+  const {
+    schemas,
+    notes,
+    current,
+    openNote,
+    openToday,
+    createUntitled,
+    moveNoteTo,
+    groupings,
+    setGrouping,
+  } = useVault();
   const [creating, setCreating] = useState(false);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [groupFilters, setGroupFilters] = useState<Record<string, string>>({});
@@ -132,16 +142,13 @@ function ListDashboard({ noteType }: { noteType: string }) {
     return sortNotes(out, sort, sortOptions);
   }, [all, tagFilter, groupFilters, sort, sortOptions]);
 
-  // 데일리는 월별 그룹, 나머지는 단일 목록
-  const groups = useMemo(() => {
-    if (noteType !== "daily") return [["", list] as const];
-    const map = new Map<string, NoteSummary[]>();
-    for (const n of list) {
-      const m = n.date.slice(0, 7) || "기타";
-      map.set(m, [...(map.get(m) ?? []), n]);
-    }
-    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
-  }, [list, noteType]);
+  // 묶어 보기 — 고른 것은 분류마다 기억한다. 일지는 처음부터 월별이다
+  const groupOpts = useMemo(() => groupOptions(schema?.fields ?? []), [schema]);
+  const groupKey = normalizeGroup(groupings[noteType], groupOpts, noteType);
+  const groups = useMemo(
+    () => groupNotes(list, groupKey, groupOpts),
+    [list, groupKey, groupOpts],
+  );
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -176,8 +183,27 @@ function ListDashboard({ noteType }: { noteType: string }) {
         </button>
       </header>
 
-      <div className="border-b border-neutral-100 px-6 py-1.5">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-neutral-100 px-6 py-1.5">
         <SortControl options={sortOptions} value={sort} onChange={setSort} />
+        <div className="flex flex-wrap items-center gap-1 text-xs">
+          <span className="mr-0.5 shrink-0 text-2xs text-neutral-400">묶기</span>
+          {groupOpts.map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              aria-pressed={groupKey === o.key}
+              className={`shrink-0 rounded px-2 py-1 ${
+                groupKey === o.key
+                  ? "bg-neutral-200 text-neutral-800"
+                  : "text-neutral-400 hover:bg-neutral-100"
+              }`}
+              title={o.key === "none" ? "묶지 않고 한 줄로" : `${o.label}(으)로 묶어 보기`}
+              onClick={() => setGrouping(noteType, o.key)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {allTags.length > 0 && (
@@ -240,7 +266,10 @@ function ListDashboard({ noteType }: { noteType: string }) {
           <section key={group} className="mb-5">
             {group && (
               <h2 className="mb-2 text-sm font-semibold text-neutral-500">
-                {group}
+                {group}{" "}
+                {groupKey !== "none" && (
+                  <span className="font-normal text-neutral-400">{items.length}</span>
+                )}
               </h2>
             )}
             <ul className="divide-y divide-neutral-100 rounded-lg border border-neutral-200 bg-white">
