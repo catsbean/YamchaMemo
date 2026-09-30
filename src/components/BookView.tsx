@@ -3,7 +3,7 @@ import { commands, type NoteContent, type TagSuggestion } from "../bindings";
 import ListInput from "./ListInput";
 import TagSuggestionRow from "./TagSuggestionRow";
 import { fmObject, useVault } from "../stores/vault";
-import { splitBookBody } from "../lib/book";
+import { composeBookBody, splitBookBody } from "../lib/book";
 import { linkOptions } from "../lib/resolveLink";
 import {
   BOOK_STATUS_LABELS as STATUS_LABELS,
@@ -100,9 +100,7 @@ export default function BookView({ note }: { note: NoteContent }) {
   function onRecordsChange(newRecords: string) {
     const { intro: curIntro } = splitBookBody(note.body);
     // composeBookBody 유지: 소개는 그대로, 기록만 교체
-    import("../lib/book").then(({ composeBookBody }) => {
-      setBody(composeBookBody(curIntro, newRecords));
-    });
+    setBody(composeBookBody(curIntro, newRecords));
   }
 
   async function backToList() {

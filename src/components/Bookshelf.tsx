@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { NoteSummary } from "../bindings";
+import { commands, type NoteSummary } from "../bindings";
 import { isImeEnter } from "../lib/ime";
 import { useCreateRequest } from "../lib/shortcuts";
 import { useVault } from "../stores/vault";
@@ -511,7 +511,6 @@ function ListView({
     setBulkResult("");
     let ok = 0;
     let fail = 0;
-    const { commands } = await import("../bindings");
     for (const line of bulkText.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) continue;
@@ -632,7 +631,6 @@ function NewBookInlineRow({ onCreated }: { onCreated: () => Promise<void> }) {
     if (row.rating.trim() && !Number.isNaN(Number(row.rating))) {
       fields.rating = Number(row.rating);
     }
-    const { commands } = await import("../bindings");
     const r = await commands.createNote("book", title, fields);
     if (r.status === "ok") {
       setRow({ ...EMPTY_BOOK });

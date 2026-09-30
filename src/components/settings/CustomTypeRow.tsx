@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { FieldDef } from "../../bindings";
+import { commands, type FieldDef } from "../../bindings";
 import { TemplateEditor } from "./TemplateEditor";
 
 /** 목록 줄이 이미 보여 주는 칸 — 켜고 끌 것이 없으므로 아예 내놓지 않는다 */
@@ -35,7 +35,6 @@ export default function CustomTypeRow({
 
   async function remove() {
     setBusy(true);
-    const { commands } = await import("../../bindings");
     await commands.removeCustomType(id);
     await onRemoved();
     setBusy(false);
@@ -47,7 +46,6 @@ export default function CustomTypeRow({
     const next = fields
       .filter((f) => (f.name === name ? on : f.in_list))
       .map((f) => f.name);
-    const { commands } = await import("../../bindings");
     const r = await commands.updateCustomTypeListFields(id, next);
     if (r.status === "ok") await onTemplateSaved();
     setBusy(false);
@@ -55,7 +53,6 @@ export default function CustomTypeRow({
 
   async function save() {
     setBusy(true);
-    const { commands } = await import("../../bindings");
     const r = await commands.updateCustomTypeTemplate(id, draft);
     if (r.status === "ok") {
       await onTemplateSaved();
