@@ -106,7 +106,7 @@ export default function ReadingEntryBar() {
       </div>
       <div className="relative flex items-start gap-2">
         <textarea
-          className="min-h-9 flex-1 resize-y rounded border border-neutral-300 bg-white px-2 py-1 text-sm focus:outline-none"
+          className="field-sizing-content min-h-16 max-h-[50vh] flex-1 resize-y rounded border border-neutral-300 bg-white px-2 py-1 text-sm focus:outline-none"
           placeholder={`${current.label} 기록을 입력하고 [추가] 또는 Ctrl+Enter — 본문 끝에 날짜와 함께 누적됩니다`}
           defaultValue=""
           {...ime.handlers}

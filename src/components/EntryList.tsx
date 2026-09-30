@@ -290,7 +290,7 @@ export default function EntryList({
                 <div className="relative">
                   <textarea
                   autoFocus
-                  className="min-h-16 w-full resize-y rounded border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-800 focus:outline-none"
+                  className="field-sizing-content min-h-24 max-h-[60vh] w-full resize-y rounded border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-800 focus:outline-none"
                   defaultValue={b.text}
                   key={`edit-${index}`}
                   {...editIme.handlers}
