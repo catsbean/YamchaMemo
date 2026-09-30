@@ -51,6 +51,9 @@
 - `crates/yamcha-core/src/autotag.rs` — 자동 태그 추천(제안만, 파일을 고치지 않음). **고유명사만** 제안하며 후보는 vault 사전(`Indexer::proper_noun_dict` — 기존 태그·노트 제목·책 저자/출판사)뿐이다. 일반 키워드 추출은 하지 않는다. `korean::is_near`로 표기 흔들림 흡수
 - `crates/yamcha-core/src/extract.rs` — 첨부 문서 평문 추출 (hwp는 자체 파서, §9 참고)
 - `crates/yamcha-core/src/file_index.rs` — 첨부 색인 켜기/끄기, 추출 캐시(`doc_text`)
+- `crates/yamcha-core/src/backup.rs` — vault zip 백업·빈 폴더로 복원. 수정시각은 zip 안 목록 파일로 되살린다(§7-46)
+- `src/lib/readingStats.ts` — 독서 통계 규칙(완독 = status finished, 날짜 = 완독일 → 없으면 노트 날짜). 홈의 "올해 N권"도 여기
+- `src/lib/group.ts` — 목록 묶어 보기 규칙. `sort.ts`와 짝(정렬된 목록을 칸으로 나누기만 한다)
 
 ---
 
@@ -446,6 +449,18 @@ npx tsc --noEmit -p tsconfig.json
     끝까지 보려면 개발 앱을 디버그 포트로 띄워 CDP로 `set_vault`를 부르고
     `vault-open-progress`·`vault-hydrated`를 모은다 — 경로는 **JSON 파일로** 넘길 것,
     셸 인자로 넘기면 백슬래시가 지워져 `C:UsersSG…`라는 상대경로 vault가 드라이브 루트에 생긴다.
+
+**7-4~7-6(통계·백업·묶기)에서 밟은 것 (0.7.0)**
+
+46. **노트 날짜는 파일명이 날짜가 아니면 수정시각에서 나온다**(`Vault::summary_of`). 그래서 파일을
+    옮기거나 되푸는 일(백업 복원 등)은 수정시각을 지켜야 한다 — 안 그러면 모든 노트가 "오늘"이 되고
+    날짜순 목록이 뭉개진다. zip 항목 시각은 2초 단위·시간대 없음이라 믿지 말 것.
+47. **`.yamcha/`가 다 버려도 되는 것은 아니다.** 히스토리·휴지통·tmp는 그렇지만
+    `.yamcha/templates/`는 사용자가 고친 템플릿이다.
+48. **`cargo add`가 tauri 스택을 조용히 올린다.** 업데이터 플러그인을 넣자 tauri가 2.11→2.12로 올랐고,
+    JS `@tauri-apps/api`·`cli`도 같은 major.minor로 맞춰야 `tauri build`가 통과한다. 그 전체 재빌드가
+    `target/debug`(92GB까지 자라 있었다)에 더 쌓이며 디스크가 차 `os error 112`로 죽었다 —
+    의존성을 바꾸기 전에 E: 여유부터 보고, 모자라면 `cargo clean --profile dev`.
 
 ---
 
