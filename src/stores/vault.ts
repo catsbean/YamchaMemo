@@ -263,6 +263,8 @@ interface VaultStore {
   chooseVault(): Promise<void>;
   /** 감지된 위치 등 base 폴더 아래 YamchaMemo로 바로 시작 */
   startAt(base: string): Promise<void>;
+  /** 이 폴더를 그대로 vault로 연다 (백업을 푼 폴더처럼 — 아래에 YamchaMemo를 붙이지 않는다) */
+  openVaultAt(path: string): Promise<void>;
   refresh(): Promise<void>;
   refreshSchemas(): Promise<void>;
   setLayout(mode: LayoutMode): Promise<void>;
@@ -1129,6 +1131,15 @@ export const useVault = create<VaultStore>((set, get) => {
         const vaultPath =
           name === "YamchaMemo" ? trimmed : await join(trimmed, "YamchaMemo");
         await activateVault(vaultPath);
+      });
+    },
+
+    async openVaultAt(path) {
+      // 쓰던 글이 있으면 먼저 저장한다 — activateVault가 열린 글을 내려놓는다
+      if (get().dirty) await get().saveCurrent();
+      await guard(async () => {
+        await activateVault(path.replace(/[\\/]+$/, ""));
+        set({ nav: "home" });
       });
     },
 

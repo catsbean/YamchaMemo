@@ -23,6 +23,7 @@ pub mod files;
 pub mod books;
 pub mod kyobo;
 pub mod update;
+pub mod backup;
 
 // 형제 모듈이 서로 부르는 것들. 각 모듈이 `use super::*`로 여기를 보므로,
 // 여기서 한 번 모아 두면 모듈끼리의 경로를 일일이 적지 않아도 된다.

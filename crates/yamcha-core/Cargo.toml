@@ -19,7 +19,8 @@ tantivy = { workspace = true }
 cfb = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
 encoding_rs = { workspace = true, optional = true }
-zip = { workspace = true, optional = true }
+# zip은 문서 추출(docx·hwpx·xlsx)과 함께 백업·복원(`backup`)도 쓰므로 늘 들어온다
+zip = { workspace = true }
 calamine = { workspace = true, optional = true }
 pdf-extract = { workspace = true, optional = true }
 # 배포용 hwp(ViewText)의 AES-128 복호에만 쓴다
@@ -27,8 +28,7 @@ aes = { workspace = true, optional = true }
 
 [features]
 default = ["docs"]
-docs = ["cfb", "flate2", "encoding_rs", "zip", "calamine", "pdf-extract", "aes"]
+docs = ["cfb", "flate2", "encoding_rs", "calamine", "pdf-extract", "aes"]
 
 [dev-dependencies]
 tempfile = "3"
-zip = { workspace = true }

@@ -629,6 +629,33 @@ async checkLatestRelease() : Promise<Result<ReleaseCheck, string>> {
 }
 },
 /**
+ * 지금 vault를 zip 하나로 묶는다 → 담은 파일 수 등.
+ * 
+ * **상태 잠금은 vault 경로를 읽을 때만 쥔다.** 첨부가 수백 MB면 묶는 데 한참 걸리는데,
+ * 그동안 잠금을 쥐면 앱이 통째로 멈춘다. 파일은 읽기만 하므로 잠금이 필요 없다 —
+ * 도중에 저장된 편은 그 순간의 모습으로 담긴다.
+ */
+async backupVault(dest: string) : Promise<Result<BackupReport, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("backup_vault", { dest }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 백업 zip을 **빈 폴더**(없으면 만든다)로 푼다. 지금 vault는 건드리지 않는다 —
+ * 푼 폴더를 열지는 화면이 사용자에게 묻는다.
+ */
+async restoreBackup(zipPath: string, destDir: string) : Promise<Result<BackupReport, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("restore_backup", { zipPath, destDir }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * vault에서 규격에 어긋난 노트를 찾는다 (고치지는 않는다)
  */
 async auditVault() : Promise<Result<NoteIssue[], string>> {
@@ -1055,6 +1082,22 @@ contexts: string[];
  * `[[링크]]` 없이 제목만 언급한 경우 (아직 잇지 않은 언급)
  */
 unlinked: boolean }
+/**
+ * 백업·복원 결과
+ */
+export type BackupReport = { 
+/**
+ * 담은(푼) 파일 수
+ */
+files: number; 
+/**
+ * 그중 노트(`.md`) 수
+ */
+notes: number; 
+/**
+ * 원본 크기 합 (바이트)
+ */
+bytes: number }
 /**
  * 수동 입력 화면에서 제안할 책 메타 (카카오 검색 + 교보 소개)
  */

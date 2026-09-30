@@ -13,6 +13,7 @@ import ScrapTypeSection from "./settings/ScrapTypeSection";
 import ShortcutSection from "./settings/ShortcutSection";
 import StartupSection from "./settings/StartupSection";
 import TodoTabSection from "./settings/TodoTabSection";
+import BackupSection from "./settings/BackupSection";
 import TrashSection from "./settings/TrashSection";
 import VersionSection from "./settings/VersionSection";
 
@@ -73,6 +74,8 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
   const [captureHelp, setCaptureHelp] = useState(false);
   const removeCustom = useVault((s) => s.refreshSchemas);
   const [reindexing, setReindexing] = useState(false);
+  // 백업·복원이 도는 동안엔 창을 닫지 못한다 (진행과 결과를 볼 곳이 여기뿐이다)
+  const [backupBusy, setBackupBusy] = useState(false);
   const [reindexDone, setReindexDone] = useState(false);
   const [reindexCount, setReindexCount] = useState<number | null>(null);
   const [kakaoKey, setKakaoKey] = useState("");
@@ -108,7 +111,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal
       onClose={onClose}
-      locked={reindexing}
+      locked={reindexing || backupBusy}
       panelClassName="flex h-[38rem] max-h-[88vh] w-[32rem] flex-col rounded-lg p-5 shadow-xl"
     >
         <h2 className="mb-3 text-base font-bold">설정</h2>
@@ -448,6 +451,7 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             )}
           </div>
         </section>
+        <BackupSection onBusy={setBackupBusy} />
         <TrashSection />
         <HistorySection />
           </>

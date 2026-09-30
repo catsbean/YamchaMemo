@@ -5,6 +5,7 @@
 
 pub mod audit;
 pub mod autotag;
+pub mod backup;
 pub mod enrich;
 pub mod error;
 pub mod extract;

@@ -68,6 +68,8 @@ pub fn run() {
         commands::notes::set_title_template,
         commands::notes::auto_title_note,
         commands::update::check_latest_release,
+        commands::backup::backup_vault,
+        commands::backup::restore_backup,
         commands::maintenance::audit_vault,
         commands::maintenance::fix_issue,
         commands::maintenance::read_raw,
