@@ -108,7 +108,7 @@ pub(crate) fn refresh_notes<'a>(
     rels: impl IntoIterator<Item = &'a str>,
 ) -> Result<(), yamcha_core::CoreError> {
     let rels: Vec<&str> = rels.into_iter().collect();
-    with_index_retry(ctx, |ctx, force| {
+    let refreshed = with_index_retry(ctx, |ctx, force| {
         let mut dirty = force;
         let mut states = Vec::new();
         for rel in &rels {
@@ -120,7 +120,20 @@ pub(crate) fn refresh_notes<'a>(
             ctx.search.commit()?;
         }
         Ok(())
-    })
+    });
+    if refreshed.is_err() {
+        // 신원은 SQLite에 이미 들어갔는데 검색 쪽은 되돌려졌을 수 있다. 그대로 두면 감시도
+        // 다음 시작도 "그대로다"라며 다시 읽지 않는다 — 신원을 틀어 두어 다음에 다시 읽게 한다
+        // (`catch_up_relocation`과 같은 처방).
+        stale_identities(ctx, rels.iter().copied());
+    }
+    refreshed
+}
+
+/// 색인을 못 따라잡은 편의 신원을 틀어 둔다 — 감시·다음 시작의 증분 색인이 다시 읽게.
+fn stale_identities<'a>(ctx: &mut Ctx, rels: impl IntoIterator<Item = &'a str>) {
+    let stale: Vec<(String, i64, i64)> = rels.into_iter().map(|r| (r.to_string(), -1, -1)).collect();
+    let _ = ctx.indexer.set_note_states(&stale);
 }
 
 /// 색인 갱신을 몇 번 다시 해 본다.
@@ -166,6 +179,12 @@ fn index_one(
     if !Vault::is_note_file(rel) {
         return unindex_one(ctx, rel);
     }
+    // 신원은 **읽기 전에** 잰다. 읽은 뒤에 재면, 그 사이 남이 고친 파일의 새 신원이 옛 내용과
+    // 짝지어 남는다 — 감시는 신원이 같으면 다시 읽지 않으므로(`needs_reindex`) 옛 내용이 그대로
+    // 굳는다. 먼저 재 두면 그 사이의 변경은 신원이 어긋나 감시가 다시 읽는다.
+    let identity = std::fs::metadata(ctx.vault.root().join(rel))
+        .ok()
+        .map(|m| yamcha_core::file_identity(&m));
     match ctx.vault.parse_full(rel) {
         Ok(parsed) => {
             ctx.indexer.upsert(&parsed)?;
@@ -173,8 +192,7 @@ fn index_one(
             // 방금 색인한 시점의 파일 신원도 남긴다 — 안 남기면 다음에 앱을 켤 때
             // 이 편을 또 읽는다. list_note_files와 같은 잣대(나노초)여야 한다 — 밀리초로
             // 남겼더니 신원이 안 맞아 저장한 편마다 다음 시작에 또 읽혔다.
-            if let Ok(meta) = std::fs::metadata(ctx.vault.root().join(rel)) {
-                let (mtime, size) = yamcha_core::file_identity(&meta);
+            if let Some((mtime, size)) = identity {
                 states.push((rel.to_string(), mtime, size));
             }
             Ok(true)
@@ -215,6 +233,15 @@ pub(crate) fn catch_up_relocation(
     let touched: Vec<&str> = std::iter::once(moved.rel.as_str())
         .chain(moved.rewritten.iter().map(String::as_str))
         .collect();
+    // 다시 할 때(`with_index_retry`) 처음부터 다시 세도 화면의 막대는 거꾸로 가지 않게 —
+    // 이미 알린 곳을 넘어설 때부터 다시 알린다
+    let mut reached = 0;
+    let mut forward = |done: usize, total: usize| {
+        if done >= reached {
+            reached = done;
+            progress(done, total);
+        }
+    };
     let caught_up = with_index_retry(ctx, |ctx, force| {
         let mut states = Vec::new();
         let mut dirty = force;
@@ -224,25 +251,21 @@ pub(crate) fn catch_up_relocation(
         // 마지막 한 칸은 커밋이다 — 수천 편이면 그 자체로 시간이 걸려서, 100%를 먼저 띄우면 멈춘 듯 보인다
         let units = touched.len() + 1;
         for (i, rel) in touched.iter().enumerate() {
-            progress(i, units);
+            forward(i, units);
             dirty |= index_one(ctx, rel, &mut states)?;
         }
-        progress(units - 1, units);
+        forward(units - 1, units);
         // 신원은 한 번에 몰아서 쓴다 — 편마다 쓰면 그때마다 SQLite 트랜잭션이 돈다
         ctx.indexer.set_note_states(&states)?;
         if dirty {
             ctx.search.commit()?;
         }
-        progress(units, units);
+        forward(units, units);
         Ok(())
     });
     if let Err(e) = caught_up {
         eprintln!("색인 따라잡기 실패 — 다음 시작에 다시 읽는다: {e}");
-        let stale: Vec<(String, i64, i64)> = std::iter::once(old_rel)
-            .chain(touched.iter().copied())
-            .map(|r| (r.to_string(), -1, -1))
-            .collect();
-        let _ = ctx.indexer.set_note_states(&stale);
+        stale_identities(ctx, std::iter::once(old_rel).chain(touched.iter().copied()));
     }
 }
 
@@ -548,24 +571,30 @@ pub fn detect_storage_dirs() -> Vec<StorageDir> {
 #[tauri::command(async)]
 #[specta::specta]
 pub fn get_vault_path(state: State<'_, AppState>) -> Option<String> {
-    state
-        .0
-        .lock()
-        .ok()?
-        .as_ref()
-        .map(|c| c.vault.root().to_string_lossy().to_string())
+    // 잠금은 작업 스레드를 쥔 채 기다리지 않게 (`with_ctx` 설명)
+    blocking(|| {
+        state
+            .0
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|c| c.vault.root().to_string_lossy().to_string())
+    })
 }
 
 /// 타입 정의 목록 (내장 + 사용자 정의). vault가 없으면 내장만.
 #[tauri::command(async)]
 #[specta::specta]
 pub fn get_schemas(state: State<'_, AppState>) -> Vec<TypeDef> {
-    state
-        .0
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|c| c.vault.types().to_vec()))
-        .unwrap_or_else(builtin_defs)
+    // 잠금은 작업 스레드를 쥔 채 기다리지 않게 (`with_ctx` 설명)
+    blocking(|| {
+        state
+            .0
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|c| c.vault.types().to_vec()))
+            .unwrap_or_else(builtin_defs)
+    })
 }
 
 /// 사용자 정의 분류 추가
@@ -879,8 +908,9 @@ mod command_thread_tests {
 #[cfg(test)]
 mod blocking_tests {
     use super::blocking;
-    use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::Duration;
 
     /// 어디서 불러도 멈추지 않는다 — 런타임 밖, 작업 스레드, `spawn_blocking` 스레드,
     /// 스레드 하나짜리 런타임(`block_in_place`를 그냥 부르면 여기서 멈춘다).
@@ -905,6 +935,9 @@ mod blocking_tests {
 
     /// 작업 스레드보다 많은 커맨드가 잠금을 기다려도 다른 일은 곧바로 돈다 — 고친 까닭.
     /// (그냥 기다리면 작업 스레드가 다 묶여, 잠금이 풀릴 때까지 무엇도 돌지 못했다.)
+    ///
+    /// 시간 문턱으로 재지 않는다. 잠금을 쥔 쪽은 "무관한 일이 끝났다"는 신호가 올 때까지(길어야
+    /// 5초) 놓지 않는다 — 그 일이 **잠금이 풀리기 전에** 끝났는지로 가린다.
     #[test]
     fn 작업_스레드가_모두_잠금을_기다려도_다른_일은_돈다() {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -912,29 +945,46 @@ mod blocking_tests {
             .build()
             .unwrap();
         let lock = Arc::new(Mutex::new(()));
-        let held = lock.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let holder = std::thread::spawn(move || {
-            let _g = held.lock().unwrap();
-            tx.send(()).unwrap();
-            std::thread::sleep(Duration::from_millis(800));
-        });
-        rx.recv().unwrap();
+        let released = Arc::new(AtomicBool::new(false));
+        let (held_tx, held_rx) = mpsc::channel();
+        let (probe_done_tx, probe_done_rx) = mpsc::channel::<()>();
+        let holder = {
+            let lock = lock.clone();
+            let released = released.clone();
+            std::thread::spawn(move || {
+                let _g = lock.lock().unwrap();
+                held_tx.send(()).unwrap();
+                let _ = probe_done_rx.recv_timeout(Duration::from_secs(5));
+                released.store(true, Ordering::SeqCst);
+            })
+        };
+        held_rx.recv().unwrap();
 
-        let waited = rt.block_on(async {
+        let released_before_probe = rt.block_on(async {
+            // 작업 스레드(2)보다 많은 넷이 잠금을 기다리러 들어간다. 고치지 않았으면 둘만
+            // 들어가고 나머지는 자리가 없다 — 그래서 들어갔다는 신호는 기한을 두고 기다린다.
+            let (entered_tx, entered_rx) = mpsc::channel();
             for _ in 0..4 {
                 let l = lock.clone();
-                tokio::spawn(async move { blocking(|| drop(l.lock().unwrap())) });
+                let entered = entered_tx.clone();
+                tokio::spawn(async move {
+                    entered.send(()).unwrap();
+                    blocking(|| drop(l.lock().unwrap()))
+                });
             }
-            std::thread::sleep(Duration::from_millis(100)); // 넷이 작업 스레드를 잡을 틈
-            let start = Instant::now();
+            for _ in 0..4 {
+                if entered_rx.recv_timeout(Duration::from_secs(1)).is_err() {
+                    break;
+                }
+            }
             tokio::spawn(async {}).await.unwrap();
-            start.elapsed()
+            released.load(Ordering::SeqCst)
         });
+        let _ = probe_done_tx.send(());
         holder.join().unwrap();
         assert!(
-            waited < Duration::from_millis(400),
-            "잠금과 무관한 일이 {waited:?} 기다렸다 — 작업 스레드가 잠금에 묶였다"
+            !released_before_probe,
+            "잠금과 무관한 일이 잠금이 풀릴 때까지 돌지 못했다 — 작업 스레드가 잠금에 묶였다"
         );
     }
 }

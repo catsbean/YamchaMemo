@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
@@ -252,6 +252,28 @@ impl Indexer {
         for row in rows {
             let (path, state) = row?;
             out.insert(path, state);
+        }
+        Ok(out)
+    }
+
+    /// 주어진 경로들의 신원만 (경로 → (수정시각, 크기)). 기억하지 않는 경로는 빠진다.
+    ///
+    /// 감시는 바뀐 몇 편만 대 보면 된다 — `note_states`로 vault 전체를 싣지 않는다.
+    pub fn note_states_of(
+        &self,
+        paths: &[String],
+    ) -> Result<std::collections::HashMap<String, (i64, i64)>, CoreError> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT mtime, size FROM note_state WHERE path = ?1")?;
+        let mut out = std::collections::HashMap::new();
+        for path in paths {
+            let found = stmt
+                .query_row(params![path], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+                .optional()?;
+            if let Some(state) = found {
+                out.insert(path.clone(), state);
+            }
         }
         Ok(out)
     }

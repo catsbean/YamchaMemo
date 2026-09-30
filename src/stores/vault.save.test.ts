@@ -78,7 +78,7 @@ vi.mock("../lib/quickCapture", () => ({
   enableCapture: async () => {},
 }));
 
-const { useVault, useRelocateProgress } = await import("./vault");
+const { useVault, useRelocateProgress, receiveRelocateProgress } = await import("./vault");
 
 /** 노트 하나를 열어 둔 상태로 만든다 (백엔드 없이 스토어만) */
 function openNote(body: string) {
@@ -436,8 +436,8 @@ describe("renameCurrent — 오래 걸릴 때의 진행 표시", () => {
     expect(useRelocateProgress.getState().progress).toBeNull();
   });
 
-  /** 도는 동안 백엔드는 상태 잠금을 쥐고 있다. 그 사이 목록 파일 만들기(동기 커맨드)를
-   *  부르면 메인 스레드가 끝날 때까지 묶여 진행 표시까지 멈춘다 — 끝날 때까지 미룬다. */
+  /** 도는 동안 백엔드는 상태 잠금을 쥐고 있다. 그 사이 목록 파일 만들기를 부르면 잠금 뒤에
+   *  줄을 섰다가 끝나자마자 vault 전체를 읽으며 잠금을 이어 쥔다 — 끝날 때까지 미룬다. */
   it("도는 동안엔 목록 파일 만들기를 미루고, 끝나면 한다", async () => {
     openNote("처음");
     // 저장 한 번으로 목록 파일 타이머(5초)를 걸어 둔다
@@ -456,5 +456,35 @@ describe("renameCurrent — 오래 걸릴 때의 진행 표시", () => {
     await renaming;
     await vi.advanceTimersByTimeAsync(6_000);
     expect(flushCalls).toBe(1);
+  });
+
+  /** 알림과 커맨드 응답은 길이 달라서, 막 끝난 바퀴의 마지막 알림이 다음 바퀴가 시작된
+   *  뒤에 닿을 수 있다(옮기자마자 되돌리기). 그걸 새 바퀴의 진행으로 띄우면 막대가
+   *  "2/2 100%"에서 시작했다가 1/2로 되돌아간다. */
+  it("앞 바퀴의 늦은 알림은 새 바퀴의 진행으로 띄우지 않는다", async () => {
+    openNote("처음");
+    const renaming = useVault.getState().renameCurrent("새 제목");
+    await vi.waitFor(() => expect(releaseRename).not.toBeNull());
+
+    receiveRelocateProgress({ phase: "index", done: 5, total: 5 }); // 앞 바퀴의 늦은 알림
+    await vi.advanceTimersByTimeAsync(500);
+    expect(useRelocateProgress.getState().progress).toEqual({
+      phase: "links",
+      done: 0,
+      total: 0,
+    });
+
+    receiveRelocateProgress({ phase: "links", done: 0, total: 10 }); // 이번 바퀴의 첫 알림
+    expect(useRelocateProgress.getState().progress).toEqual({
+      phase: "links",
+      done: 0,
+      total: 10,
+    });
+    receiveRelocateProgress({ phase: "index", done: 1, total: 4 });
+    expect(useRelocateProgress.getState().progress?.phase).toBe("index");
+
+    releaseRename!();
+    await renaming;
+    expect(useRelocateProgress.getState().progress).toBeNull();
   });
 });

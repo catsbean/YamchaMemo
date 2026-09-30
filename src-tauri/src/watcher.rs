@@ -67,9 +67,10 @@ pub(crate) fn apply_md_changes(ctx: &mut Ctx, rels: &[String]) -> Vec<String> {
 /// 잰 값). 사라진 파일과 노트가 아닌 `.md`(`_index.md`)는 신원이 없으니 늘 남는다 — 색인에서
 /// 빼는 길이다(예전 버전이 넣어 둔 `_index.md`도 여기서 걷힌다).
 fn needs_reindex(ctx: &Ctx, rels: &[String]) -> Vec<String> {
-    let known = ctx.indexer.note_states().unwrap_or_default();
-    rels.iter()
-        .filter(|r| r.ends_with(".md"))
+    let md: Vec<String> = rels.iter().filter(|r| r.ends_with(".md")).cloned().collect();
+    // 바뀐 편만 대 본다 — 한 편 바뀔 때마다 vault 전체의 신원을 싣지 않는다
+    let known = ctx.indexer.note_states_of(&md).unwrap_or_default();
+    md.into_iter()
         .filter(|rel| {
             let now = std::fs::metadata(ctx.vault.root().join(rel))
                 .ok()
@@ -77,7 +78,6 @@ fn needs_reindex(ctx: &Ctx, rels: &[String]) -> Vec<String> {
             // 수정시각을 못 읽은 것(0)은 늘 바뀐 것으로 본다
             !matches!((now, known.get(rel.as_str())), (Some(now), Some(k)) if now == *k && now.0 != 0)
         })
-        .cloned()
         .collect()
 }
 

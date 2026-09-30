@@ -351,12 +351,31 @@ let relocatingFrom: string | null = null;
 let mirrorTimer: ReturnType<typeof setTimeout> | null = null;
 /** 마지막 변경 뒤 이만큼 잠잠하면 미러로 복제한다 */
 const MIRROR_IDLE_MS = 60_000;
-// 돌고 있는 제목 바꾸기·옮기기 수. 그동안 백엔드는 상태 잠금을 쥐고 있어서, 여기서 잠금이
-// 필요한 동기 커맨드(목록 파일 만들기·미러 복제)를 부르면 메인 스레드가 끝날 때까지 묶여
-// 진행 표시까지 멈춘다 — 타이머들은 이게 0이 될 때까지 미룬다.
+// 돌고 있는 제목 바꾸기·옮기기 수. 그동안 백엔드는 상태 잠금을 쥐고 있다. 목록 파일 만들기·
+// 미러 복제를 그 사이에 부르면 잠금 뒤에 줄을 섰다가 끝나자마자 이어 쥔다(목록 파일은 vault
+// 전체를 읽는다 — 2,000편에 345ms). 그러면 제목 바꾸기 뒤 화면이 새 노트를 읽어 오는 요청이
+// 또 그만큼 기다린다 — 타이머들은 이게 0이 될 때까지 미룬다.
 let relocating = 0;
 // 받은 가장 최근 진행 — 화면에 띄우기 전에 온 것도 들고 있다가 띄울 때 쓴다
 let relocateLatest: RelocateProgress | null = null;
+// 이번 바퀴의 첫 알림(`links` 0)을 아직 못 받았다. 알림과 커맨드 응답은 길이 달라서, 막 끝난
+// 바퀴의 마지막 알림이 다음 바퀴(예: 옮기자마자 되돌리기)가 시작된 뒤에 닿을 수 있다 —
+// 그걸 이번 바퀴의 진행으로 띄우지 않도록 첫 알림 전의 것은 흘린다.
+let relocateAwaitingStart = false;
+
+/** `relocate-progress` 한 건을 받는다 (시험이 이벤트 없이 부를 수 있게 떼어 둔다).
+ *  이 창이 돌리는 중일 때만 받는다 — 다른 창의 것, 앞 바퀴의 늦은 것은 흘린다. */
+export function receiveRelocateProgress(p: RelocateProgress) {
+  if (relocating === 0) return;
+  if (relocateAwaitingStart) {
+    if (p.phase !== "links" || p.done !== 0) return;
+    relocateAwaitingStart = false;
+  }
+  relocateLatest = p;
+  if (useRelocateProgress.getState().progress) {
+    useRelocateProgress.setState({ progress: p });
+  }
+}
 /** 이만큼 지나도 안 끝나면 진행을 띄운다. 흔한 제목 바꾸기(0.1초 안팎)는 깜빡이지 않게 */
 const RELOCATE_SHOW_AFTER_MS = 400;
 // `_index.md` 재생성 디바운스 타이머
@@ -400,6 +419,10 @@ export const useVault = create<VaultStore>((set, get) => {
    *  수천 편의 링크를 고쳐 쓰느라 20초까지 걸리는데, 그동안 아무 표시가 없으면 멈춘 줄 안다.
    *  흔한 경우(0.1초 안팎)엔 아무것도 깜빡이지 않도록 조금 기다렸다가 띄운다. */
   async function withRelocation<T>(run: () => Promise<T>): Promise<T> {
+    if (relocating === 0) {
+      relocateLatest = null;
+      relocateAwaitingStart = true;
+    }
     relocating += 1;
     const show = setTimeout(() => {
       useRelocateProgress.setState({
@@ -902,14 +925,9 @@ export const useVault = create<VaultStore>((set, get) => {
           });
         },
       );
-      // 제목 바꾸기·옮기기의 진행 — 이 창이 돌리는 중일 때만 받는다(다른 창의 것은 흘린다)
-      await listen<RelocateProgress>("relocate-progress", (e) => {
-        if (relocating === 0) return;
-        relocateLatest = e.payload;
-        if (useRelocateProgress.getState().progress) {
-          useRelocateProgress.setState({ progress: e.payload });
-        }
-      });
+      await listen<RelocateProgress>("relocate-progress", (e) =>
+        receiveRelocateProgress(e.payload),
+      );
       await guard(async () => {
         const store = await settings();
         const layout = ((await store.get<string>("layout")) ??
