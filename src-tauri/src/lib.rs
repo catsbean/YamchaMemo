@@ -1,3 +1,4 @@
+mod applog;
 mod commands;
 mod watcher;
 #[cfg(test)]
@@ -70,6 +71,9 @@ pub fn run() {
         commands::update::check_latest_release,
         commands::backup::backup_vault,
         commands::backup::restore_backup,
+        commands::diag::log_client,
+        commands::diag::log_file_path,
+        commands::diag::diagnostics,
         commands::maintenance::audit_vault,
         commands::maintenance::fix_issue,
         commands::maintenance::read_raw,
@@ -141,6 +145,16 @@ pub fn run() {
         .manage(WatcherState(Mutex::new(None)))
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
+            // 로그부터 연다 — 이 뒤의 일(vault 열기 등)이 남긴 기록을 받아야 한다
+            if let Ok(dir) = app.path().app_log_dir() {
+                applog::init(dir);
+            }
+            applog::info(format!(
+                "시작 — YamchaMemo {} · {} {}",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            ));
             builder.mount_events(app);
             Ok(())
         })

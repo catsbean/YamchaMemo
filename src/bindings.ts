@@ -656,6 +656,29 @@ async restoreBackup(zipPath: string, destDir: string) : Promise<Result<BackupRep
 }
 },
 /**
+ * 화면이 남기는 로그 한 줄 — 커맨드 실패·렌더 오류·잡히지 않은 예외·업데이트 결과.
+ * `level`은 `info`·`warn`·`error`.
+ */
+async logClient(level: string, message: string) : Promise<void> {
+    await TAURI_INVOKE("log_client", { level, message });
+},
+/**
+ * 지금 쓰는 로그 파일 — [로그 폴더 열기]가 탐색기에서 이 파일을 짚는다
+ */
+async logFilePath() : Promise<string | null> {
+    return await TAURI_INVOKE("log_file_path");
+},
+/**
+ * 진단 정보 — 사용자가 문제를 알려 올 때 붙여 보내는 글.
+ * 
+ * 앱·OS·vault 규모(분류별 편수, 첨부 수와 크기)·최근 로그. **노트 본문은 넣지 않는다.** 로그에는
+ * vault 안 경로(제목이 들어 있다)가 있을 수 있어, 화면이 복사하기 전에 그대로 보여 준다.
+ * 켜 둔 기능(화면 설정)은 화면이 덧붙인다.
+ */
+async diagnostics() : Promise<string> {
+    return await TAURI_INVOKE("diagnostics");
+},
+/**
  * vault에서 규격에 어긋난 노트를 찾는다 (고치지는 않는다)
  */
 async auditVault() : Promise<Result<NoteIssue[], string>> {

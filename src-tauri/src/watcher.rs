@@ -54,7 +54,9 @@ pub(crate) fn apply_md_changes(ctx: &mut Ctx, rels: &[String]) -> Vec<String> {
     }
     // 다시 읽을 것만 모아 **한 번에**(검색 색인 커밋 한 번) 반영한다
     let stale = needs_reindex(ctx, rels);
-    let _ = crate::commands::refresh_notes(ctx, stale.iter().map(String::as_str));
+    if let Err(e) = crate::commands::refresh_notes(ctx, stale.iter().map(String::as_str)) {
+        crate::applog::warn(format!("바깥 변경 반영 실패({}편): {e:?}", stale.len()));
+    }
     external
 }
 
@@ -93,7 +95,13 @@ pub fn start(app: AppHandle, root: PathBuf) -> Option<WatcherHandle> {
         Duration::from_millis(1000),
         None,
         move |result: DebounceEventResult| {
-            let Ok(events) = result else { return };
+            let events = match result {
+                Ok(events) => events,
+                Err(errors) => {
+                    crate::applog::warn(format!("파일 감시 오류: {errors:?}"));
+                    return;
+                }
+            };
             // 관심 파일만: .yamcha 제외, md/_attachments/_types.json
             let mut rels: Vec<String> = Vec::new();
             for ev in &events {

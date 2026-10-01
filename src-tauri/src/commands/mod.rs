@@ -24,6 +24,7 @@ pub mod books;
 pub mod kyobo;
 pub mod update;
 pub mod backup;
+pub mod diag;
 
 // 형제 모듈이 서로 부르는 것들. 각 모듈이 `use super::*`로 여기를 보므로,
 // 여기서 한 번 모아 두면 모듈끼리의 경로를 일일이 적지 않아도 된다.
@@ -57,14 +58,25 @@ pub struct WatcherState(pub Mutex<Option<crate::watcher::WatcherHandle>>);
 /// 오래 쥐는 일이 도는 동안 노트를 열며 부른 커맨드 몇 개가 작업 스레드를 다 차지해
 /// 잠금과 무관한 커맨드까지 멈췄다(실제 앱에서 7초). `block_in_place`로 런타임에 "이 스레드는
 /// 막힌다"고 알려, 기다리는 동안 다른 일은 딴 스레드로 옮겨 가게 한다.
+///
+/// 파일 오류(`CoreError::Io`)는 화면엔 한국어 문장으로만 가므로(원문은 숨는다) **원문을 여기서 로그에
+/// 남긴다** — 어느 커맨드인지는 부른 자리(`track_caller`)로. 다른 실패는 화면 쪽 기록이 커맨드
+/// 이름과 함께 남긴다(`src/lib/log.ts`).
+#[track_caller]
 fn with_ctx<T>(
     state: &State<'_, AppState>,
     f: impl FnOnce(&mut Ctx) -> Result<T, yamcha_core::CoreError>,
 ) -> Result<T, String> {
+    let at = std::panic::Location::caller();
     blocking(|| {
         let mut guard = state.0.lock().map_err(|e| e.to_string())?;
         let ctx = guard.as_mut().ok_or("vault가 설정되지 않았습니다")?;
-        f(ctx).map_err(|e| e.to_string())
+        f(ctx).map_err(|e| {
+            if let yamcha_core::CoreError::Io(io) = &e {
+                crate::applog::warn(format!("파일 오류 ({at}): {io:?}"));
+            }
+            e.to_string()
+        })
     })
 }
 
@@ -82,6 +94,7 @@ pub(crate) fn blocking<R>(f: impl FnOnce() -> R) -> R {
 }
 
 /// 쓰기 커맨드용: 감시 억제 마킹 후 실행
+#[track_caller]
 fn with_ctx_write<T>(
     state: &State<'_, AppState>,
     f: impl FnOnce(&mut Ctx) -> Result<T, yamcha_core::CoreError>,
@@ -122,7 +135,8 @@ pub(crate) fn refresh_notes<'a>(
         }
         Ok(())
     });
-    if refreshed.is_err() {
+    if let Err(e) = &refreshed {
+        crate::applog::warn(format!("색인 갱신 실패({}편) — 다음에 다시 읽는다: {e:?}", rels.len()));
         // 신원은 SQLite에 이미 들어갔는데 검색 쪽은 되돌려졌을 수 있다. 그대로 두면 감시도
         // 다음 시작도 "그대로다"라며 다시 읽지 않는다 — 신원을 틀어 두어 다음에 다시 읽게 한다
         // (`catch_up_relocation`과 같은 처방).
@@ -265,7 +279,7 @@ pub(crate) fn catch_up_relocation(
         Ok(())
     });
     if let Err(e) = caught_up {
-        eprintln!("색인 따라잡기 실패 — 다음 시작에 다시 읽는다: {e}");
+        crate::applog::error(format!("색인 따라잡기 실패 — 다음 시작에 다시 읽는다: {e:?}"));
         stale_identities(ctx, std::iter::once(old_rel).chain(touched.iter().copied()));
     }
 }
@@ -388,9 +402,21 @@ fn relocate_reporter(app: &tauri::AppHandle) -> impl FnMut(&'static str, usize, 
 #[tauri::command]
 #[specta::specta]
 pub async fn set_vault(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || open_vault(&app, &path))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let started = std::time::Instant::now();
+        let opened = open_vault(&app, &path);
+        match &opened {
+            Ok(()) => crate::applog::info(format!(
+                "vault 열기 — {} · {}ms",
+                path,
+                started.elapsed().as_millis()
+            )),
+            Err(e) => crate::applog::error(format!("vault 열기 실패 — {path}: {e}")),
+        }
+        opened
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn open_vault(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
@@ -421,8 +447,16 @@ fn open_vault(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
             emit_open_progress(app, "index", done, total);
         }
     };
-    yamcha_core::reindex_changed_with(&vault, &mut indexer, &mut search, &mut progress)
+    let report = yamcha_core::reindex_changed_with(&vault, &mut indexer, &mut search, &mut progress)
         .map_err(|e| e.to_string())?;
+    crate::applog::info(format!(
+        "색인 따라잡기 — 다시 읽음 {} · 그대로 {} · 지움 {} · 내려받기 전 {}{}",
+        report.indexed,
+        report.skipped,
+        report.removed,
+        report.offline,
+        if report.full { " (전체)" } else { "" }
+    ));
     // 없어진 노트의 스냅샷을 걷는다. 앱 밖(옵시디언·탐색기)에서 지운 파일은
     // delete_note를 거치지 않아 스냅샷만 남는다 — 놔두면 계속 쌓인다.
     // 같은 목록에서 아직 내려받지 않은 노트도 추려 둔다 — 열린 뒤 따로 따라잡는다.
@@ -468,9 +502,11 @@ fn spawn_hydrate(app: tauri::AppHandle, root: PathBuf, rels: Vec<String>) {
     std::thread::spawn(move || {
         let total = rels.len();
         let mut batch: Vec<String> = Vec::new();
+        let mut failed = 0usize;
         for (i, rel) in rels.iter().enumerate() {
             emit_open_progress(&app, "hydrate", i, total);
             if std::fs::read(root.join(rel)).is_err() {
+                failed += 1;
                 continue; // 못 받았다(오프라인 등) — 다음 시작에 다시 "바뀐 것"으로 잡힌다
             }
             let state = app.state::<AppState>();
@@ -490,6 +526,7 @@ fn spawn_hydrate(app: tauri::AppHandle, root: PathBuf, rels: Vec<String>) {
         if !batch.is_empty() {
             let _ = app.emit("vault-hydrated", batch);
         }
+        crate::applog::info(format!("클라우드 노트 내려받기 — {total}편 중 못 받음 {failed}"));
         emit_open_progress(&app, "done", total, total);
     });
 }

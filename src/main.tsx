@@ -9,6 +9,7 @@ import PrintWindow from "./components/PrintWindow";
 import TodoWindow from "./components/TodoWindow";
 import TrashWindow from "./components/TrashWindow";
 import { applyTheme, useVault, type ThemeMode } from "./stores/vault";
+import { describeError, installErrorLogging, logClient } from "./lib/log";
 import "./styles.css";
 
 // 별도 창은 ?view= 로 구분한다 (메인 앱 로직은 실행하지 않음)
@@ -54,11 +55,15 @@ async function rescueMainWindow() {
 
 // 렌더 밖에서 터진 오류(비동기 호출 등)는 경계가 못 잡는다 — 조용히 사라지지 않게
 // 스토어 에러로 올려 화면 우하단 알림에 보여 준다.
+// 로그 파일에도 남긴다(8-2) — 실패한 커맨드는 이름과 함께, 예외는 스택 앞부분까지.
+installErrorLogging();
 window.addEventListener("error", (e) => {
+  logClient("error", `잡히지 않은 오류${view ? ` (${view} 창)` : ""}: ${describeError(e.error ?? e.message)}`);
   useVault.getState().setError(`오류: ${e.message}`);
 });
 window.addEventListener("unhandledrejection", (e) => {
   const reason = e.reason instanceof Error ? e.reason.message : String(e.reason);
+  logClient("error", `처리되지 않은 오류${view ? ` (${view} 창)` : ""}: ${describeError(e.reason)}`);
   useVault.getState().setError(`처리되지 않은 오류: ${reason}`);
 });
 

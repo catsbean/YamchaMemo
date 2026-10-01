@@ -5,6 +5,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { commands, type ReleaseCheck } from "../../bindings";
 import { noteLines } from "../../lib/releaseNotes";
+import { logClient } from "../../lib/log";
 import { useVault } from "../../stores/vault";
 
 type Phase =
@@ -78,8 +79,9 @@ export default function VersionSection() {
       const update = await check();
       setPhase(update ? { kind: "available", update } : { kind: "latest" });
       return;
-    } catch {
-      // 아래 릴리스 API로 넘어간다
+    } catch (e) {
+      // 아래 릴리스 API로 넘어간다 (latest.json이 없는 옛 릴리스·오프라인)
+      logClient("info", `업데이트 확인 실패 — 릴리스 페이지로 넘어감: ${String(e)}`);
     }
     const r = await commands.checkLatestRelease();
     if (r.status !== "ok") setPhase({ kind: "error", message: r.error });
@@ -101,10 +103,17 @@ export default function VersionSection() {
         setPhase({ kind: "downloading", update, got, total });
       });
       // Windows는 설치 프로그램이 앱을 닫고 새 판을 띄운다. 여기까지 오는 쪽(macOS)은 직접 다시 켠다
+      logClient("info", `업데이트 설치 — ${current} → ${update.version}`);
       setPhase({ kind: "ready" });
       await relaunch();
     } catch (e) {
-      setPhase({ kind: "error", message: `설치하지 못했습니다: ${String(e)}` });
+      // 업데이터의 원문(영어)은 로그에만 — 화면엔 할 일을 적는다
+      logClient("error", `업데이트 설치 실패 — ${current} → ${update.version}: ${String(e)}`);
+      setPhase({
+        kind: "error",
+        message:
+          "설치하지 못했습니다. 인터넷 연결을 확인하고 다시 해 보세요. 계속 안 되면 GitHub 릴리스 페이지에서 설치본을 받아 손수 설치하세요.",
+      });
     }
   }
 

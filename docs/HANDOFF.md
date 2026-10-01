@@ -54,6 +54,9 @@
 - `crates/yamcha-core/src/backup.rs` — vault zip 백업·빈 폴더로 복원. 수정시각은 zip 안 목록 파일로 되살린다(§7-46)
 - `src/lib/readingStats.ts` — 독서 통계 규칙(완독 = status finished, 날짜 = 완독일 → 없으면 노트 날짜). 홈의 "올해 N권"도 여기
 - `src/lib/group.ts` — 목록 묶어 보기 규칙. `sort.ts`와 짝(정렬된 목록을 칸으로 나누기만 한다)
+- `src-tauri/src/applog.rs` — 로그 파일(앱 로그 폴더, 하루 한 파일·5MB 넘으면 .old·7일 보관, 사용자 폴더는 `~`, 패닉도 기록)
+- `src-tauri/src/commands/diag.rs` — `log_client`(화면이 남기는 줄)·`log_file_path`·`diagnostics`(진단 정보)
+- `src/lib/log.ts` — 화면 쪽 로그. `wrapCommands`가 모든 커맨드를 감싸 실패를 이름과 함께 남긴다(같은 줄은 5초에 한 번)
 
 ---
 
@@ -461,6 +464,15 @@ npx tsc --noEmit -p tsconfig.json
     JS `@tauri-apps/api`·`cli`도 같은 major.minor로 맞춰야 `tauri build`가 통과한다. 그 전체 재빌드가
     `target/debug`(92GB까지 자라 있었다)에 더 쌓이며 디스크가 차 `os error 112`로 죽었다 —
     의존성을 바꾸기 전에 E: 여유부터 보고, 모자라면 `cargo clean --profile dev`.
+
+**로그·진단(8-2)에서 밟은 것 (0.8.0)**
+
+49. **오류를 띄우는 자리마다 로그를 달지 않는다.** 화면이 오류를 보이는 길(`guard`, `r.status === "error"` 분기)은
+    수십 곳이지만 커맨드를 거치는 길은 하나다 — `wrapCommands`가 거기서 남긴다. 새 커맨드를 만들어도 따로 할 일이 없다.
+    다만 `CoreError::Io`는 화면에 한국어 문장만 가므로 원문은 백엔드 `with_ctx`가 남긴다 — `with_ctx`를 거치지 않는
+    커맨드에서 파일 오류를 문자열로 바꿀 땐 그 자리에서 `applog::warn`으로 원문을 남길 것.
+50. **Windows 오류 번호를 볼 땐 `cfg(windows)`로 감싼다.** `raw_os_error()` 32는 Windows에선 "다른 프로그램이 사용 중",
+    macOS에선 EPIPE다. 번호로 문장을 고르는 코드가 Mac 빌드에서 엉뚱한 안내를 띄운다.
 
 ---
 

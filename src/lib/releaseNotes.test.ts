@@ -12,6 +12,14 @@ describe("릴리스 설명 줄", () => {
     ]);
   });
 
+  it("들여 쓴 줄은 앞 항목에 이어 붙인다", () => {
+    const body = "- **문제가 생기면** — 진단 정보를\n  복사할 수 있습니다.\n- 다음 항목";
+    expect(noteLines(body)).toEqual([
+      { kind: "item", text: "문제가 생기면 — 진단 정보를 복사할 수 있습니다." },
+      { kind: "item", text: "다음 항목" },
+    ]);
+  });
+
   it("설명이 없으면 빈 목록", () => {
     expect(noteLines("")).toEqual([]);
     expect(noteLines(undefined)).toEqual([]);

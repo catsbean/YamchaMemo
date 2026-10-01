@@ -113,6 +113,7 @@ pub fn build_file_index(app: tauri::AppHandle) -> Result<(), String> {
                 let _ = app.emit("file-index-done", status);
             }
             Err(e) => {
+                crate::applog::warn(format!("첨부 색인 실패: {e}"));
                 let _ = app.emit("file-index-error", e);
             }
         }

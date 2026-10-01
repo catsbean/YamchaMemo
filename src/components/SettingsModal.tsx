@@ -14,6 +14,7 @@ import ShortcutSection from "./settings/ShortcutSection";
 import StartupSection from "./settings/StartupSection";
 import TodoTabSection from "./settings/TodoTabSection";
 import BackupSection from "./settings/BackupSection";
+import DiagnosticsSection from "./settings/DiagnosticsSection";
 import TrashSection from "./settings/TrashSection";
 import VersionSection from "./settings/VersionSection";
 
@@ -491,7 +492,12 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
           </>
         )}
 
-        {tab === "help" && <HelpSection />}
+        {tab === "help" && (
+          <>
+            <DiagnosticsSection />
+            <HelpSection />
+          </>
+        )}
 
         </div>
 

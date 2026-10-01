@@ -1,4 +1,5 @@
-import { Component, type ReactNode } from "react";
+import { Component, type ErrorInfo, type ReactNode } from "react";
+import { describeError, logClient } from "../lib/log";
 
 /** 화면이 무너졌을 때 마지막으로 한 번 저장을 시도하는 함수 */
 export type Rescue = () => Promise<unknown>;
@@ -28,8 +29,11 @@ export default class ErrorBoundary extends Component<Props, State> {
     return { error };
   }
 
-  componentDidCatch(error: Error) {
+  componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("[YamchaMemo] 화면 오류:", error);
+    // 어느 컴포넌트에서 났는지 — 앞 몇 줄만
+    const where = (info.componentStack ?? "").trim().split("\n").slice(0, 4).join("\n");
+    logClient("error", `화면 오류: ${describeError(error)}\n${where}`);
     const { rescue } = this.props;
     if (!rescue) return;
     rescue().then(

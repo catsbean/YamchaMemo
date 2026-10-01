@@ -34,8 +34,17 @@ pub async fn backup_vault(app: tauri::AppHandle, dest: String) -> Result<BackupR
         let state = app.state::<AppState>();
         let root = with_ctx(&state, |c| Ok(c.vault.root().to_path_buf()))?;
         let mut report = backup_reporter(&app);
-        yamcha_core::backup::create_backup(&root, Path::new(&dest), &mut report)
-            .map_err(|e| e.to_string())
+        let made = yamcha_core::backup::create_backup(&root, Path::new(&dest), &mut report);
+        match &made {
+            Ok(r) => crate::applog::info(format!(
+                "백업 — {dest} · 파일 {} · 노트 {} · {:.1}MB",
+                r.files,
+                r.notes,
+                r.bytes / 1_048_576.0
+            )),
+            Err(e) => crate::applog::warn(format!("백업 실패 — {dest}: {e:?}")),
+        }
+        made.map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -52,8 +61,16 @@ pub async fn restore_backup(
 ) -> Result<BackupReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut report = backup_reporter(&app);
-        yamcha_core::backup::restore_backup(Path::new(&zip_path), Path::new(&dest_dir), &mut report)
-            .map_err(|e| e.to_string())
+        let restored =
+            yamcha_core::backup::restore_backup(Path::new(&zip_path), Path::new(&dest_dir), &mut report);
+        match &restored {
+            Ok(r) => crate::applog::info(format!(
+                "복원 — {zip_path} → {dest_dir} · 파일 {} · 노트 {}",
+                r.files, r.notes
+            )),
+            Err(e) => crate::applog::warn(format!("복원 실패 — {zip_path} → {dest_dir}: {e:?}")),
+        }
+        restored.map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

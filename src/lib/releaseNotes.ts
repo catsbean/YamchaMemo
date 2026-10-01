@@ -7,10 +7,16 @@ export type NoteLine = { kind: "item" | "heading" | "text"; text: string };
 export function noteLines(body: string | null | undefined): NoteLine[] {
   if (!body) return [];
   const out: NoteLine[] = [];
+  const plain = (s: string) => s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").trim();
   for (const raw of body.replace(/\r\n/g, "\n").split("\n")) {
     const line = raw.trim();
     if (!line) continue;
-    const plain = (s: string) => s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1").trim();
+    // 들여 쓴 줄은 앞 항목이 이어진 것이다 (CHANGELOG에서 긴 항목을 두 줄로 쓴다)
+    const prev = out[out.length - 1];
+    if (/^\s/.test(raw) && prev?.kind === "item" && !/^[-*]\s/.test(line)) {
+      prev.text = `${prev.text} ${plain(line)}`;
+      continue;
+    }
     const item = line.match(/^[-*]\s+(.*)$/);
     const heading = line.match(/^#{1,6}\s+(.*)$/);
     if (item) out.push({ kind: "item", text: plain(item[1]) });
