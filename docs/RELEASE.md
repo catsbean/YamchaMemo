@@ -109,6 +109,8 @@ yamcha-core = { path = "../crates/yamcha-core", default-features = false }
 ## 추후 체크리스트 (이번 범위 밖)
 
 - [ ] **코드 서명** — Windows 인증서 / Apple Developer ID로 서명해 "알 수 없는 게시자" 경고 제거.
+  **하지 않기로 했다**(2026-10-01, 비용). 경고 넘기기 안내로 대신한다 — `ROADMAP.md` 8단계.
 - [ ] **notarization** — macOS 공증(`xcrun notarytool`)으로 Gatekeeper 통과.
+  코드 서명과 함께 하지 않는다(Apple Developer 등록이 필요하다).
 - [x] **자동 업데이트(updater)** — 0.7.0. 위 "업데이트 서명 키" 참고.
 - [ ] **모바일 초기화** — `pnpm tauri android init` / `pnpm tauri ios init` 후 별도 빌드 파이프라인.
