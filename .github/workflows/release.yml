@@ -57,17 +57,34 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
+      # 자동 업데이트 서명 키 (docs/RELEASE.md "업데이트 서명 키"). 설치본마다 .sig를 만들고
+      # tauri-action이 latest.json을 릴리스에 올린다 — 앱은 이 파일을 보고 새 버전을 받는다.
+      # 없으면 빌드가 실패한다(tauri.conf.json에 공개 키가 있으므로).
+      #
+      # Secret에 붙여 넣을 때 끝에 줄바꿈이 딸려 들어가면 설치본까지 다 만든 뒤 서명에서
+      # "Invalid symbol 10"으로 죽는다(0.7.0에서 실제로 겪었다). 키는 base64 한 줄이라
+      # 공백·줄바꿈을 모두 걷고, 비밀번호는 줄바꿈만 걷어 다음 단계로 넘긴다.
+      - name: Prepare updater signing key
+        shell: bash
+        env:
+          RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RAW_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          key=$(printf '%s' "$RAW_KEY" | tr -d '[:space:]')
+          password=$(printf '%s' "$RAW_PASSWORD" | tr -d '\r\n')
+          echo "::add-mask::$key"
+          [ -n "$password" ] && echo "::add-mask::$password"
+          echo "TAURI_SIGNING_PRIVATE_KEY=$key" >> "$GITHUB_ENV"
+          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$password" >> "$GITHUB_ENV"
+
       - name: Build and release (Tauri)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # 저장소 Secrets에 등록된 카카오 REST API 키 (없으면 교보 검색만 동작)
           YAMCHA_KAKAO_KEY: ${{ secrets.YAMCHA_KAKAO_KEY }}
-          # 자동 업데이트 서명 키 (docs/RELEASE.md "업데이트 서명 키"). 설치본마다 .sig를 만들고
-          # tauri-action이 latest.json을 릴리스에 올린다 — 앱은 이 파일을 보고 새 버전을 받는다.
-          # 없으면 빌드가 실패한다(tauri.conf.json에 공개 키가 있으므로).
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # 서명 키·비밀번호는 위 단계가 다듬어 GITHUB_ENV로 넘긴다 — 여기서 secrets를 다시
+          # 적으면 그쪽이 이겨서 다듬은 값이 무시된다
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "YamchaMemo ${{ github.ref_name }}"
