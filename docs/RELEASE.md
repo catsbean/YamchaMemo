@@ -45,6 +45,13 @@ pnpm release:win
 
 ## 릴리스
 
+### ⓪ `CHANGELOG.md`에 이번 판의 절 쓰기
+
+맨 위에 `## 0.7.1` 같은 절을 쓰고 커밋합니다. **그 절이 그대로 릴리스 설명과 앱의 업데이트 창에
+실립니다** — 쓰는 사람이 읽을 말로, 짧은 목록으로. 워크플로가 빌드할 때 이 절을 뽑아 `latest.json`의
+`notes`에 넣습니다(`scripts/changelog.mjs`). 절이 없으면 `release.bat`이 태그를 찍기 전에 멈추고,
+CI도 멈춥니다.
+
 ### ①·② `scripts\release.bat` 실행
 
 버전을 올리고(`package.json`·`src-tauri/tauri.conf.json`·`src-tauri/Cargo.toml`·
@@ -66,8 +73,8 @@ Releases 탭에서 첨부물(설치본)을 확인하고, 문제 없으면 **Publ
 첨부물에 `latest.json`과 설치본마다의 `.sig`가 있는지도 봅니다. 앱은
 `https://github.com/catsbean/YamchaMemo/releases/latest/download/latest.json`을 보므로
 **공개(Publish)한 뒤에야** 설치된 앱이 새 판을 봅니다(초안은 안 보입니다). 업데이트 창의 설명(`latest.json`의 `notes`)은
-**빌드할 때 정해집니다** — Publish 전에 릴리스 설명을 고쳐도 `latest.json`에는 들어가지 않습니다
-(0.7.0에서 확인). 지금은 비어 있어 업데이트 창에는 새 버전 번호만 보입니다.
+**빌드할 때** `CHANGELOG.md`의 그 판 절로 정해집니다 — Publish 전에 릴리스 설명을 고쳐도
+`latest.json`에는 들어가지 않습니다(0.7.0에서 확인). 고치려면 ⓪부터 다시(새 판으로) 냅니다.
 
 > 자동 업데이트는 **업데이터가 들어간 판(0.7.0)부터** 동작합니다. 그 전 판을 쓰는 사람은 0.7.0을
 > 한 번 손으로 설치해야 합니다 — 옛 판의 [새 버전 확인]은 릴리스 페이지 링크만 줍니다.

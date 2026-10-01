@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { commands, type ReleaseCheck } from "../../bindings";
+import { noteLines } from "../../lib/releaseNotes";
 import { useVault } from "../../stores/vault";
 
 type Phase =
@@ -19,6 +20,43 @@ type Phase =
 
 function mb(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+/** 이번 판에서 바뀐 것 (CHANGELOG.md의 그 판 절 — 빌드할 때 latest.json에 실린다).
+ *  길면 앞의 몇 줄만 보이고 [더 보기]로 편다. */
+function ReleaseNotes({ body }: { body?: string }) {
+  const [open, setOpen] = useState(false);
+  const lines = noteLines(body);
+  if (lines.length === 0) return null;
+  const FOLD = 5;
+  const shown = open ? lines : lines.slice(0, FOLD);
+  return (
+    <div className="mt-1 text-neutral-600">
+      <ul className="flex flex-col gap-0.5">
+        {shown.map((l, i) =>
+          l.kind === "item" ? (
+            <li key={i} className="flex gap-1.5">
+              <span className="text-neutral-400">•</span>
+              <span>{l.text}</span>
+            </li>
+          ) : (
+            <li key={i} className={l.kind === "heading" ? "mt-1 font-medium text-neutral-700" : ""}>
+              {l.text}
+            </li>
+          ),
+        )}
+      </ul>
+      {lines.length > FOLD && (
+        <button
+          type="button"
+          className="mt-0.5 text-2xs text-sky-600 underline hover:no-underline"
+          onClick={() => setOpen(!open)}
+        >
+          {open ? "접기" : `더 보기 (${lines.length - FOLD}줄)`}
+        </button>
+      )}
+    </div>
+  );
 }
 
 /** 버전 표시 + 새 버전 받아 설치하기.
@@ -104,11 +142,7 @@ export default function VersionSection() {
       {phase.kind === "available" && (
         <div className="mt-1.5 rounded border border-sky-200 bg-sky-50 p-2.5 text-xs">
           <p className="font-medium text-sky-700">{phase.update.version}이 나왔습니다.</p>
-          {phase.update.body && (
-            <p className="mt-1 max-h-24 overflow-y-auto whitespace-pre-line text-neutral-600">
-              {phase.update.body}
-            </p>
-          )}
+          <ReleaseNotes body={phase.update.body} />
           <button
             className="mt-2 rounded bg-neutral-800 px-2.5 py-1 text-white hover:bg-neutral-600"
             onClick={() => install(phase.update)}

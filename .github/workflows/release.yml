@@ -57,6 +57,19 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
+      # 이 판의 CHANGELOG.md 절 → 릴리스 설명과 latest.json의 notes(앱의 업데이트 창).
+      # 업데이트 창의 설명은 빌드할 때 정해진다 — Publish 전에 릴리스 설명을 고쳐도 안 들어간다.
+      # 절이 없으면 여기서 멈춘다(빈 설명으로 내보내지 않게 — release.bat도 미리 본다).
+      - name: Release notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          {
+            echo "body<<CHANGELOG_EOF"
+            node scripts/changelog.mjs section "${GITHUB_REF_NAME#v}"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       # 자동 업데이트 서명 키 (docs/RELEASE.md "업데이트 서명 키"). 설치본마다 .sig를 만들고
       # tauri-action이 latest.json을 릴리스에 올린다 — 앱은 이 파일을 보고 새 버전을 받는다.
       # 없으면 빌드가 실패한다(tauri.conf.json에 공개 키가 있으므로).
@@ -88,6 +101,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "YamchaMemo ${{ github.ref_name }}"
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

@@ -94,6 +94,15 @@ if errorlevel 1 (
   goto :END
 )
 
+rem 이 판의 CHANGELOG.md 절은 그대로 릴리스 설명과 앱의 업데이트 창에 실린다.
+rem 절이 없으면 태그를 찍기 전에 멈춘다 - CI(release.yml)에서도 멈추지만 그땐 태그가 이미 나간 뒤다.
+node scripts\changelog.mjs section !NEWVER! >nul
+if errorlevel 1 (
+  echo [중단] CHANGELOG.md 맨 위에 "## !NEWVER!" 절을 쓰고 커밋한 뒤 다시 실행하세요.
+  echo        그 절이 릴리스 설명과 앱의 업데이트 창에 그대로 보입니다.
+  goto :END
+)
+
 echo.
 echo 다음 작업을 수행합니다:
 echo   1. Rust 툴체인을 최신 stable로 갱신 (CI와 같은 자리로 맞춘다)
