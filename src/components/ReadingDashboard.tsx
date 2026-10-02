@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useIncremental } from "../lib/useIncremental";
 import { commands, type ReadingEntry } from "../bindings";
 import { useVault } from "../stores/vault";
 import { coverSrc } from "../lib/note";
@@ -140,6 +141,13 @@ export default function ReadingDashboard() {
     }
     return out;
   }, [filtered, shuffleSeed]);
+
+  // 기록이 수천 건이면 한꺼번에 그리지 않는다 — 1만 편 실측에서 5,000건이 2초 동안 화면을 굳혔다.
+  // 필터·정렬·랜덤이 바뀌면 처음 길이로 (`useIncremental`)
+  const rows = useIncremental(
+    shown.length,
+    `${kinds.join(",")}|${book}|${genre}|${tag}|${days}|${q}|${sort}|${shuffleSeed}`,
+  );
 
   const hasFilter =
     kinds.length > 0 || !!book || !!genre || !!tag || days > 0 || !!q.trim();
@@ -367,7 +375,7 @@ export default function ReadingDashboard() {
         )}
 
         <ul className="flex flex-col gap-2">
-          {shown.map((e, i) => {
+          {shown.slice(0, rows.count).map((e, i) => {
             const id = `${e.book_rel}#${i}#${e.date}`;
             const url = coverSrc(vaultPath, e.cover);
             const open = expanded === id;
@@ -448,6 +456,7 @@ export default function ReadingDashboard() {
             );
           })}
         </ul>
+        {rows.more && <div ref={rows.sentinel} className="h-10" aria-hidden />}
       </div>
 
       {exportMenu.menu && (

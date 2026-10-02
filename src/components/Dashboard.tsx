@@ -20,6 +20,7 @@ import ReviewModal from "./ReviewModal";
 import SortControl, { useSort } from "./SortControl";
 import { DATE_SORT, TITLE_SORT, sortNotes, type SortOption } from "../lib/sort";
 import { groupNotes, groupOptions, normalizeGroup } from "../lib/group";
+import { takeGroups, useIncremental } from "../lib/useIncremental";
 import TagBrowser from "./TagBrowser";
 import TodoDashboard from "./TodoDashboard";
 import WritingDashboard from "./WritingDashboard";
@@ -149,6 +150,15 @@ function ListDashboard({ noteType }: { noteType: string }) {
     () => groupNotes(list, groupKey, groupOpts),
     [list, groupKey, groupOpts],
   );
+  // 수천 줄을 한꺼번에 그리지 않는다 — 앞의 몇백 줄만, 내려가면 더 (`useIncremental`).
+  // 분류·묶기·정렬·필터가 바뀌면 처음 길이로 돌아간다
+  const totalRows = useMemo(() => groups.reduce((n, [, items]) => n + items.length, 0), [groups]);
+  const rows = useIncremental(
+    totalRows,
+    `${noteType}|${groupKey}|${sort.key}|${sort.dir}|${tagFilter}|${JSON.stringify(groupFilters)}`,
+  );
+  const visibleGroups = useMemo(() => takeGroups(groups, rows.count), [groups, rows.count]);
+  const groupSize = useMemo(() => new Map(groups.map(([k, items]) => [k, items.length])), [groups]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -262,13 +272,13 @@ function ListDashboard({ noteType }: { noteType: string }) {
             시작해 보세요.
           </p>
         )}
-        {groups.map(([group, items]) => (
+        {visibleGroups.map(([group, items]) => (
           <section key={group} className="mb-5">
             {group && (
               <h2 className="mb-2 text-sm font-semibold text-neutral-500">
                 {group}{" "}
                 {groupKey !== "none" && (
-                  <span className="font-normal text-neutral-400">{items.length}</span>
+                  <span className="font-normal text-neutral-400">{groupSize.get(group)}</span>
                 )}
               </h2>
             )}
@@ -296,6 +306,7 @@ function ListDashboard({ noteType }: { noteType: string }) {
             </ul>
           </section>
         ))}
+        {rows.more && <div ref={rows.sentinel} className="h-10" aria-hidden />}
       </div>
 
       {creating && (
