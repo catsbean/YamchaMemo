@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { load } from "@tauri-apps/plugin-store";
+import { Section } from "./ui";
 
 /** 카카오 책 검색 API 키 */
 export default function KakaoSection() {
@@ -20,16 +21,16 @@ export default function KakaoSection() {
   }
 
   return (
-    <section className="mb-5">
-      <h3 className="mb-1 text-sm font-semibold text-neutral-600">
-        카카오 책 검색 API
-      </h3>
-      <p className="mb-2 text-xs text-neutral-400">
-        키가 없어도 책 검색·자동 채우기는 교보문고로 동작합니다. 카카오 키를
-        넣으면 검색 결과가 더 정확해집니다.{" "}
-        <span className="text-neutral-500">developers.kakao.com</span>에서
-        REST API 키를 무료로 발급받을 수 있습니다.
-      </p>
+    <Section
+      title="카카오 책 검색"
+      desc={
+        <>
+          키가 없어도 책 검색·자동 채우기는 교보문고로 동작합니다. 카카오 키를 넣으면 검색 결과가 더
+          정확해집니다. <span className="text-neutral-600">developers.kakao.com</span>에서 REST API 키를
+          무료로 발급받을 수 있습니다.
+        </>
+      }
+    >
       <div className="flex gap-2">
         <input
           type="password"
@@ -48,6 +49,6 @@ export default function KakaoSection() {
           <span className="self-center text-xs text-emerald-600">저장됨</span>
         )}
       </div>
-    </section>
+    </Section>
   );
 }

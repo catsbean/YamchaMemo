@@ -7,6 +7,7 @@ import { commands, type ReleaseCheck } from "../../bindings";
 import { noteLines } from "../../lib/releaseNotes";
 import { logClient } from "../../lib/log";
 import { useVault } from "../../stores/vault";
+import { Section } from "./ui";
 
 type Phase =
   | { kind: "idle" }
@@ -122,8 +123,7 @@ export default function VersionSection() {
   const busy = phase.kind === "checking" || phase.kind === "downloading" || phase.kind === "ready";
 
   return (
-    <section className="mb-5">
-      <h3 className="mb-2 text-sm font-semibold text-neutral-600">버전</h3>
+    <Section title="버전">
       <div className="flex items-center gap-2 text-sm">
         <span className="text-neutral-600">버전 {current || "…"}</span>
         <button className={btn} disabled={busy} onClick={checkNow}>
@@ -188,6 +188,6 @@ export default function VersionSection() {
       {phase.kind === "ready" && (
         <p className="mt-1.5 text-xs text-emerald-600">설치했습니다. 다시 켜는 중…</p>
       )}
-    </section>
+    </Section>
   );
 }

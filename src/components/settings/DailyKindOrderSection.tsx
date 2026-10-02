@@ -4,6 +4,7 @@ import {
   useVault,
 } from "../../stores/vault";
 import { dailyKindOptions } from "../DailyEntryBar";
+import { Section } from "./ui";
 
 /** 일지 빠른 입력 바의 버튼 순서 — ▲▼로 바꾸면 그 자리에서 저장된다.
  *  맨 앞에 둔 종류가 일지를 열었을 때 기본으로 선택된다. */
@@ -40,14 +41,15 @@ export default function DailyKindOrderSection() {
       .join();
 
   return (
-    <section className="mb-5">
-      <h3 className="mb-1 text-sm font-semibold text-neutral-600">
-        일지 빠른 입력 순서
-      </h3>
-      <p className="mb-2 text-xs text-neutral-400">
-        데일리노트 입력 바의 버튼 순서입니다. 맨 위에 둔 종류가 기본으로
-        선택됩니다.
-      </p>
+    <Section
+      title="일지 빠른 입력 순서"
+      desc={
+        <>
+          데일리노트 입력 바의 버튼 순서입니다. 맨 위에 둔 종류가 기본으로
+          선택됩니다.
+        </>
+      }
+    >
       <ul className="flex flex-col gap-1">
         {options.map((o, i) => (
           <li key={o.key} className="flex items-center gap-1.5">
@@ -84,6 +86,6 @@ export default function DailyKindOrderSection() {
           기본 순서로
         </button>
       )}
-    </section>
+    </Section>
   );
 }

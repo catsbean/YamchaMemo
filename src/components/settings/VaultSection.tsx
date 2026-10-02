@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useVault } from "../../stores/vault";
+import { Section } from "./ui";
 
 /** vault 위치와 전체 재색인. 재색인이 도는 동안엔 설정 창을 닫지 못한다(`onBusy`). */
 export default function VaultSection({ onBusy }: { onBusy: (busy: boolean) => void }) {
@@ -23,10 +24,17 @@ export default function VaultSection({ onBusy }: { onBusy: (busy: boolean) => vo
   }
 
   return (
-    <section className="mb-5">
-      <h3 className="mb-2 text-sm font-semibold text-neutral-600">Vault</h3>
-      <p className="mb-1 break-all text-xs text-neutral-500">{vaultPath}</p>
-      <div className="flex gap-2">
+    <Section
+      title="vault"
+      desc={
+        <>
+          메모를 저장하는 폴더입니다. 다른 폴더로 바꿔도 지금 폴더의 메모는 그대로 남습니다.
+          <span className="mt-1 block break-all text-neutral-600">{vaultPath}</span>
+        </>
+      }
+      help="전체 재색인은 검색·백링크·태그가 이상할 때 씁니다. 메모는 건드리지 않고 vault의 모든 노트를 다시 읽어 색인을 새로 만듭니다(노트가 많으면 몇십 초 걸립니다)."
+    >
+      <div className="flex flex-wrap gap-2">
         <button
           className="rounded border border-neutral-300 px-3 py-1 text-xs hover:border-neutral-500"
           onClick={chooseVault}
@@ -48,6 +56,6 @@ export default function VaultSection({ onBusy }: { onBusy: (busy: boolean) => vo
           </span>
         )}
       </div>
-    </section>
+    </Section>
   );
 }

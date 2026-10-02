@@ -5,6 +5,7 @@ import {
 } from "../../stores/vault";
 import { styleOf } from "../../lib/callouts";
 import { useImeInput } from "../../lib/ime";
+import { Section } from "./ui";
 
 const PALETTE = [
   "red", "orange", "yellow", "lime", "emerald",
@@ -88,12 +89,15 @@ export default function CalloutSection() {
   }
 
   return (
-    <section className="mb-5">
-      <h3 className="mb-1 text-sm font-semibold text-neutral-600">기록 종류 추가</h3>
-      <p className="mb-2 text-xs text-neutral-400">
-        일지·책에서 쓸 기록 종류를 직접 만들 수 있습니다. 화면마다 5개까지이고,
-        만든 종류는 vault에 저장돼 다른 기기에서도 그대로 보입니다.
-      </p>
+    <Section
+      title="기록 종류 추가"
+      desc={
+        <>
+          일지·책에서 쓸 기록 종류를 직접 만들 수 있습니다. 화면마다 5개까지이고,
+          만든 종류는 vault에 저장돼 다른 기기에서도 그대로 보입니다.
+        </>
+      }
+    >
 
       {callouts.length > 0 && (
         <ul className="mb-2 flex flex-col gap-1">
@@ -240,6 +244,6 @@ export default function CalloutSection() {
         </button>
       </div>
       {error && <p className="mt-1.5 text-xs text-rose-500">{error}</p>}
-    </section>
+    </Section>
   );
 }

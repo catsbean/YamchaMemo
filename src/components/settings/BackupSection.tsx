@@ -4,6 +4,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { commands, type BackupReport } from "../../bindings";
 import { ymd } from "../../lib/date";
 import { useVault } from "../../stores/vault";
+import { Section } from "./ui";
 
 type Progress = { done: number; total: number };
 type Job = "backup" | "restore";
@@ -101,13 +102,16 @@ export default function BackupSection({ onBusy }: { onBusy: (busy: boolean) => v
     "rounded border border-neutral-300 px-3 py-1 text-xs hover:border-neutral-500 disabled:opacity-50";
 
   return (
-    <section className="mb-5">
-      <h3 className="mb-1 text-sm font-semibold text-neutral-600">백업과 복원</h3>
-      <p className="mb-2 text-xs text-neutral-400">
-        노트·첨부·분류 설정·템플릿을 zip 파일 하나로 묶습니다. 복원은 지금 vault를
-        건드리지 않고 <b className="font-medium text-neutral-500">빈 폴더</b>에만
-        풉니다.
-      </p>
+    <Section
+      title="백업과 복원"
+      desc={
+        <>
+          노트·첨부·분류 설정·템플릿을 zip 파일 하나로 묶습니다. 복원은 지금 vault를
+          건드리지 않고 <b className="font-medium text-neutral-500">빈 폴더</b>에만
+          풉니다.
+        </>
+      }
+    >
       <div className="flex flex-wrap items-center gap-2">
         <button className={btn} disabled={job != null || !vaultPath} onClick={backup}>
           {job === "backup" ? "묶는 중…" : "백업 만들기"}
@@ -153,6 +157,6 @@ export default function BackupSection({ onBusy }: { onBusy: (busy: boolean) => v
           </button>
         </div>
       )}
-    </section>
+    </Section>
   );
 }

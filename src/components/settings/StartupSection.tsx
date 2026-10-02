@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Section } from "./ui";
 import {
   useVault,
   type StartupMode,
@@ -56,8 +57,7 @@ export default function StartupSection() {
   }, [noteQuery, notes]);
 
   return (
-    <section className="mb-5">
-      <h3 className="mb-2 text-sm font-semibold text-neutral-600">시작 화면</h3>
+    <Section title="시작 화면">
       <div className="flex flex-col gap-1.5">
         {STARTUP_MODES.map((m) => (
           <label
@@ -142,6 +142,6 @@ export default function StartupSection() {
           </label>
         ))}
       </div>
-    </section>
+    </Section>
   );
 }

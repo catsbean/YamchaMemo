@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
-import {
-  useVault,
-} from "../../stores/vault";
+import { useVault } from "../../stores/vault";
+import Segmented from "../Segmented";
+import { Section } from "./ui";
 
 /** 스크랩(우클릭 저장) 기본 저장 분류. 책·데일리는 파일명·연동 규칙이
  *  확고해 고를 수 없다(백엔드 save_scrap과 같은 제약).
@@ -24,25 +24,16 @@ export default function ScrapTypeSection() {
   }, [scrapType, options, setScrapType]);
 
   return (
-    <section className="mb-5">
-      <h3 className="mb-2 text-sm font-semibold text-neutral-600">
-        스크랩 저장 위치
-      </h3>
-      <p className="mb-2 text-xs text-neutral-400">
-        우클릭 [스크랩하기]로 저장할 때 쓸 기본 분류입니다. 고른 분류가 나중에
-        사라지면 자유노트로 되돌아갑니다.
-      </p>
-      <select
-        className="rounded border border-neutral-300 px-2 py-1 text-sm focus:border-neutral-500 focus:outline-none"
+    <Section
+      title="스크랩 저장 분류"
+      desc="편집기에서 주소를 우클릭해 [스크랩하기]로 저장할 때 쓸 분류입니다. 고른 분류가 나중에 사라지면 자유노트로 돌아갑니다."
+    >
+      <Segmented
+        className="flex-wrap"
         value={options.some((o) => o.id === scrapType) ? scrapType : "free"}
-        onChange={(e) => setScrapType(e.target.value)}
-      >
-        {options.map((o) => (
-          <option key={o.id} value={o.id}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </section>
+        options={options.map((o) => [o.id, o.label] as const)}
+        onChange={setScrapType}
+      />
+    </Section>
   );
 }

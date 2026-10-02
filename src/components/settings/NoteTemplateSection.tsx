@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { commands } from "../../bindings";
 import { NOTE_TEMPLATE_KINDS, TemplateEditor } from "./TemplateEditor";
 import TitlePrefixSection from "./TitlePrefixSection";
+import { Section } from "./ui";
 
 /** 고급 — 내장 노트 종류들의 본문 템플릿 편집 (frontmatter는 건드리지 않음) */
 export default function NoteTemplateSection() {
@@ -32,21 +33,22 @@ export default function NoteTemplateSection() {
   }
 
   return (
-    <section className="mb-5">
+    <Section
+      title="노트 템플릿"
+      desc="새로 만드는 노트의 본문과 제목 머릿글입니다. frontmatter는 건드리지 않으며, 비워 두면 기본값으로 돌아갑니다."
+    >
       <button
-        className="text-sm font-semibold text-neutral-600 hover:text-neutral-800"
+        type="button"
+        className="rounded border border-neutral-300 px-3 py-1 text-xs text-neutral-600 hover:border-neutral-500"
         onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
       >
-        {open ? "▾" : "▸"} 고급 — 노트 템플릿
+        {open ? "▾ 접기" : "▸ 템플릿 고치기"}
       </button>
       {open && (
-        <div className="mt-2 flex flex-col gap-4">
+        <div className="mt-3 flex flex-col gap-4">
           <div className="text-xs text-neutral-400">
             <p>
-              새로 만드는 노트의 <b>본문</b> 템플릿입니다. frontmatter는
-              건드리지 않으며, 비워 두면 기본값으로 돌아갑니다.
-            </p>
-            <p className="mt-1">
               쓸 수 있는 자리표시자:{" "}
               {[
                 ["{{date}}", "2026-07-30"],
@@ -88,6 +90,6 @@ export default function NoteTemplateSection() {
           <TitlePrefixSection />
         </div>
       )}
-    </section>
+    </Section>
   );
 }

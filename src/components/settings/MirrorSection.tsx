@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useVault } from "../../stores/vault";
+import { Section } from "./ui";
 
 /** 미러 폴더 — 저장할 때마다 vault를 다른 폴더로 복제 */
 export default function MirrorSection() {
@@ -7,14 +8,15 @@ export default function MirrorSection() {
   const [syncing, setSyncing] = useState(false);
 
   return (
-    <section className="mb-5">
-      <h3 className="mb-1 text-sm font-semibold text-neutral-600">
-        미러(백업) 폴더
-      </h3>
-      <p className="mb-2 text-xs text-neutral-400">
-        저장할 때마다 vault를 이 폴더들로 자동 복제합니다. OneDrive·Google
-        Drive 등 클라우드 동기화 폴더를 지정하면 자동 백업이 됩니다.
-      </p>
+    <Section
+      title="미러(백업) 폴더"
+      desc={
+        <>
+          저장할 때마다 vault를 이 폴더들로 자동 복제합니다. OneDrive·Google
+          Drive 등 클라우드 동기화 폴더를 지정하면 자동 백업이 됩니다.
+        </>
+      }
+    >
       <ul className="mb-2 flex flex-col gap-1">
         {mirrors.map((m) => {
           const report = mirrorReports.find((r) => r.target === m);
@@ -110,6 +112,6 @@ export default function MirrorSection() {
           </button>
         )}
       </div>
-    </section>
+    </Section>
   );
 }

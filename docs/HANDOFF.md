@@ -59,6 +59,7 @@
 - `src/lib/useIncremental.ts` — 긴 목록을 앞의 200줄만 그리고 내려가면 더 그린다(자유노트·사용자 분류·일지 목록·독서기록)
 - `src-tauri/src/scale.rs` — 1만 편 합성 vault 생성기(`--ignored`, 8-3)
 - `crates/yamcha-core/src/migrations.rs` — vault 형식의 판(`.yamcha/format.json`)과 판 차례의 이전. 형식은 `docs/VAULT-FORMAT.md`
+- `src/components/SettingsModal.tsx` — 설정 창. **무엇이 어디 있는지는 `SETTINGS_MENU` 배열 하나가 정한다**(8-5). 섹션은 `settings/`, 공용 조각(`Section`·`SwitchRow`·`RadioCards`·`DangerButton`)은 `settings/ui.tsx`, 켜고 끄기는 `Switch.tsx`
 - `src/lib/log.ts` — 화면 쪽 로그. `wrapCommands`가 모든 커맨드를 감싸 실패를 이름과 함께 남긴다(같은 줄은 5초에 한 번)
 
 ---
