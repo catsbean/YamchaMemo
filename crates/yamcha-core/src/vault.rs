@@ -1222,6 +1222,16 @@ impl Vault {
     /// 열어 파싱하므로(2,000편에 377ms) 바뀐 게 없는지 확인하는 데 쓸 수 없다.
     /// 여기는 디렉터리 목록과 메타데이터만 본다.
     pub fn list_note_files(&self) -> Result<Vec<NoteFile>, CoreError> {
+        self.note_files_where(|_| true)
+    }
+
+    /// 한 분류의 노트 파일만 (경로·수정시각·크기) — 그 분류의 폴더만 훑는다.
+    pub fn note_files_of_type(&self, type_id: &str) -> Result<Vec<NoteFile>, CoreError> {
+        self.note_files_where(|t| t == type_id)
+    }
+
+    /// `keep`이 받는 분류의 폴더만 훑는다 — 한 분류만 필요하면 다른 폴더를 열 까닭이 없다.
+    fn note_files_where(&self, keep: impl Fn(&str) -> bool) -> Result<Vec<NoteFile>, CoreError> {
         fn walk(
             root: &Path,
             dir: &Path,
@@ -1235,7 +1245,12 @@ impl Vault {
                 let entry = entry?;
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
-                if path.is_dir() {
+                // 폴더인지는 목록을 읽을 때 함께 온 정보(`file_type`)로 본다. `path.is_dir()`는 항목마다
+                // 파일 시스템을 한 번 더 묻는다 — 1만 편에서 그것만 400ms였다(8-3 실측). 바로가기만
+                // 따라가 봐야 안다(예전처럼 바로가기 폴더도 훑는다).
+                let Ok(ft) = entry.file_type() else { continue };
+                let is_dir = if ft.is_symlink() { path.is_dir() } else { ft.is_dir() };
+                if is_dir {
                     walk(root, &path, type_id, out)?;
                 } else if Vault::is_note_file(&name) {
                     let Ok(meta) = entry.metadata() else { continue };
@@ -1256,7 +1271,7 @@ impl Vault {
         }
 
         let mut out = Vec::new();
-        for t in &self.types {
+        for t in self.types.iter().filter(|t| keep(&t.id)) {
             walk(&self.root, &self.root.join(&t.folder), &t.id, &mut out)?;
         }
         Ok(out)
@@ -1267,10 +1282,10 @@ impl Vault {
     /// `list_notes()`로 전부 읽고 걸러내면 나머지 폴더까지 파싱하는 값을 치른다 —
     /// 목록 파일 하나 만들려고 vault 전체를 읽을 이유가 없다.
     pub fn list_notes_of_type(&self, type_id: &str) -> Result<Vec<NoteSummary>, CoreError> {
+        // 그 분류의 폴더만 훑는다 — 예전엔 vault 전체를 훑고 걸렀다(회고가 일지·책 두 번 = 전체 두 번)
         let mut out: Vec<NoteSummary> = self
-            .list_note_files()?
+            .note_files_where(|t| t == type_id)?
             .iter()
-            .filter(|f| f.note_type == type_id)
             .filter_map(|f| self.summary_of(f))
             .collect();
         out.sort_by(|a, b| b.date.cmp(&a.date).then(a.title.cmp(&b.title)));

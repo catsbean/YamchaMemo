@@ -47,22 +47,50 @@ fn entries_of_book(n: &NoteSummary, body: &str) -> Vec<ReadingEntry> {
 }
 
 /// 전체 책의 기록을 엔트리 단위로 펼쳐 반환한다 (정렬·필터는 화면에서).
+///
+/// 책 폴더만 훑고, 파일이 그대로인(mtime·size) 책은 다시 읽지 않는다 — 할 일 모아 보기와 같은
+/// 캐시(`TodoCache`의 둘째 칸). 예전엔 vault 전체 요약을 만든 뒤 책만 골라 800권을 매번 다시 읽었다
+/// (1만 편 실측 250ms).
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_entries(state: State<'_, AppState>) -> Result<Vec<ReadingEntry>, String> {
-    with_ctx(&state, |c| {
-        let mut out = Vec::new();
-        for n in c.vault.list_notes()? {
-            if n.note_type != "book" {
-                continue;
-            }
-            let Ok(note) = c.vault.read_note(&n.rel_path) else {
-                continue;
-            };
-            out.extend(entries_of_book(&n, &note.body));
+    with_ctx(&state, list_entries_in)
+}
+
+pub(crate) fn list_entries_in(c: &mut Ctx) -> Result<Vec<ReadingEntry>, yamcha_core::CoreError> {
+    let files = c.vault.note_files_of_type(Builtin::Book.id())?;
+    for f in &files {
+        let fresh = matches!(
+            c.todo_cache.1.get(&f.rel_path),
+            Some(e) if e.mtime == f.mtime && e.size == f.size
+        );
+        if fresh {
+            continue;
         }
-        Ok(out)
-    })
+        let entries = match (c.vault.note_summary(&f.rel_path), c.vault.read_note(&f.rel_path)) {
+            (Ok(n), Ok(note)) => entries_of_book(&n, &note.body),
+            // 못 읽은 책도 그 신원으로는 봤다고 남긴다 (할 일 캐시와 같은 까닭)
+            _ => Vec::new(),
+        };
+        c.todo_cache.1.insert(
+            f.rel_path.clone(),
+            EntryCacheEntry { mtime: f.mtime, size: f.size, entries },
+        );
+    }
+    let alive: std::collections::HashSet<&str> = files.iter().map(|f| f.rel_path.as_str()).collect();
+    c.todo_cache.1.retain(|rel, _| alive.contains(rel.as_str()));
+    Ok(files
+        .iter()
+        .filter_map(|f| c.todo_cache.1.get(&f.rel_path))
+        .flat_map(|e| e.entries.iter().cloned())
+        .collect())
+}
+
+/// 책 한 권에서 뽑아 둔 기록 — 파일이 그대로면 다시 뽑지 않는다
+struct EntryCacheEntry {
+    mtime: i64,
+    size: i64,
+    entries: Vec<ReadingEntry>,
 }
 
 /// 어느 노트에 있는 할 일 한 줄
@@ -115,8 +143,13 @@ struct TodoCacheEntry {
 /// **왜 시각이 아니라 (mtime,size)인가.** 스스로 고쳐지는 잣대이기 때문이다. 무효화를
 /// 이벤트로 걸면(저장·감시자) 한 군데를 빠뜨리는 순간 목록이 영영 낡은 채로 남는데,
 /// 파일 신원을 보면 어떤 경로로 바뀌었든 다음 호출에서 알아챈다.
+///
+/// 둘째 칸은 책별 기록(`list_entries`) — 같은 잣대, 같은 수명이라 함께 둔다.
 #[derive(Default)]
-pub struct TodoCache(std::collections::HashMap<String, TodoCacheEntry>);
+pub struct TodoCache(
+    std::collections::HashMap<String, TodoCacheEntry>,
+    std::collections::HashMap<String, EntryCacheEntry>,
+);
 
 /// vault 전체의 할 일. `done`이 거짓이면 미완만, 참이면 완료만 담는다.
 ///
@@ -420,20 +453,61 @@ pub fn review_range(
 
         let mut reading: Vec<ReadingEntry> = Vec::new();
         if with_reading {
-            for n in c.vault.list_notes_of_type(Builtin::Book.id())? {
-                let Ok(note) = c.vault.read_note(&n.rel_path) else {
-                    continue;
-                };
-                // 기간 밖은 여기서 버린다 — 안 그러면 vault 전체 기록이 화면까지 건너온다
-                reading.extend(
-                    entries_of_book(&n, &note.body)
-                        .into_iter()
-                        .filter(|e| e.date >= from && e.date <= to),
-                );
-            }
+            // 독서기록 목록과 같은 캐시 — 바뀐 책만 다시 읽는다.
+            // 기간 밖은 여기서 버린다 — 안 그러면 vault 전체 기록이 화면까지 건너온다
+            reading.extend(
+                list_entries_in(c)?
+                    .into_iter()
+                    .filter(|e| e.date >= from && e.date <= to),
+            );
         }
         Ok(ReviewRange { days, reading })
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)] // 앱 밖에서 고친 것처럼 맨 쓰기로 바꾼다
+mod entries_cache_tests {
+    use super::*;
+
+    /// 독서기록 목록은 책 파일이 그대로면 다시 읽지 않지만, 바뀐 책은 다시 읽고 지운 책은 뺀다 —
+    /// 시각이 아니라 파일 신원(mtime·size)으로 가리므로 어떤 길로 바뀌었든 알아챈다.
+    #[test]
+    fn 독서기록은_바뀐_책만_다시_읽고_지운_책은_뺀다() {
+        let vd = tempfile::tempdir().unwrap();
+        let id = tempfile::tempdir().unwrap();
+        let mut c = Ctx {
+            vault: Vault::open(vd.path()).unwrap(),
+            indexer: Indexer::open(&id.path().join("index.db")).unwrap(),
+            search: SearchEngine::open(&id.path().join("search")).unwrap(),
+            todo_cache: TodoCache::default(),
+        };
+        let a = super::super::notes::create_note_in(&mut c, "book", "책 하나", serde_json::Value::Null).unwrap();
+        let b = super::super::notes::create_note_in(&mut c, "book", "책 둘", serde_json::Value::Null).unwrap();
+        let body = |n: usize| {
+            let mut s = String::from("## 소개\n\n## 기록\n");
+            for i in 0..n {
+                s.push_str(&format!("\n> [!발췌] 2026-09-0{}\n> 발췌 {i}\n", i + 1));
+            }
+            s
+        };
+        let fm = c.vault.read_note(&a).unwrap().frontmatter;
+        c.vault.save_note(&a, fm.clone(), &body(1)).unwrap();
+        c.vault.save_note(&b, fm, &body(2)).unwrap();
+        assert_eq!(list_entries_in(&mut c).unwrap().len(), 3);
+
+        // 앱 밖에서 한 권을 고친다 — 기록이 하나 늘어 크기가 바뀐다
+        let abs = vd.path().join(&a);
+        let text = std::fs::read_to_string(&abs).unwrap();
+        std::fs::write(&abs, format!("{text}\n> [!생각] 2026-09-09\n> 밖에서 더함\n")).unwrap();
+        let entries = list_entries_in(&mut c).unwrap();
+        assert_eq!(entries.len(), 4);
+        assert!(entries.iter().any(|e| e.text == "밖에서 더함"));
+
+        // 지운 책의 기록은 사라진다
+        std::fs::remove_file(vd.path().join(&b)).unwrap();
+        assert_eq!(list_entries_in(&mut c).unwrap().len(), 2);
+    }
 }
 
 #[cfg(test)]
