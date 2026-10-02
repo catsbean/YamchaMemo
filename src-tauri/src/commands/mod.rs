@@ -435,6 +435,17 @@ fn open_vault(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
     }
     *guard = None;
     let vault = Vault::open(path).map_err(|e| e.to_string())?;
+    match vault.migration() {
+        Ok(m) if m.from != m.to => crate::applog::info(format!(
+            "vault 형식 이전 {} → {} (독서기록 합침 {}{})",
+            m.from,
+            m.to,
+            m.readings_merged,
+            m.backup.as_deref().map(|b| format!(", 사본 {b}")).unwrap_or_default()
+        )),
+        Err(e) => crate::applog::warn(format!("vault 형식 이전 실패 — 다음에 열 때 다시 한다: {e}")),
+        _ => {}
+    }
     let index_dir = index_dir_for(app, vault.root())?;
     std::fs::create_dir_all(&index_dir).map_err(|e| e.to_string())?;
     let mut indexer = Indexer::open(&index_dir.join("index.db")).map_err(|e| e.to_string())?;

@@ -522,6 +522,10 @@ async resetFileIndex() : Promise<Result<null, string>> {
 },
 /**
  * 전체 책의 기록을 엔트리 단위로 펼쳐 반환한다 (정렬·필터는 화면에서).
+ * 
+ * 책 폴더만 훑고, 파일이 그대로인(mtime·size) 책은 다시 읽지 않는다 — 할 일 모아 보기와 같은
+ * 캐시(`TodoCache`의 둘째 칸). 예전엔 vault 전체 요약을 만든 뒤 책만 골라 800권을 매번 다시 읽었다
+ * (1만 편 실측 250ms).
  */
 async listEntries() : Promise<Result<ReadingEntry[], string>> {
     try {

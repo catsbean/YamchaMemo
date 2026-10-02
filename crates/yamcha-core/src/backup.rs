@@ -1,13 +1,14 @@
 //! 백업과 복원 — vault를 zip 하나로 묶고, 빈 폴더로만 되푼다 (7-5).
 //!
 //! **무엇을 넣나.** 노트·첨부·`_types.json`·`_callouts.json` 등 vault의 파일 전부와
-//! `.yamcha/templates/`(사용자가 고친 본문·제목 템플릿). `.yamcha/`의 나머지(히스토리·휴지통·
+//! `.yamcha/templates/`(사용자가 고친 본문·제목 템플릿)·`.yamcha/format.json`(형식의 판 — 복원한 vault가 제 판을 안다). `.yamcha/`의 나머지(히스토리·휴지통·
 //! 임시 파일)는 넣지 않는다 — 다시 만들 수 있거나 백업의 몫이 아니고, 넣기 시작하면 백업이
 //! 몇 배가 된다. 검색 색인은 애초에 vault 밖(앱 데이터 폴더)에 있다.
 //!
-//! **수정시각을 따로 적는다.** 노트의 날짜는 파일명이 날짜가 아니면 수정시각에서 나온다
-//! (`Vault::summary_of`). 풀면서 수정시각을 되살리지 않으면 복원한 노트가 모두 "오늘"이 되고
-//! 날짜순 목록이 뭉개진다. zip 자체의 시각은 2초 단위·시간대 없음이라 믿지 않고, 나노초를
+//! **수정시각을 따로 적는다.** 복원한 파일은 백업할 때의 수정시각을 그대로 갖는다 — 탐색기·다른
+//! 편집기(옵시디언)의 "수정한 날짜" 정렬, 클라우드 동기화의 "어느 쪽이 새것인가" 판단이 복원 전과 같아야
+//! 한다. (노트의 날짜 자체는 frontmatter `date`라 수정시각과 무관하다 — 아직 내려받지 않은 클라우드 파일의
+//! 임시 요약만 수정시각을 쓴다.) zip 자체의 시각은 2초 단위·시간대 없음이라 믿지 않고, 나노초를
 //! 목록 파일(`MANIFEST`)에 적어 둔다.
 //!
 //! **복원은 빈 폴더로만.** 지금 vault를 덮어쓰지 않는다 — 되돌릴 수 없는 일을 조용히 하지
@@ -57,7 +58,7 @@ fn included(rel: &str) -> bool {
         return false;
     }
     match rel.split_once('/') {
-        Some((".yamcha", rest)) => rest.starts_with("templates/"),
+        Some((".yamcha", rest)) => rest == "format.json" || rest.starts_with("templates/"),
         _ => rel != ".yamcha",
     }
 }
@@ -352,6 +353,7 @@ mod tests {
         fs::write(root.join("_attachments/회의 자료.pdf"), b"%PDF-1.4 ...").unwrap();
         fs::write(root.join("_types.json"), "[]").unwrap();
         fs::write(root.join(".yamcha/templates/daily.md"), "## 할 일\n").unwrap();
+        fs::write(root.join(".yamcha/format.json"), r#"{"version": 1}"#).unwrap();
         fs::write(root.join(".yamcha/history/Free/x.md"), "옛 판").unwrap();
         fs::write(root.join(".yamcha/trash/20260101-000000_지운것.md"), "지움").unwrap();
         fs::write(root.join(".yamcha/tmp/쓰는중.tmp"), "").unwrap();
@@ -370,7 +372,7 @@ mod tests {
     fn 백업했다가_새_폴더로_풀면_그대로_돌아온다() {
         let vault = tempfile::tempdir().unwrap();
         sample_vault(vault.path());
-        // 노트 날짜는 수정시각에서 나온다 — 옛날 시각을 박아 두고 되살아나는지 본다
+        // 수정시각을 지키는지 — 옛날 시각을 박아 두고 되살아나는지 본다
         let old = UNIX_EPOCH + Duration::from_secs(1_600_000_000) + Duration::from_nanos(123_456_789);
         File::options()
             .write(true)
@@ -384,13 +386,14 @@ mod tests {
         let zip = out.path().join("백업.zip");
         let mut seen = Vec::new();
         let made = create_backup(vault.path(), &zip, &mut |d, t| seen.push((d, t))).unwrap();
-        assert_eq!((made.files, made.notes), (6, 2));
-        assert_eq!(seen.last(), Some(&(6, 6)));
+        assert_eq!((made.files, made.notes), (7, 2));
+        assert_eq!(seen.last(), Some(&(7, 7)));
         assert!(!out.path().join("백업.zip.tmp").exists(), "임시 파일이 남았다");
 
         let dest = out.path().join("복원");
         let restored = restore_backup(&zip, &dest, &mut noop()).unwrap();
-        assert_eq!((restored.files, restored.notes), (6, 2));
+        assert_eq!((restored.files, restored.notes), (7, 2));
+        assert!(dest.join(".yamcha/format.json").exists(), "형식의 판이 따라오지 않았다");
         assert_eq!(listing(&dest), before, "내용이나 목록이 달라졌다");
         let mtime = fs::metadata(dest.join("Free/메모 하나.md")).unwrap().modified().unwrap();
         assert_eq!(nanos_of(mtime) / 1_000, nanos_of(old) / 1_000, "수정시각이 되살아나지 않았다");

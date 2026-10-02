@@ -19,6 +19,11 @@ pub enum CoreError {
     Busy(String),
     #[error("{0}")]
     Invalid(String),
+    /// 이 앱보다 새 판의 vault — 옛 앱이 새 형식을 모르고 고쳐 망가뜨리지 않게 열지 않는다 (`migrations`)
+    #[error(
+        "이 vault는 더 새 판의 YamchaMemo에서 쓰던 것입니다(형식 {found}, 이 앱은 {supported}까지). 앱을 최신 판으로 업데이트한 뒤 여세요."
+    )]
+    NewerFormat { found: u32, supported: u32 },
 }
 
 /// 흔한 파일 오류를 "무엇이 일어났고 무엇을 하면 되는지" 한 문장으로.

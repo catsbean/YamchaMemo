@@ -8,6 +8,7 @@ import MoveUndoToast from "./components/MoveUndoToast";
 import RelocateProgressDialog from "./components/RelocateProgressDialog";
 import SearchModal from "./components/SearchModal";
 import SettingsModal from "./components/SettingsModal";
+import VersionSection from "./components/settings/VersionSection";
 import ShortcutHint from "./components/ShortcutHint";
 import Sidebar from "./components/Sidebar";
 import { commands, type StorageDir } from "./bindings";
@@ -123,7 +124,13 @@ export default function App() {
             다른 위치 직접 선택…
           </button>
         </div>
-        {error && <p className="text-sm text-rose-500">{error}</p>}
+        {error && <p className="max-w-sm text-center text-sm text-rose-500">{error}</p>}
+        {/* 더 새 판의 vault라 열지 않았다 — 여기서 바로 앱을 업데이트할 수 있게 (vault 없이는 설정 창이 없다) */}
+        {error?.includes("더 새 판의 YamchaMemo") && (
+          <div className="w-full max-w-sm rounded-lg border border-neutral-200 bg-white p-4">
+            <VersionSection />
+          </div>
+        )}
       </main>
     );
   }

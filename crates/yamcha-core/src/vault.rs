@@ -349,12 +349,16 @@ pub struct Vault {
     /// 알림을 못 받은 쪽은 낡은 내용을 들고 있다가 그대로 덮어썼다.
     /// 시각이 아니라 내용으로 판단하면 그 구멍이 없다.
     self_writes: Mutex<HashMap<String, String>>,
+    /// 열 때 돈 형식 이전의 결과 (`migrations`) — 앱이 로그에 남긴다. 실패는 문장으로.
+    migration: Result<crate::migrations::MigrationReport, String>,
 }
 
 impl Vault {
     /// vault를 열고 타입 정의를 로드하고 폴더 구조를 보장한다.
     pub fn open(root: impl Into<PathBuf>) -> Result<Vault, CoreError> {
         let root: PathBuf = root.into();
+        // 더 새 판의 vault면 아무것도 만들거나 고치기 전에 거절한다 (`migrations`)
+        let found = crate::migrations::check_openable(&root)?;
         let mut types = builtin_defs();
         // 사용자 정의 타입 로드 (깨진 파일은 무시)
         let types_path = root.join(TYPES_FILE);
@@ -379,11 +383,19 @@ impl Vault {
             index_stale: Mutex::new(HashSet::new()),
             summaries: Mutex::new(HashMap::new()),
             self_writes: Mutex::new(HashMap::new()),
+            migration: Ok(Default::default()),
         };
         vault.ensure_layout()?;
-        // 옛 독서기록 파일을 책 파일로 통합 (있을 때만, 실패해도 vault 열기는 계속)
-        let _ = vault.migrate_readings();
+        // 판 차례대로 이전 (옛 독서기록 → 책 통합 등). 실패해도 vault 열기는 계속한다 —
+        // 판 표시를 못 썼으면 다음에 열 때 다시 돈다(이전은 두 번 돌아도 같다)
+        let mut vault = vault;
+        vault.migration = crate::migrations::run(&vault, found).map_err(|e| e.to_string());
         Ok(vault)
+    }
+
+    /// 열 때 돈 형식 이전의 결과 — 판이 그대로였으면 `from == to`
+    pub fn migration(&self) -> &Result<crate::migrations::MigrationReport, String> {
+        &self.migration
     }
 
     pub fn root(&self) -> &Path {
@@ -3040,7 +3052,8 @@ mod tests {
         )
         .unwrap();
 
-        // 재오픈 시 자동 마이그레이션
+        // 판 표시가 생기기 전의 vault — 다시 열면 판 0→1 이전이 합친다
+        fs::remove_file(dir.path().join(".yamcha/format.json")).unwrap();
         let v = Vault::open(dir.path()).unwrap();
         assert!(!reading_dir.join("독서기록_옛 책_저자.md").exists());
         let book = v.read_note("Books/옛 책.md").unwrap();

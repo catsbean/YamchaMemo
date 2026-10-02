@@ -14,6 +14,7 @@ pub mod history;
 pub mod index_file;
 pub mod indexer;
 pub mod korean;
+pub mod migrations;
 #[cfg(test)]
 mod lock_bench;
 pub mod mirror;
