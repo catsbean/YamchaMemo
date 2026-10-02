@@ -56,6 +56,8 @@
 - `src/lib/group.ts` — 목록 묶어 보기 규칙. `sort.ts`와 짝(정렬된 목록을 칸으로 나누기만 한다)
 - `src-tauri/src/applog.rs` — 로그 파일(앱 로그 폴더, 하루 한 파일·5MB 넘으면 .old·7일 보관, 사용자 폴더는 `~`, 패닉도 기록)
 - `src-tauri/src/commands/diag.rs` — `log_client`(화면이 남기는 줄)·`log_file_path`·`diagnostics`(진단 정보)
+- `src/lib/useIncremental.ts` — 긴 목록을 앞의 200줄만 그리고 내려가면 더 그린다(자유노트·사용자 분류·일지 목록·독서기록)
+- `src-tauri/src/scale.rs` — 1만 편 합성 vault 생성기(`--ignored`, 8-3)
 - `src/lib/log.ts` — 화면 쪽 로그. `wrapCommands`가 모든 커맨드를 감싸 실패를 이름과 함께 남긴다(같은 줄은 5초에 한 번)
 
 ---
@@ -79,6 +81,8 @@ npx vite build                      # 프론트 번들 검증
 
 수동 실행용 측정·검증 테스트 (`--ignored`, **릴리스로 돌려야 수치가 의미 있다**):
 ```bash
+# 1만 편 합성 vault 만들기 (8-3) — 저장소 밖 빈 폴더에, 약 2GB
+YAMCHA_SCALE_DIR=<빈 폴더> cargo test -p yamcha-app --lib scale_vault_gen -- --ignored --nocapture
 # 검색 규모별 응답시간 (노트 2,000건 + 첨부 155건)
 cargo test -p yamcha-core --release search_scale_bench -- --ignored --nocapture
 # 실파일 하나 추출 확인 (바이너리 hwp는 fixture로 만들 수 없다)
@@ -473,6 +477,20 @@ npx tsc --noEmit -p tsconfig.json
     커맨드에서 파일 오류를 문자열로 바꿀 땐 그 자리에서 `applog::warn`으로 원문을 남길 것.
 50. **Windows 오류 번호를 볼 땐 `cfg(windows)`로 감싼다.** `raw_os_error()` 32는 Windows에선 "다른 프로그램이 사용 중",
     macOS에선 EPIPE다. 번호로 문장을 고르는 코드가 Mac 빌드에서 엉뚱한 안내를 띄운다.
+
+
+**1만 편 실측(8-3)에서 밟은 것 (0.8.0)**
+
+51. **`path.is_dir()`은 파일 시스템을 한 번 더 묻는다.** `read_dir`로 받은 항목에는 `file_type()`이 이미 들어 있다 —
+    1만 개를 훑는 곳에서 그 차이가 400ms였다. 바로가기(심볼릭 링크)만 `is_dir()`로 따라가 본다.
+52. **"전부 열어 보기"는 작은 vault에서 보이지 않는다.** 백링크의 언급 찾기는 testvault(15편)에선 즉시였는데 1만 편에서
+    노트를 열 때마다 2.2초였다. 후보를 색인에서 좁히고 원문으로 확인하는 것이 이 앱의 방식이다(검색과 같다).
+53. **실측은 다른 식별자로 띄운 release 빌드로.** `pnpm tauri build --no-bundle --config '{"identifier":"com.yamcha.memo.scale"}'` —
+    설정·색인·로그가 `%APPDATA%\com.yamcha.memo.scale`로 갈라져 사용자 것과 섞이지 않고, 한 벌만 뜨게 막는 플러그인과도
+    부딪히지 않는다. 그 폴더의 `settings.json`에 `vaultPath`를 미리 넣어 두면 그 vault로 뜬다. `--no-bundle`이라 서명 키도
+    필요 없다. 끝나면 그 두 폴더를 지운다.
+54. **화면 측정의 "다 그렸다" 조건은 고친 뒤에도 맞는지 본다.** 나눠 그리기를 넣은 뒤 "줄이 3,000개 넘으면"을 기다리던
+    측정이 끝나지 않아 6.7초가 나왔다 — 앱이 아니라 측정이 틀렸다.
 
 ---
 

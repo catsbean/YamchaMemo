@@ -3,6 +3,8 @@ mod commands;
 mod watcher;
 #[cfg(test)]
 mod invariants;
+#[cfg(test)]
+mod scale;
 
 use std::sync::Mutex;
 
