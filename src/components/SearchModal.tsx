@@ -6,6 +6,7 @@ import { typeLabel, useVault } from "../stores/vault";
 import { isImeEnter } from "../lib/ime";
 import { openNoteWindow } from "../lib/trashWindow";
 import Modal from "./Modal";
+import { SwitchTrack } from "./Switch";
 
 /** 쿼리 토큰을 <mark>로 강조 */
 function Highlight({ text, query }: { text: string; query: string }) {
@@ -67,17 +68,7 @@ function Switch({
           : "border-neutral-300 text-neutral-600 hover:bg-neutral-100"
       }`}
     >
-      <span
-        className={`relative inline-block h-3 w-6 shrink-0 rounded-full transition-colors ${
-          on ? "bg-white/40" : "bg-neutral-300"
-        }`}
-      >
-        <span
-          className={`absolute top-0.5 h-2 w-2 rounded-full bg-white transition-all ${
-            on ? "left-3.5" : "left-0.5"
-          }`}
-        />
-      </span>
+      <SwitchTrack on={on} tone="onColor" />
       {label}
     </button>
   );
