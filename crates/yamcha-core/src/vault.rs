@@ -1447,6 +1447,50 @@ impl Vault {
         })
     }
 
+    /// 저장하지 못한 편집을 **새 자유노트로** 남긴다 — 돌려주는 것은 그 rel.
+    ///
+    /// 원래 노트는 밖에서 바뀌었거나(충돌) 쓰지 못하는 상태다. 그 파일은 건드리지 않고,
+    /// 화면에 든 글을 `제목 (저장 못 한 편집 2026-10-02 1530)`으로 따로 쓴다. 나중에
+    /// 사람이 둘을 견주어 합친다. 일지·책도 자유노트 폴더에 둔다 — 같은 날짜의 일지가
+    /// 둘이 되거나 책장에 같은 책이 두 권 꽂히지 않게.
+    /// 별칭은 뺀다(원래 노트와 같은 별칭이면 링크가 어느 쪽인지 갈린다).
+    pub fn save_conflict_copy(
+        &self,
+        rel: &str,
+        frontmatter: Value,
+        body: &str,
+    ) -> Result<String, CoreError> {
+        let mut fm = match frontmatter {
+            Value::Object(m) => m,
+            _ => Map::new(),
+        };
+        let title = fm
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                let name = rel.rsplit('/').next().unwrap_or(rel);
+                name.strip_suffix(".md").unwrap_or(name).to_string()
+            });
+        let when = Local::now().format("%Y-%m-%d %H%M");
+        let title = Self::sanitize_note_stem(&format!("{title} (저장 못 한 편집 {when})"));
+        fm.insert("title".into(), json!(title));
+        fm.remove("aliases");
+        let free = Builtin::Free.id();
+        normalize_frontmatter(&mut fm, free, &Self::today());
+        let folder = self
+            .def_by_id(free)
+            .map(|d| d.folder.clone())
+            .unwrap_or_else(|| Builtin::Free.folder().to_string());
+        let abs = self.unique_path(&self.root.join(folder), &title);
+        let content = parse::compose(&fm, body)?;
+        self.atomic_write(&abs, &content)?;
+        self.mark_index_stale(free);
+        Ok(self.rel_of(&abs))
+    }
+
     /// frontmatter 일부 필드만 갱신 (본문 유지) — 목록 뷰 인라인 편집용
     pub fn update_frontmatter(&self, rel: &str, patch: Value) -> Result<(), CoreError> {
         let note = self.read_note(rel)?;
@@ -2857,6 +2901,34 @@ mod tests {
             .unwrap();
         assert!(!forced.conflict);
         assert!(v.read_note(&rel).unwrap().body.contains("A가 쓴 본문"));
+    }
+
+    /// 저장이 막힌 편집은 원래 노트를 건드리지 않고 자유노트 사본으로 남는다 —
+    /// 일지라도 일지 폴더가 아니라(같은 날 일지가 둘이 되지 않게), 별칭 없이.
+    #[test]
+    fn 저장_못_한_편집은_사본으로_남는다() {
+        let (_d, v) = vault();
+        let rel = v.open_daily("2026-07-18").unwrap();
+        let opened = v.read_note(&rel).unwrap();
+        v.save_note(&rel, opened.frontmatter.clone(), "남이 쓴 본문").unwrap();
+
+        let mut fm = opened.frontmatter.clone();
+        fm["aliases"] = json!(["칠월"]);
+        let copy = v.save_conflict_copy(&rel, fm, "내가 친 본문").unwrap();
+
+        assert!(copy.starts_with("Free/"), "{copy}");
+        assert!(copy.contains("저장 못 한 편집"), "{copy}");
+        let saved = v.read_note(&copy).unwrap();
+        assert_eq!(saved.note_type, "free");
+        assert!(saved.body.contains("내가 친 본문"));
+        assert!(saved.frontmatter.get("aliases").is_none());
+        // 원래 일지는 남의 것 그대로
+        assert!(v.read_note(&rel).unwrap().body.contains("남이 쓴 본문"));
+
+        // 같은 분에 두 번 남겨도 앞의 사본을 덮지 않는다
+        let again = v.save_conflict_copy(&rel, opened.frontmatter, "또 친 본문").unwrap();
+        assert_ne!(again, copy);
+        assert!(v.read_note(&copy).unwrap().body.contains("내가 친 본문"));
     }
 
     /// 저장하고 나면 그 결과 지문으로 이어서 저장할 수 있어야 한다 —

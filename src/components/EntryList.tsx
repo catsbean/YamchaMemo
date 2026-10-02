@@ -44,6 +44,7 @@ export default function EntryList({
   onChanged,
   onOpenRaw,
   kinds,
+  beforeChange,
 }: {
   relPath: string;
   /** 본문 — 바뀔 때마다 목록을 다시 읽는 신호로 쓴다 */
@@ -53,6 +54,9 @@ export default function EntryList({
   onOpenRaw: () => void;
   /** 이 화면에서 고를 수 있는 종류 (수정 시 종류 변경 드롭다운) */
   kinds: CalloutKind[];
+  /** 고치기 전에 부른다 — false면 고치지 않는다. 같은 노트를 편집기에 열어 두고 아직
+   *  못 쓴 글이 있으면, 고친 결과로 화면을 갈아 끼우면서 그 글이 사라진다(`ensureSaved`). */
+  beforeChange?: () => Promise<boolean>;
 }) {
   const [blocks, setBlocks] = useState<NoteBlock[]>([]);
   const [editing, setEditing] = useState<number | null>(null);
@@ -103,6 +107,7 @@ export default function EntryList({
   ) {
     const draftText = value.trim();
     if (busy || !draftText) return;
+    if (beforeChange && !(await beforeChange())) return;
     setBusy(true);
     setError("");
     let r = await commands.updateEntry(relPath, index, expected, draftText);
@@ -133,6 +138,7 @@ export default function EntryList({
 
   async function remove(index: number, expected: string) {
     if (busy) return;
+    if (beforeChange && !(await beforeChange())) return;
     setBusy(true);
     setError("");
     const r = await commands.deleteEntry(relPath, index, expected);

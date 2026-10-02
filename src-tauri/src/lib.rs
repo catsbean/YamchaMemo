@@ -24,6 +24,7 @@ pub fn run() {
         commands::notes::note_summary,
         commands::notes::read_note,
         commands::notes::save_note,
+        commands::notes::save_conflict_copy,
         commands::notes::create_note,
         commands::notes::delete_note,
         commands::notes::open_today_daily,

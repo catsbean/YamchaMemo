@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Compartment, EditorState } from "@codemirror/state";
+import { Annotation, Compartment, EditorState } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -100,6 +100,9 @@ const pasteImage = EditorView.domEventHandlers({
 });
 
 /** 라이브 프리뷰 마크다운 에디터 (커서 위치의 문법만 노출) */
+/** 바깥 `value`를 편집기에 맞춰 넣은 트랜잭션 표시 */
+const syncFromValue = Annotation.define<boolean>();
+
 export default function Editor({
   value,
   onChange,
@@ -167,7 +170,8 @@ export default function Editor({
         wikiLinkCompletion(() => getLinkOptionsRef.current?.() ?? []),
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
+          // 바깥 값을 따라 맞춘 것은 편집이 아니다 (아래 동기화 설명)
+          if (update.docChanged && !update.transactions.some((tr) => tr.annotation(syncFromValue))) {
             onChangeRef.current(update.state.doc.toString());
           }
         }),
@@ -218,8 +222,12 @@ export default function Editor({
     if (!view) return;
     const docText = view.state.doc.toString();
     if (docText !== value) {
+      // 표시를 달아 onChange로 되돌려 보내지 않는다 — 안 그러면 디스크에서 다시 읽은 내용이
+      // "사용자가 고쳤다"(dirty)로 되돌아와, 자동저장이 같은 내용을 또 쓰고(편집 기록·동기화
+      // 소란) 그사이 밖에서 한 번 더 바뀌면 충돌 경고까지 띄웠다.
       view.dispatch({
         changes: { from: 0, to: docText.length, insert: value },
+        annotations: syncFromValue.of(true),
       });
     }
   }, [value]);

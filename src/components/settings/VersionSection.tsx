@@ -91,9 +91,16 @@ export default function VersionSection() {
   }
 
   async function install(update: Update) {
-    // 설치하면 앱이 닫힌다 — 쓰던 글부터 저장한다
-    const vault = useVault.getState();
-    if (vault.dirty) await vault.saveCurrent();
+    // 설치하면 앱이 닫힌다 — 쓰던 글부터 저장한다. 못 쓰면 사본으로 남기고, 그마저 못 하면 멈춘다
+    const rescued = await useVault.getState().rescueBeforeExit();
+    if (!rescued.ok) {
+      setPhase({
+        kind: "error",
+        message: "열린 노트를 저장하지 못해 설치를 멈췄습니다. 노트 위 안내에서 먼저 정리한 뒤 다시 누르세요.",
+      });
+      return;
+    }
+    if (rescued.copy) logClient("warn", `업데이트 전 저장 실패 — 사본으로 남김: ${rescued.copy}`);
     let got = 0;
     let total: number | null = null;
     setPhase({ kind: "downloading", update, got, total });

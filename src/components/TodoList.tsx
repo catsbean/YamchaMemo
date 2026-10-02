@@ -18,6 +18,7 @@ export default function TodoList({
   big,
   onToggleBig,
   kinds = [],
+  beforeChange,
 }: {
   relPath: string;
   /** 본문 — 바뀔 때마다 목록을 다시 읽는 신호 */
@@ -35,6 +36,9 @@ export default function TodoList({
   onToggleBig?: () => void;
   /** 기록으로 옮길 때 고를 수 있는 콜아웃 종류 */
   kinds?: CalloutKind[];
+  /** 고치기 전에 부른다 — false면 고치지 않는다. 같은 노트를 편집기에 열어 두고 아직
+   *  못 쓴 글이 있으면, 고친 결과로 화면을 갈아 끼우면서 그 글이 사라진다(`ensureSaved`). */
+  beforeChange?: () => Promise<boolean>;
 }) {
   const [todos, setTodos] = useState<NoteTodo[]>([]);
   const [editing, setEditing] = useState<number | null>(null);
@@ -58,6 +62,7 @@ export default function TodoList({
   async function add(value?: string) {
     const text = (value ?? addIme.value()).trim();
     if (busy || !text) return;
+    if (beforeChange && !(await beforeChange())) return;
     setBusy(true);
     setError("");
     const r = await commands.appendDailyEntry(relPath, "todo", text);
@@ -85,6 +90,7 @@ export default function TodoList({
     run: () => Promise<{ status: "ok"; data: NoteContent } | { status: "error"; error: string }>,
   ) {
     if (busy) return;
+    if (beforeChange && !(await beforeChange())) return;
     setBusy(true);
     setError("");
     const r = await run();

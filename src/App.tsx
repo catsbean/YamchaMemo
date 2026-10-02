@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask, message } from "@tauri-apps/plugin-dialog";
 import Dashboard from "./components/Dashboard";
 import EditorPane from "./components/EditorPane";
 import LinkPickerDialog from "./components/LinkPickerDialog";
@@ -64,10 +65,25 @@ export default function App() {
     getCurrentWindow()
       .onCloseRequested(async (e) => {
         e.preventDefault();
+        // 저장하지 못한 글은 사본으로 남기고 닫는다. 사본마저 못 쓰면 닫을지 묻는다 —
+        // 예전엔 저장 결과와 상관없이 닫아서, 충돌·실패 중이던 글이 그대로 사라졌다.
+        const rescued = await useVault
+          .getState()
+          .rescueBeforeExit()
+          .catch(() => ({ ok: false, copy: null }));
+        if (!rescued.ok) {
+          const go = await ask(
+            "열린 노트를 저장하지 못했고 사본도 남기지 못했습니다.\n그래도 닫으면 마지막으로 저장한 뒤에 친 글이 사라집니다. 닫을까요?",
+            { title: "저장하지 못한 글", kind: "warning", okLabel: "닫기", cancelLabel: "돌아가기" },
+          ).catch(() => true);
+          if (!go) return;
+        } else if (rescued.copy) {
+          await message(
+            `열린 노트를 저장하지 못해, 친 글을 자유노트에 사본으로 남겼습니다.\n\n${rescued.copy}`,
+            { title: "사본으로 저장", kind: "info" },
+          ).catch(() => {});
+        }
         try {
-          if (useVault.getState().dirty) {
-            await useVault.getState().saveCurrent();
-          }
           // 제목 없이 닫는 노트에 이름을 붙여 준다
           const rel = useVault.getState().pendingTitleRel;
           if (rel) await commands.autoTitleNote(rel);

@@ -228,6 +228,23 @@ pub(crate) fn save_note_in(
     Ok(r)
 }
 
+/// 저장하지 못한 편집을 자유노트 사본으로 남긴다 → 사본의 rel.
+/// 원래 노트가 밖에서 바뀌었거나 쓸 수 없을 때, 화면을 떠나거나 창을 닫기 전에 부른다.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn save_conflict_copy(
+    state: State<'_, AppState>,
+    rel_path: String,
+    frontmatter: serde_json::Value,
+    body: String,
+) -> Result<String, String> {
+    with_ctx(&state, |c| {
+        let rel = c.vault.save_conflict_copy(&rel_path, frontmatter, &body)?;
+        refresh_note(c, &rel)?;
+        Ok(rel)
+    })
+}
+
 /// 노트 생성 → 생성된 rel 경로 반환
 #[tauri::command(async)]
 #[specta::specta]

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { ask, message, open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   commands,
   type DailyKind,
@@ -38,6 +38,10 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
   // 내가 편집하는 사이에 파일이 밖에서 바뀌었다 — 자동저장을 멈추고 사용자에게 묻는다
   const [externalChanged, setExternalChanged] = useState(false);
   const [error, setError] = useState("");
+  // 저장이 실패했다(충돌이 아닌 실패 — 디스크·권한 등). 친 글은 화면에 그대로 두고 띠로 알린다.
+  // 예전엔 `error`에 넣어서 편집기 자리가 오류 문장으로 통째로 바뀌었다 — 글이 안 보이니
+  // 사람은 창을 닫았고, 닫기는 결과와 상관없이 창을 없앴다.
+  const [saveError, setSaveError] = useState("");
   const [schemas, setSchemas] = useState<TypeDef[]>([]);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   // 서식 툴바가 명령을 실행하려면 CodeMirror 뷰가 필요하다
@@ -65,6 +69,10 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
   // "그 사이 더 친 글자가 없다"는 뜻이라 그때만 dirty를 내린다.
   // ref라 동기적으로 갱신되므로 await 사이에 낀 편집을 놓치지 않는다.
   const revRef = useRef(0);
+  // 디스크에 닿은 마지막 편집 번호. revRef와 같으면 못 쓴 글이 없다(ref라 await 사이에도 정확하다).
+  const cleanRevRef = useRef(0);
+  // 마지막 저장 바퀴가 막혔다(충돌·실패) — "더 친 글자가 있어 아직 dirty"와 가른다
+  const blockedRef = useRef(false);
   const markEdited = useCallback(() => {
     revRef.current += 1;
     setDirty(true);
@@ -183,16 +191,21 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
         forceRef.current ? null : stampRef.current,
       );
       if (r.status !== "ok") {
-        setError(r.error);
+        resaveRef.current = false;
+        blockedRef.current = true;
+        setSaveError(r.error);
         return; // 실패했으면 같은 오류로 계속 돌지 않는다
       }
       if (r.data.conflict) {
         // 아무것도 쓰지 않았다. 친 글자는 그대로 두고 사용자에게 고르게 한다.
         resaveRef.current = false;
+        blockedRef.current = true;
         setExternalChanged(true);
         return;
       }
       forceRef.current = false;
+      cleanRevRef.current = rev;
+      setSaveError("");
       // 다음 저장이 자기 자신과 충돌하지 않도록 방금 쓴 내용의 지문으로 갈아 끼운다
       stampRef.current = r.data.stamp;
       // 저장하는 동안 더 친 글자가 있으면 dirty를 유지한다 (그래야 자동저장이 다시 돈다)
@@ -217,12 +230,38 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
     await p;
   }, [runSave]);
 
+  /** 쓰던 글이 디스크에 닿았나 — 메인 창 스토어의 ensureSaved와 같은 규칙.
+   *  저장하는 사이 더 친 글자가 있어 남은 것은 막힌 게 아니다 — 한두 번 더 돈다. */
+  const flushed = useCallback(async () => {
+    for (let i = 0; i < 3 && revRef.current !== cleanRevRef.current; i++) {
+      blockedRef.current = false;
+      await save();
+      if (blockedRef.current) return false;
+    }
+    return revRef.current === cleanRevRef.current;
+  }, [save]);
+
+  /** 화면의 글을 자유노트 사본으로 남긴다 → 사본의 rel (실패하면 null, 까닭은 띠에) */
+  const writeCopy = useCallback(async () => {
+    const { note, body, intro, isBook } = latest.current;
+    if (!note) return null;
+    const full = isBook ? composeBookBody(intro, body) : body;
+    const r = await commands.saveConflictCopy(relPath, note.frontmatter, full);
+    if (r.status !== "ok") {
+      setSaveError(r.error);
+      return null;
+    }
+    await notifyOtherWindows([r.data]);
+    return r.data;
+  }, [relPath]);
+
   /** 일지 빠른 입력 — 메인 창 스토어와 같은 3단계로 갱신 유실을 막는다.
    *  ① 내 편집분 먼저 저장 → ② 백엔드가 최신 파일에 추가 → ③ 결과로 로컬 상태 교체 */
   const appendDailyEntry = useCallback(
     async (kind: string, text: string) => {
       if (!note) return;
-      if (dirtyRef.current) await save();
+      // 덧붙인 결과로 화면을 갈아 끼운다 — 못 쓴 글이 있으면 덮이므로 멈춘다(띠가 고르게 한다)
+      if (!(await flushed())) return;
       const isBuiltin = kind === "todo" || kind === "log" || kind === "feeling";
       const r = isBuiltin
         ? await commands.appendDailyEntry(relPath, kind as DailyKind, text)
@@ -233,11 +272,13 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
       }
       // 일지는 책이 아니므로 본문 전체가 곧 편집 대상이다
       setNote(r.data);
+      stampRef.current = r.data.stamp;
       setBody(r.data.body);
+      cleanRevRef.current = revRef.current;
       setDirty(false);
       await notifyOtherWindows([relPath]);
     },
-    [note, save, relPath],
+    [note, flushed, relPath],
   );
 
   /** 밖에서 바뀐 내용을 가져온다 (내 편집분은 버린다) */
@@ -255,9 +296,20 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
         ? splitBookBody(r.data.body).records
         : r.data.body,
     );
+    cleanRevRef.current = revRef.current;
     setDirty(false);
     setExternalChanged(false);
+    setSaveError("");
   }, [relPath]);
+
+  /** [사본으로 저장] — 원래 노트는 그대로 두고 화면의 글을 따로 남긴 뒤, 원래 것을 다시 읽는다 */
+  const saveCopy = useCallback(async () => {
+    const copy = await writeCopy();
+    if (!copy) return;
+    await reload();
+    // 사본은 또 한 창에 띄운다 — 원래 노트와 나란히 놓고 옮겨 적게
+    await openNoteWindow(copy);
+  }, [writeCopy, reload]);
 
   // 자동 저장 (3초 유휴) — 메인 창과 같은 감각으로.
   // 밖에서 바뀐 걸 아직 못 본 상태면 멈춘다 (남의 저장을 덮지 않는다)
@@ -277,11 +329,24 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
       .onCloseRequested(async (e) => {
         if (!dirty) return;
         e.preventDefault();
-        try {
-          await save();
-        } finally {
-          await getCurrentWindow().destroy();
+        // 저장하지 못한 글은 사본으로 남기고 닫는다. 사본마저 못 쓰면 닫을지 묻는다 —
+        // 예전엔 저장 결과와 상관없이 창을 없애서, 충돌·실패 중이던 글이 그대로 사라졌다.
+        if (!(await flushed().catch(() => false))) {
+          const copy = await writeCopy().catch(() => null);
+          if (copy) {
+            await message(
+              `이 노트를 저장하지 못해, 친 글을 자유노트에 사본으로 남겼습니다.\n\n${copy}`,
+              { title: "사본으로 저장", kind: "info" },
+            ).catch(() => {});
+          } else {
+            const go = await ask(
+              "이 노트를 저장하지 못했고 사본도 남기지 못했습니다.\n그래도 닫으면 마지막으로 저장한 뒤에 친 글이 사라집니다. 닫을까요?",
+              { title: "저장하지 못한 글", kind: "warning", okLabel: "닫기", cancelLabel: "돌아가기" },
+            ).catch(() => true);
+            if (!go) return;
+          }
         }
+        await getCurrentWindow().destroy();
       })
       .then((fn) => {
         if (disposed) fn();
@@ -291,7 +356,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
       disposed = true;
       unlisten?.();
     };
-  }, [dirty, save]);
+  }, [dirty, flushed, writeCopy]);
 
   const title = relPath.split("/").pop()?.replace(/\.md$/, "") ?? "";
 
@@ -408,6 +473,38 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
               }}
             >
               내 편집 유지
+            </button>
+            {dirty && (
+              <button
+                className="rounded px-2 py-1 text-xs text-amber-700 hover:bg-amber-100"
+                onClick={saveCopy}
+                title="원래 노트는 그대로 두고, 화면의 글을 자유노트에 따로 남깁니다"
+              >
+                사본으로 저장
+              </button>
+            )}
+          </span>
+        </div>
+      )}
+
+      {!externalChanged && saveError && dirty && (
+        <div className="flex items-center justify-between gap-3 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          <span className="min-w-0">
+            ⚠️ 저장하지 못했습니다 — 친 글은 화면에 그대로 있습니다.
+            <span className="ml-1 text-xs text-amber-700">({saveError})</span>
+          </span>
+          <span className="flex shrink-0 gap-2">
+            <button
+              className="rounded bg-amber-600 px-2.5 py-1 text-xs text-white hover:bg-amber-500"
+              onClick={save}
+            >
+              다시 저장
+            </button>
+            <button
+              className="rounded px-2 py-1 text-xs text-amber-700 hover:bg-amber-100"
+              onClick={saveCopy}
+            >
+              사본으로 저장
             </button>
           </span>
         </div>

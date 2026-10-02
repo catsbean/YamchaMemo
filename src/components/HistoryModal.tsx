@@ -60,6 +60,10 @@ export default function HistoryModal({
 
   async function restore() {
     if (!selected || busy) return;
+    // 못 쓴 글이 있으면 되돌리기 전에 멈춘다 — 저장되면 그 글도 기록에 한 판으로 남는다
+    if (useVault.getState().current?.rel_path === relPath && !(await useVault.getState().ensureSaved())) {
+      return;
+    }
     setBusy(true);
     const r = await commands.restoreHistory(relPath, selected);
     setBusy(false);

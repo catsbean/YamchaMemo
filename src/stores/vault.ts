@@ -237,7 +237,7 @@ interface VaultStore {
    *  단축키는 편집기가 열려 있어도 눌리는데 만들기 창은 대시보드가 들고 있어서,
    *  편집기를 닫고 신호만 올린 뒤 대시보드가 받도록 한다. */
   createTick: number;
-  requestCreate(): void;
+  requestCreate(): Promise<void>;
   /** vault에 저장된 사용자 정의 콜아웃 */
   callouts: CalloutDef[];
   refreshCallouts(): Promise<void>;
@@ -272,10 +272,22 @@ interface VaultStore {
   refreshSchemas(): Promise<void>;
   setLayout(mode: LayoutMode): Promise<void>;
   openNote(relPath: string): Promise<void>;
-  closeNote(): void;
+  closeNote(): Promise<void>;
   setBody(body: string): void;
   setFrontmatter(fm: FmObject): void;
   saveCurrent(): Promise<void>;
+  /** 쓰던 글이 디스크에 닿았나 — 저장을 불러 보고, 그래도 못 썼으면(충돌·실패) false.
+   *  화면을 떠나거나 current를 디스크 내용으로 갈아 끼우는 일은 모두 이걸 먼저 거친다.
+   *  false면 하던 일을 멈춘다 — 글은 화면에 그대로 있고, 편집기 위 안내가 고르게 한다. */
+  ensureSaved(): Promise<boolean>;
+  /** 마지막 저장이 실패한 까닭 (충돌이 아닌 실패 — 디스크·권한 등). 성공하면 지운다 */
+  saveFailed: string | null;
+  /** 저장하지 못한 편집을 자유노트 사본으로 남기고, 원래 노트는 디스크 내용으로 다시 읽는다.
+   *  사본의 rel을 돌려준다(실패하면 null) — 화면이 그 사본을 옆 창에 띄운다. */
+  saveCopyOfCurrent(): Promise<string | null>;
+  /** 창을 닫거나 업데이트로 앱이 꺼지기 전 — 저장해 보고, 못 쓰면 사본으로 남긴다.
+   *  ok가 false면 사본마저 못 썼다(닫아도 될지 사람에게 물어야 한다). */
+  rescueBeforeExit(): Promise<{ ok: boolean; copy: string | null }>;
   createNote(t: string, title: string, fields: FmObject): Promise<void>;
   /** 제목 없이 바로 만들어 편집기를 연다 (제목은 편집기 제목칸에서 입력) */
   createUntitled(t: string): Promise<void>;
@@ -333,6 +345,9 @@ interface VaultStore {
   flushMirrors(): Promise<void>;
   resolveMirrorConflict(target: string, rel: string, pull: boolean): Promise<void>;
   reloadCurrent(): Promise<void>;
+  /** 파일 감시가 알려 온 바뀐 노트들 — 열린 노트면 다시 읽거나(손대지 않았을 때)
+   *  경고를 띄운다(고치던 중일 때). 시험이 이벤트 없이 부를 수 있게 메서드로 둔다. */
+  onExternalChange(changed: string[]): Promise<void>;
   dismissExternalChange(): void;
   updateFrontmatter(relPath: string, patch: FmObject): Promise<void>;
   /** 전체 재색인 후 색인된 노트 수 반환 (실패 시 undefined) */
@@ -349,6 +364,17 @@ let saving: Promise<void> | null = null;
 // 저장이 도는 사이에 또 저장 요청이 들어왔다 — 끝나면 한 번 더 돈다.
 // 예전에는 그냥 무시했는데, 그러면 저장 중에 누른 Ctrl+S가 아무 일도 하지 않았다.
 let resaveRequested = false;
+// 마지막 저장 바퀴가 막혔다(충돌이거나 쓰기 실패). ensureSaved가 "더 친 글자가 있어
+// 아직 dirty"인 것과 "못 써서 dirty"인 것을 가른다.
+let lastSaveBlocked = false;
+// 저장이 막혀 하던 일을 멈췄다는 알림들 — 막힘이 풀리면(저장됨·다시 읽음·사본) 함께 걷는다
+const BLOCKED_CONFLICT =
+  "이 노트가 밖에서 바뀌어 저장하지 못했습니다 — 편집기 위 안내에서 어떻게 할지 고르세요.";
+const BLOCKED_FAILED =
+  "이 노트를 저장하지 못해 그대로 머뭅니다 — 편집기 위 안내에서 어떻게 할지 고르세요.";
+const BLOCKED_RELOCATE =
+  "이 노트를 저장하지 못해 옮기지 않았습니다 — 편집기 위 안내에서 먼저 고르세요.";
+const BLOCKED_NOTICES = [BLOCKED_CONFLICT, BLOCKED_FAILED, BLOCKED_RELOCATE];
 // 제목 변경·분류 이동으로 옮겨 가는 중인 옛 경로. 파일 감시가 이 경로의 "사라짐"을
 // 외부 수정으로 알려 오면 무시한다 — 내가 옮긴 것이지 남이 지운 것이 아니다.
 let relocatingFrom: string | null = null;
@@ -455,21 +481,29 @@ export const useVault = create<VaultStore>((set, get) => {
       await guard(async () => {
         // 읽어 온 뒤에 파일이 바뀌었으면 쓰지 않는다 — 다른 창·다른 기기의 수정을
         // 조용히 덮는 것을 막는다. "내 편집 유지"를 고른 뒤에는 일부러 덮어쓴다.
-        const result = unwrap(
-          await commands.saveNote(
-            cur.rel_path,
-            cur.frontmatter,
-            cur.body,
-            get().forceOverwrite ? null : cur.stamp,
-          ),
+        const r = await commands.saveNote(
+          cur.rel_path,
+          cur.frontmatter,
+          cur.body,
+          get().forceOverwrite ? null : cur.stamp,
         );
+        if (r.status !== "ok") {
+          // 못 썼다. 친 글자는 그대로 두고 편집기 위에 알린다 — 같은 오류로 계속 돌지 않는다
+          resaveRequested = false;
+          lastSaveBlocked = true;
+          set({ saveFailed: r.error });
+          return;
+        }
+        const result = r.data;
         if (result.conflict) {
           // 아무것도 쓰지 않았다. 친 글자는 그대로 두고 사용자에게 고르게 한다.
           resaveRequested = false;
+          lastSaveBlocked = true;
           set({ externalChanged: true });
           return;
         }
-        set({ forceOverwrite: false });
+        set({ forceOverwrite: false, saveFailed: null });
+        clearBlockedNotice();
         // 다음 저장이 자기 자신과 충돌하지 않도록 방금 쓴 내용의 지문으로 갈아 끼운다
         const saved = get().current;
         if (saved?.rel_path === cur.rel_path) {
@@ -493,6 +527,43 @@ export const useVault = create<VaultStore>((set, get) => {
         afterWrite();
       });
     } while (resaveRequested);
+  }
+
+  /** 저장을 불러 보고 그래도 못 썼으면 false (`ensureSaved` 설명).
+   *  저장하는 사이 더 친 글자가 있어 dirty가 남은 경우는 막힌 게 아니다 — 한두 번 더 돈다. */
+  async function flushCurrent(): Promise<boolean> {
+    for (let i = 0; i < 3 && get().dirty; i++) {
+      lastSaveBlocked = false;
+      await get().saveCurrent();
+      if (lastSaveBlocked) break;
+    }
+    if (!get().dirty) return true;
+    set({ error: get().externalChanged ? BLOCKED_CONFLICT : BLOCKED_FAILED });
+    return false;
+  }
+
+  /** 밖에서 바뀐 노트를 다시 읽되, **읽는 사이 사용자가 친 글자는 덮지 않는다.**
+   *  예전엔 reloadCurrent를 그대로 불렀다 — 읽기 왕복 사이에 친 글자가 디스크 내용에 덮여
+   *  경고도 없이 사라졌다(클라우드 동기화가 파일을 건드리는 순간 치기 시작하면 난다).
+   *  그 사이 화면이 바뀌었으면 손대지 않고, 고치던 중이면 경고만 띄운다. */
+  async function reloadIfUntouched(seen: NoteContent) {
+    const r = await commands.readNote(seen.rel_path);
+    if (r.status !== "ok") return;
+    const now = get().current;
+    // 저장이 지문만 갈아 끼운 건 손댄 게 아니다 — 내용이 그대로인지로 본다
+    const untouched =
+      now?.rel_path === seen.rel_path && now.body === seen.body && now.frontmatter === seen.frontmatter;
+    if (!untouched) {
+      if (now?.rel_path === seen.rel_path && get().dirty) set({ externalChanged: true });
+      return;
+    }
+    set({ current: r.data, dirty: false, externalChanged: false, forceOverwrite: false, saveFailed: null });
+  }
+
+  /** 막힘이 풀렸다 — 그 때문에 띄운 알림을 걷는다(다른 오류 알림은 그대로) */
+  function clearBlockedNotice() {
+    const e = get().error;
+    if (e && BLOCKED_NOTICES.includes(e)) set({ error: null });
   }
 
   /** `saving` 자물쇠를 쥔 채로 fn을 돈다 — rename·move처럼 rel_path가 바뀌는
@@ -535,7 +606,15 @@ export const useVault = create<VaultStore>((set, get) => {
     relocatingFrom = cur.rel_path;
     try {
       return await withSaveLock(async () => {
-        if (get().dirty) await runSave();
+        if (get().dirty) {
+          lastSaveBlocked = false;
+          await runSave();
+          // 밖에서 바뀐 노트를 옮기면 새 자리에 내 글이 남의 것을 덮어쓴다 — 먼저 고르게 한다
+          if (lastSaveBlocked) {
+            set({ error: BLOCKED_RELOCATE });
+            return undefined;
+          }
+        }
         return await guard(async () => {
           const moved = unwrap(await withRelocation(relocate));
           const fresh = unwrap(await commands.readNote(moved));
@@ -616,6 +695,7 @@ export const useVault = create<VaultStore>((set, get) => {
 
   /** vault 경로를 열고 설정에 저장한 뒤 목록·스키마를 새로고침한다 */
   async function activateVault(vaultPath: string) {
+    if (!(await flushCurrent())) return;
     unwrap(await commands.setVault(vaultPath));
     const store = await settings();
     await store.set("vaultPath", vaultPath);
@@ -633,7 +713,7 @@ export const useVault = create<VaultStore>((set, get) => {
   return {
     nav: "home",
     async setNav(t) {
-      if (get().dirty) await get().saveCurrent();
+      if (!(await flushCurrent())) return;
       await autoTitleLeaving();
       set({ nav: t, current: null, dirty: false });
       const store = await settings();
@@ -649,6 +729,7 @@ export const useVault = create<VaultStore>((set, get) => {
     current: null,
     openSeq: 0,
     dirty: false,
+    saveFailed: null,
     error: null,
     initialized: false,
     layout: "three",
@@ -788,8 +869,8 @@ export const useVault = create<VaultStore>((set, get) => {
     async toggleTodoItem(item) {
       // 그 노트를 편집기에 열어 둔 채라면 먼저 저장한다 —
       // 안 그러면 자동저장이 방금 바꾼 체크를 옛 내용으로 덮는다
-      if (get().current?.rel_path === item.rel_path && get().dirty) {
-        await get().saveCurrent();
+      if (get().current?.rel_path === item.rel_path && !(await flushCurrent())) {
+        return;
       }
       await guard(async () => {
         const updated = unwrap(
@@ -815,8 +896,8 @@ export const useVault = create<VaultStore>((set, get) => {
       await guard(async () => {
         // 오늘 일지가 없으면 여기서 만들어진다
         const rel = unwrap(await commands.openTodayDaily());
-        if (get().current?.rel_path === rel && get().dirty) {
-          await get().saveCurrent();
+        if (get().current?.rel_path === rel && !(await flushCurrent())) {
+          return;
         }
         const updated = unwrap(
           await commands.appendDailyEntry(rel, "todo", value),
@@ -836,7 +917,9 @@ export const useVault = create<VaultStore>((set, get) => {
       await store.set("dailyKindOrder", order);
     },
     createTick: 0,
-    requestCreate() {
+    async requestCreate() {
+      // 새로 만들기 창을 띄우며 열린 노트를 내려놓는다 — 못 쓴 글이 있으면 멈춘다
+      if (!(await flushCurrent())) return;
       set({ current: null, createTick: get().createTick + 1 });
     },
     theme: "light",
@@ -1099,26 +1182,27 @@ export const useVault = create<VaultStore>((set, get) => {
         await get().refresh();
         const cur = get().current;
         if (cur && e.payload.includes(cur.rel_path) && !get().dirty) {
-          await get().reloadCurrent();
+          await reloadIfUntouched(cur);
         }
       });
 
       // 외부 파일 변경 이벤트 (파일 감시)
-      await listen<string[]>("vault-external-change", async (e) => {
-        const changed = e.payload;
-        await get().refresh();
-        const cur = get().current;
-        // 제목을 바꾸는 왕복이 길면(링크 치환·재색인) 그 사이 감시가 옛 경로의 사라짐을
-        // 알려 온다. 화면은 아직 옛 경로를 들고 있어서, 안 거르면 "외부에서 수정됨"
-        // 경고가 뜨거나 없는 파일을 다시 읽으려다 오류가 난다.
-        if (cur && changed.includes(cur.rel_path) && cur.rel_path !== relocatingFrom) {
-          if (get().dirty) {
-            set({ externalChanged: true });
-          } else {
-            await get().reloadCurrent();
-          }
+      await listen<string[]>("vault-external-change", (e) => get().onExternalChange(e.payload));
+    },
+
+    async onExternalChange(changed) {
+      await get().refresh();
+      const cur = get().current;
+      // 제목을 바꾸는 왕복이 길면(링크 치환·재색인) 그 사이 감시가 옛 경로의 사라짐을
+      // 알려 온다. 화면은 아직 옛 경로를 들고 있어서, 안 거르면 "외부에서 수정됨"
+      // 경고가 뜨거나 없는 파일을 다시 읽으려다 오류가 난다.
+      if (cur && changed.includes(cur.rel_path) && cur.rel_path !== relocatingFrom) {
+        if (get().dirty) {
+          set({ externalChanged: true });
+        } else {
+          await reloadIfUntouched(cur);
         }
-      });
+      }
     },
 
     async chooseVault() {
@@ -1149,7 +1233,7 @@ export const useVault = create<VaultStore>((set, get) => {
 
     async openVaultAt(path) {
       // 쓰던 글이 있으면 먼저 저장한다 — activateVault가 열린 글을 내려놓는다
-      if (get().dirty) await get().saveCurrent();
+      if (!(await flushCurrent())) return;
       await guard(async () => {
         await activateVault(path.replace(/[\\/]+$/, ""));
         set({ nav: "home" });
@@ -1202,8 +1286,7 @@ export const useVault = create<VaultStore>((set, get) => {
     },
 
     async openNote(relPath) {
-      const { dirty } = get();
-      if (dirty) await get().saveCurrent();
+      if (!(await flushCurrent())) return;
       // 다른 노트로 넘어가는 경우에만 자동 명명 (자기 자신을 다시 여는 건 제외)
       if (get().pendingTitleRel && get().pendingTitleRel !== relPath) {
         await autoTitleLeaving();
@@ -1219,6 +1302,7 @@ export const useVault = create<VaultStore>((set, get) => {
           // 외부 수정 경고는 앞 노트 얘기다 — 새로 읽은 노트에 남겨 두지 않는다
           externalChanged: false,
           forceOverwrite: false,
+          saveFailed: null,
         });
         const store = await settings();
         await store.set("lastNav", note.note_type);
@@ -1226,9 +1310,10 @@ export const useVault = create<VaultStore>((set, get) => {
       });
     },
 
-    closeNote() {
+    async closeNote() {
+      if (!(await flushCurrent())) return;
       autoTitleLeaving();
-      set({ current: null, dirty: false });
+      set({ current: null, dirty: false, externalChanged: false, saveFailed: null });
       settings().then((s) => s.delete("lastNoteRel"));
     },
 
@@ -1258,7 +1343,42 @@ export const useVault = create<VaultStore>((set, get) => {
       await saving;
     },
 
+    ensureSaved: () => flushCurrent(),
+
+    async saveCopyOfCurrent() {
+      const cur = get().current;
+      if (!cur) return null;
+      const copy = await guard(async () => {
+        const copy = unwrap(
+          await commands.saveConflictCopy(cur.rel_path, cur.frontmatter, cur.body),
+        );
+        // 사본에 남았으니 화면의 글은 놓아도 된다 — 원래 노트를 디스크 내용으로 다시 읽는다.
+        // 원래 파일을 못 읽어도(지워졌거나 잠김) 글은 이미 사본에 있다.
+        set({ dirty: false, externalChanged: false, forceOverwrite: false, saveFailed: null });
+        clearBlockedNotice();
+        const fresh = await commands.readNote(cur.rel_path);
+        if (fresh.status === "ok" && get().current?.rel_path === cur.rel_path) {
+          set({ current: fresh.data });
+        }
+        await get().refresh();
+        afterWrite();
+        return copy;
+      });
+      return copy ?? null;
+    },
+
+    async rescueBeforeExit() {
+      if (await flushCurrent()) return { ok: true, copy: null };
+      const cur = get().current;
+      if (!cur) return { ok: true, copy: null };
+      const r = await commands.saveConflictCopy(cur.rel_path, cur.frontmatter, cur.body);
+      if (r.status !== "ok") return { ok: false, copy: null };
+      set({ dirty: false });
+      return { ok: true, copy: r.data };
+    },
+
     async createNote(t, title, fields) {
+      if (!(await flushCurrent())) return;
       await guard(async () => {
         const rel = unwrap(await commands.createNote(t, title, fields));
         await get().refresh();
@@ -1273,6 +1393,7 @@ export const useVault = create<VaultStore>((set, get) => {
     },
 
     async createUntitled(t) {
+      if (!(await flushCurrent())) return;
       await guard(async () => {
         const rel = unwrap(await commands.createNote(t, "", {}));
         await get().refresh();
@@ -1283,14 +1404,15 @@ export const useVault = create<VaultStore>((set, get) => {
     },
 
     async openDailyDate(date) {
+      if (!(await flushCurrent())) return;
       await guard(async () => {
-        if (get().dirty) await get().saveCurrent();
         const rel = unwrap(await commands.openDaily(date));
         await get().refresh();
         await get().openNote(rel);
       });
     },
     async openToday() {
+      if (!(await flushCurrent())) return;
       await guard(async () => {
         const rel = unwrap(await commands.openTodayDaily());
         await get().refresh();
@@ -1312,7 +1434,8 @@ export const useVault = create<VaultStore>((set, get) => {
     async appendEntry(kind, text) {
       const cur = get().current;
       if (!cur) return;
-      if (get().dirty) await get().saveCurrent();
+      // 디스크에 덧붙인 결과로 화면을 갈아 끼운다 — 못 쓴 글이 있으면 덮이므로 멈춘다
+      if (!(await flushCurrent())) return;
       await guard(async () => {
         const updated = unwrap(
           await commands.appendReadingEntry(cur.rel_path, kind, text),
@@ -1326,7 +1449,8 @@ export const useVault = create<VaultStore>((set, get) => {
     async appendDaily(kind, text) {
       const cur = get().current;
       if (!cur) return;
-      if (get().dirty) await get().saveCurrent();
+      // 디스크에 덧붙인 결과로 화면을 갈아 끼운다 — 못 쓴 글이 있으면 덮이므로 멈춘다
+      if (!(await flushCurrent())) return;
       await guard(async () => {
         const updated = unwrap(
           await commands.appendDailyEntry(cur.rel_path, kind, text),
@@ -1341,7 +1465,8 @@ export const useVault = create<VaultStore>((set, get) => {
     async appendCalloutKind(label, text) {
       const cur = get().current;
       if (!cur) return;
-      if (get().dirty) await get().saveCurrent();
+      // 디스크에 덧붙인 결과로 화면을 갈아 끼운다 — 못 쓴 글이 있으면 덮이므로 멈춘다
+      if (!(await flushCurrent())) return;
       await guard(async () => {
         const updated = unwrap(
           await commands.appendCallout(cur.rel_path, label, text),
@@ -1590,7 +1715,9 @@ export const useVault = create<VaultStore>((set, get) => {
           dirty: false,
           externalChanged: false,
           forceOverwrite: false,
+          saveFailed: null,
         });
+        clearBlockedNotice();
       });
     },
 
@@ -1598,6 +1725,7 @@ export const useVault = create<VaultStore>((set, get) => {
       // 남의 수정을 알고도 내 것을 쓰겠다는 선택이다 — 다음 저장은 검사를 건너뛴다.
       // (안 그러면 충돌 검사에 계속 막혀 경고만 되풀이된다)
       set({ externalChanged: false, forceOverwrite: true });
+      clearBlockedNotice();
     },
 
     async reindexAll() {

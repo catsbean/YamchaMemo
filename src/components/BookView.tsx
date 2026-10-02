@@ -3,6 +3,7 @@ import { commands, type NoteContent, type TagSuggestion } from "../bindings";
 import ListInput from "./ListInput";
 import TagSuggestionRow from "./TagSuggestionRow";
 import { fmObject, useVault } from "../stores/vault";
+import SaveProblemBanner from "./SaveProblemBanner";
 import { composeBookBody, splitBookBody } from "../lib/book";
 import { linkOptions } from "../lib/resolveLink";
 import {
@@ -43,6 +44,7 @@ export default function BookView({ note }: { note: NoteContent }) {
     updateFrontmatter,
     openNote,
     reloadCurrent,
+    ensureSaved,
   } = useVault();
   const [showIntro, setShowIntro] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -103,14 +105,15 @@ export default function BookView({ note }: { note: NoteContent }) {
     setBody(composeBookBody(curIntro, newRecords));
   }
 
+  // 저장하지 못한 글이 있으면 closeNote가 멈춘다 (편집기 위 안내가 고르게 한다)
   async function backToList() {
-    if (dirty) await saveCurrent();
-    closeNote();
+    await closeNote();
   }
 
   /** 정보 바 인라인 편집: 기록 편집이 있으면 먼저 저장 → frontmatter 패치 → 현재 노트 리로드 */
   async function patchInfo(patch: Record<string, string | number | string[] | null>) {
-    if (dirty) await saveCurrent();
+    // 못 쓴 기록이 있는 채로 고치면 다시 읽을 때 그 기록이 사라진다
+    if (!(await ensureSaved())) return;
     await updateFrontmatter(note.rel_path, patch);
     await openNote(note.rel_path);
   }
@@ -179,6 +182,8 @@ export default function BookView({ note }: { note: NoteContent }) {
           )}
         </div>
       </header>
+
+      <SaveProblemBanner />
 
       {/* 책 정보 바 (인라인 편집) */}
       <div className="flex items-start gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-2">
@@ -277,6 +282,7 @@ export default function BookView({ note }: { note: NoteContent }) {
               await reloadCurrent();
               await notifyOtherWindows([note.rel_path]);
             }}
+            beforeChange={ensureSaved}
             onOpenRaw={() => setRawEdit(true)}
             kinds={BOOK_KINDS}
           />

@@ -85,6 +85,18 @@ async saveNote(relPath: string, frontmatter: JsonValue, body: string, expectedSt
 }
 },
 /**
+ * 저장하지 못한 편집을 자유노트 사본으로 남긴다 → 사본의 rel.
+ * 원래 노트가 밖에서 바뀌었거나 쓸 수 없을 때, 화면을 떠나거나 창을 닫기 전에 부른다.
+ */
+async saveConflictCopy(relPath: string, frontmatter: JsonValue, body: string) : Promise<Result<string, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_conflict_copy", { relPath, frontmatter, body }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 노트 생성 → 생성된 rel 경로 반환
  */
 async createNote(noteType: string, title: string, fields: JsonValue) : Promise<Result<string, string>> {

@@ -49,8 +49,8 @@ window
 /** 화면이 무너졌을 때의 마지막 저장 — 메인 창은 스토어가 현재 노트를 들고 있다.
  *  (노트 창은 3초 자동 저장이 따로 돌아 여기서 손댈 것이 없다) */
 async function rescueMainWindow() {
-  const s = useVault.getState();
-  if (s.dirty) await s.saveCurrent();
+  // 저장하지 못하면 사본으로라도 남긴다 — 화면이 무너졌으니 고를 수가 없다
+  await useVault.getState().rescueBeforeExit();
 }
 
 // 렌더 밖에서 터진 오류(비동기 호출 등)는 경계가 못 잡는다 — 조용히 사라지지 않게

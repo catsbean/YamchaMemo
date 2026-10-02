@@ -13,6 +13,7 @@ import { openNoteWindow } from "../lib/trashWindow";
 import ContextMenu from "./ContextMenu";
 import BacklinksPanel from "./BacklinksPanel";
 import BookView from "./BookView";
+import SaveProblemBanner from "./SaveProblemBanner";
 import DailyEntryBar from "./DailyEntryBar";
 import EntryList from "./EntryList";
 import TodoList from "./TodoList";
@@ -51,7 +52,7 @@ export default function EditorPane() {
     moveCurrent,
     externalChanged,
     reloadCurrent,
-    dismissExternalChange,
+    ensureSaved,
     pendingTitleRel,
     clearPendingTitle,
     appendDaily,
@@ -101,9 +102,9 @@ export default function EditorPane() {
     setRawEdit((v) => !v);
   }
 
+  // 저장하지 못한 글이 있으면 closeNote가 멈춘다 (편집기 위 안내가 고르게 한다)
   async function backToList() {
-    if (dirty) await saveCurrent();
-    closeNote();
+    await closeNote();
   }
 
   // 방금 만든 노트는 제목칸을 열어 둔다 (제목을 미리 묻지 않고 바로 만들었으므로)
@@ -381,28 +382,7 @@ export default function EditorPane() {
         </div>
       </header>
 
-      {externalChanged && (
-        <div className="flex items-center justify-between bg-amber-50 px-4 py-2 text-sm text-amber-800">
-          <span>
-            ⚠️ 이 노트가 외부(다른 앱)에서 수정되었습니다. 지금 저장하면 외부
-            수정이 덮어써집니다.
-          </span>
-          <span className="flex shrink-0 gap-2">
-            <button
-              className="rounded bg-amber-600 px-2.5 py-1 text-xs text-white hover:bg-amber-500"
-              onClick={reloadCurrent}
-            >
-              다시 불러오기
-            </button>
-            <button
-              className="rounded px-2 py-1 text-xs text-amber-600 hover:bg-amber-100"
-              onClick={dismissExternalChange}
-            >
-              내 편집 유지
-            </button>
-          </span>
-        </div>
-      )}
+      <SaveProblemBanner />
 
       <FrontmatterForm
         // 노트를 갈아탈 때 폼을 통째로 새로 짓는다. 태그·별칭 칸은 치던 글자를
@@ -435,6 +415,7 @@ export default function EditorPane() {
                 relPath={current.rel_path}
                 body={current.body}
                 onChanged={onStructuredChange}
+                beforeChange={ensureSaved}
                 onOpenRaw={() => setRawEdit(true)}
                 kinds={DAILY_KINDS}
               />
@@ -451,6 +432,7 @@ export default function EditorPane() {
                 relPath={current.rel_path}
                 body={current.body}
                 onChanged={onStructuredChange}
+                beforeChange={ensureSaved}
                 showAddInput={false}
                 kinds={DAILY_KINDS}
                 big={todoBig}
