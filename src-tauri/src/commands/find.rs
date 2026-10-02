@@ -35,7 +35,7 @@ pub fn get_backlinks_detailed(
 ) -> Result<Vec<Backlink>, String> {
     with_ctx(&state, |c| {
         let vault = &c.vault;
-        c.indexer.backlinks_detailed(vault, &rel_path)
+        c.indexer.backlinks_detailed(vault, Some(&c.search), &rel_path)
     })
 }
 

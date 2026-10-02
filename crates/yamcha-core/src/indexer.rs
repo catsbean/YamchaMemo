@@ -100,6 +100,9 @@ fn context_lines(body: &str, needles: &[&str], max: usize) -> Vec<String> {
     out
 }
 
+/// 아직 잇지 않은 언급을 찾을 때 원문으로 확인해 볼 후보의 상한 (`backlinks_detailed`)
+const MENTION_CANDIDATES: usize = 300;
+
 pub struct Indexer {
     conn: Connection,
 }
@@ -333,13 +336,16 @@ impl Indexer {
         collect_refs(rows)
     }
 
-    /// 백링크 + 문맥. 링크로 이어진 노트가 먼저, 제목만 언급한 노트가 그 뒤.
+    /// 백링크 + 문맥. 링크로 이어진 노트가 먼저, 제목만 언급한 노트가 그 뒤(최신부터).
     ///
-    /// 언급(unlinked) 후보는 인덱스에 있는 노트를 훑어 제목 문자열을 찾는다.
-    /// 제목이 너무 짧으면(1글자) 아무 데나 걸리므로 건너뛴다.
+    /// 언급(unlinked) 후보는 **검색 색인에서 제목이 들어 있을 수 있는 노트만** 받아(`search`) 원문으로
+    /// 확인한다. 예전에는 vault의 모든 노트를 열어 보았다 — 1만 편에서 노트를 열 때마다 2.2초,
+    /// 그동안 상태 잠금을 쥐어 자동저장까지 기다렸다(8-3 실측). 후보는 많아야 `MENTION_CANDIDATES`편.
+    /// `search`가 없으면(시험) 예전처럼 전부 훑는다. 제목이 1글자면 아무 데나 걸리므로 건너뛴다.
     pub fn backlinks_detailed(
         &self,
         vault: &Vault,
+        search: Option<&crate::SearchEngine>,
         rel_path: &str,
     ) -> Result<Vec<Backlink>, CoreError> {
         let parsed = vault.parse_full(rel_path)?;
@@ -371,17 +377,27 @@ impl Indexer {
 
         // 아직 잇지 않은 언급
         if title.chars().count() >= 2 {
-            let mut stmt = self
+            let candidates: Vec<String> = match search {
+                Some(s) => s.candidates(&title, MENTION_CANDIDATES)?,
+                None => {
+                    let mut stmt = self.conn.prepare("SELECT path FROM notes")?;
+                    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+                    rows.collect::<Result<_, _>>()?
+                }
+            };
+            let mut by_ref = self
                 .conn
-                .prepare("SELECT path, type, title, date FROM notes ORDER BY date DESC")?;
-            let rows = stmt.query_map([], Self::note_ref_row)?;
+                .prepare("SELECT path, type, title, date FROM notes WHERE path = ?1")?;
             let title_needle = [title.as_str()];
-            for r in rows {
-                let n = r?;
-                if n.rel_path == rel_path || linked_paths.contains(&n.rel_path) {
+            let mut mentions: Vec<Backlink> = Vec::new();
+            for path in candidates {
+                if path == rel_path || linked_paths.contains(&path) {
                     continue;
                 }
-                let Ok(p) = vault.parse_full(&n.rel_path) else {
+                let Some(n) = by_ref.query_row([&path], Self::note_ref_row).optional()? else {
+                    continue;
+                };
+                let Ok(p) = vault.parse_full(&path) else {
                     continue;
                 };
                 // 링크로 이미 이어져 있으면 언급이 아니다
@@ -392,12 +408,14 @@ impl Indexer {
                 if contexts.is_empty() {
                     continue;
                 }
-                out.push(Backlink {
+                mentions.push(Backlink {
                     note: n,
                     contexts,
                     unlinked: true,
                 });
             }
+            mentions.sort_by(|a, b| b.note.date.cmp(&a.note.date));
+            out.extend(mentions);
         }
         Ok(out)
     }
@@ -716,7 +734,7 @@ mod tests {
         assert_eq!(paths, vec![memo.clone()], "별칭·경로 링크를 놓쳤다");
 
         // 문맥도 함께 — 별칭으로 쓴 줄이 나와야 한다
-        let detailed = idx.backlinks_detailed(&v, &target).unwrap();
+        let detailed = idx.backlinks_detailed(&v, None, &target).unwrap();
         let b = detailed.iter().find(|b| b.note.rel_path == memo).unwrap();
         assert!(!b.unlinked);
         assert!(!b.contexts.is_empty(), "별칭 링크의 문맥을 못 찾았다");
@@ -773,7 +791,7 @@ mod tests {
             idx.upsert(&v.parse_full(rel).unwrap()).unwrap();
         }
 
-        let bl = idx.backlinks_detailed(&v, &book).unwrap();
+        let bl = idx.backlinks_detailed(&v, None, &book).unwrap();
 
         let l = bl.iter().find(|b| b.note.rel_path == linked).unwrap();
         assert!(!l.unlinked);
@@ -787,6 +805,49 @@ mod tests {
         assert!(!bl.iter().any(|b| b.note.rel_path == other));
         // 자기 자신은 들어가지 않는다
         assert!(!bl.iter().any(|b| b.note.rel_path == book));
+    }
+
+    /// 검색 색인으로 후보를 좁혀도 전부 훑을 때와 결과가 같다 — 띄어쓰기가 다른 말("클린코드"),
+    /// 한 낱말만 든 노트("클린 아키텍처"), 이미 링크한 노트는 언급으로 잡히지 않는다.
+    #[test]
+    fn 언급은_검색_색인으로_좁혀도_전부_훑을_때와_같다() {
+        let (_d, v, mut idx) = setup();
+        let si = tempfile::tempdir().unwrap();
+        let mut search = crate::SearchEngine::open(si.path()).unwrap();
+        let book = v.create_note("book", "클린 코드", json!({})).unwrap();
+        let mut rels = vec![book.clone()];
+        for (title, body) in [
+            ("감상", "오늘 [[클린 코드]]를 읽었다"),
+            ("잡담", "어제 클린 코드 이야기를 들었다"),
+            ("다른 잡담", "회의에서 클린 코드를 또 말했다\n\n둘째 줄"),
+            ("붙여 씀", "클린코드는 붙여 쓰면 다른 말이다"),
+            ("반만", "클린 아키텍처를 읽었다"),
+            ("상관없음", "관계 없는 내용"),
+        ] {
+            let rel = v.create_note("free", title, json!({})).unwrap();
+            v.save_note(&rel, json!({}), body).unwrap();
+            rels.push(rel);
+        }
+        for rel in &rels {
+            let p = v.parse_full(rel).unwrap();
+            idx.upsert(&p).unwrap();
+            search.upsert(&p).unwrap();
+        }
+        search.commit().unwrap();
+
+        let full = idx.backlinks_detailed(&v, None, &book).unwrap();
+        let fast = idx.backlinks_detailed(&v, Some(&search), &book).unwrap();
+        let summary = |bl: &[Backlink]| {
+            let mut v: Vec<(String, bool, Vec<String>)> =
+                bl.iter().map(|b| (b.note.title.clone(), b.unlinked, b.contexts.clone())).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(summary(&fast), summary(&full));
+        let mentioned: Vec<&str> =
+            fast.iter().filter(|b| b.unlinked).map(|b| b.note.title.as_str()).collect();
+        assert_eq!(mentioned.len(), 2, "{mentioned:?}");
+        assert!(mentioned.contains(&"잡담") && mentioned.contains(&"다른 잡담"));
     }
 
     #[test]

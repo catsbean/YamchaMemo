@@ -422,6 +422,21 @@ impl SearchEngine {
         Ok(out)
     }
 
+    /// 이 말이 (제목·본문·태그·별칭 어딘가에) **들어 있을 수 있는** 노트의 경로 — 발췌 없이, 많아야 `limit`.
+    ///
+    /// 정확 검색과 같은 쿼리라 그 말이 실제로 들어 있는 노트는 빠짐없이 걸린다(모든 n그램이 있어야
+    /// 하므로). 거꾸로 걸린 노트에 그 말이 이어서 있는지는 부르는 쪽이 원문으로 확인한다.
+    /// 백링크의 "아직 잇지 않은 언급"이 vault 전체를 읽지 않으려고 쓴다.
+    pub fn candidates(&self, text: &str, limit: usize) -> Result<Vec<String>, CoreError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(vec![]);
+        }
+        let searcher = self.reader.searcher();
+        let raws = self.fetch(&searcher, self.strict_query(text), &SearchFilter::default(), limit)?;
+        Ok(raws.into_iter().map(|r| r.rel_path).collect())
+    }
+
     /// 지금까지의 검색 — 모든 n그램을 AND로 묶는다
     fn strict_query(&self, query: &str) -> Box<dyn Query> {
         let mut parser = QueryParser::for_index(
