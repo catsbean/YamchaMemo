@@ -17,6 +17,23 @@ pub const MAX_PDF_BYTES: u64 = 50 * 1024 * 1024;
 pub const MAX_CONTAINER_BYTES: u64 = 300 * 1024 * 1024;
 /// 한 문서에서 색인할 최대 문자 수
 pub const MAX_CHARS: usize = 200_000;
+/// 한 스트림·항목을 풀어 읽을 상한. 압축은 작은 파일을 수 GB로 부풀릴 수 있어서(압축 폭탄)
+/// 상한 없이 끝까지 풀면 첨부 하나가 메모리를 다 먹는다. 본문 텍스트는 이보다 한참 작고,
+/// 색인은 어차피 `MAX_CHARS`에서 자른다 — 넘는 뒷부분은 버리고 앞부분은 쓴다.
+pub const MAX_INFLATED: u64 = 64 * 1024 * 1024;
+
+/// `r`을 `MAX_INFLATED`까지만 읽는다 (넘는 뒷부분은 버린다)
+#[cfg(feature = "docs")]
+fn read_capped(r: impl std::io::Read, out: &mut Vec<u8>) -> std::io::Result<()> {
+    use std::io::Read;
+    r.take(MAX_INFLATED).read_to_end(out).map(|_| ())
+}
+
+/// 모은 글이 상한을 넘었나 — 바이트 길이로 먼저 거른다(글자 수 세기는 매번 전체를 훑는다)
+#[cfg(feature = "docs")]
+fn over_limit(out: &str) -> bool {
+    out.len() > MAX_CHARS && out.chars().count() > MAX_CHARS
+}
 
 /// 추출 결과 상태. 캐시에 그대로 저장해 다음 실행에서 재시도를 건너뛴다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,7 +242,7 @@ fn hwp(path: &Path) -> Extracted {
             };
             scan_records(&data, &mut out);
         }
-        if out.chars().count() > MAX_CHARS {
+        if over_limit(&out) {
             break;
         }
     }
@@ -360,10 +377,9 @@ fn view_text_section(raw: &[u8], doc_info: &[u8], compressed: bool) -> Option<St
 
 #[cfg(feature = "docs")]
 fn read_stream(comp: &mut cfb::CompoundFile<std::fs::File>, name: &str) -> Option<Vec<u8>> {
-    use std::io::Read;
-    let mut s = comp.open_stream(name).ok()?;
+    let s = comp.open_stream(name).ok()?;
     let mut b = Vec::new();
-    s.read_to_end(&mut b).ok()?;
+    read_capped(s, &mut b).ok()?;
     Some(b)
 }
 
@@ -371,11 +387,10 @@ fn read_stream(comp: &mut cfb::CompoundFile<std::fs::File>, name: &str) -> Optio
 /// 문서가 조금 깨졌어도 읽히는 데까지는 검색되는 게 낫다.
 #[cfg(feature = "docs")]
 fn inflate(data: &[u8]) -> Option<Vec<u8>> {
-    use std::io::Read;
     let mut out = Vec::new();
-    let _ = flate2::read::DeflateDecoder::new(data).read_to_end(&mut out);
+    let _ = read_capped(flate2::read::DeflateDecoder::new(data), &mut out);
     if out.is_empty() {
-        let _ = flate2::read::ZlibDecoder::new(data).read_to_end(&mut out);
+        let _ = read_capped(flate2::read::ZlibDecoder::new(data), &mut out);
     }
     (!out.is_empty()).then_some(out)
 }
@@ -448,7 +463,6 @@ fn decode_para_text(body: &[u8], out: &mut String) {
 /// zip 안의 본문 XML에서 태그를 걷어내고 문단마다 줄을 바꾼다.
 #[cfg(feature = "docs")]
 fn zip_xml(path: &Path, entry_prefixes: &[&str], para_tag: &str) -> Extracted {
-    use std::io::Read;
     let Ok(file) = std::fs::File::open(path) else {
         return Extracted::fail("열기 실패");
     };
@@ -467,15 +481,17 @@ fn zip_xml(path: &Path, entry_prefixes: &[&str], para_tag: &str) -> Extracted {
     let close = format!("</{para_tag}>");
     let mut out = String::new();
     for name in names {
-        let Ok(mut f) = zip.by_name(&name) else {
+        let Ok(f) = zip.by_name(&name) else {
             continue;
         };
-        let mut xml = String::new();
-        if f.read_to_string(&mut xml).is_err() {
+        let mut raw = Vec::new();
+        if read_capped(f, &mut raw).is_err() {
             continue;
         }
+        // 상한에서 잘렸으면 마지막 글자가 깨질 수 있다 — 깨진 자리만 바꿔 쓴다
+        let xml = String::from_utf8_lossy(&raw);
         strip_xml(&xml, &close, &mut out);
-        if out.chars().count() > MAX_CHARS {
+        if over_limit(&out) {
             break;
         }
     }
@@ -519,6 +535,12 @@ fn strip_xml(xml: &str, para_close: &str, out: &mut String) {
 #[cfg(feature = "docs")]
 fn sheets(path: &Path) -> Extracted {
     use calamine::Reader;
+    // calamine은 안에서 풀어 읽어 상한을 걸 수 없다 — zip(xlsx·xlsm)이면 풀린 크기를 미리 본다
+    if let Some(total) = declared_unzipped_size(path) {
+        if total > MAX_INFLATED * 4 {
+            return Extracted::fail("풀면 너무 큰 파일 — 읽지 않음");
+        }
+    }
     let mut wb = match calamine::open_workbook_auto(path) {
         Ok(w) => w,
         Err(e) => {
@@ -547,11 +569,23 @@ fn sheets(path: &Path) -> Extracted {
                 }
             }
         }
-        if out.chars().count() > MAX_CHARS {
+        if over_limit(&out) {
             break;
         }
     }
     Extracted::ok(out)
+}
+
+/// zip이면 모든 항목의 풀린 크기 합(헤더에 적힌 값). zip이 아니면 None.
+#[cfg(feature = "docs")]
+fn declared_unzipped_size(path: &Path) -> Option<u64> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut zip = zip::ZipArchive::new(file).ok()?;
+    let mut total = 0u64;
+    for i in 0..zip.len() {
+        total = total.saturating_add(zip.by_index_raw(i).ok()?.size());
+    }
+    Some(total)
 }
 
 // ---------- PDF ----------
@@ -610,6 +644,70 @@ mod tests {
 
     fn dir() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    /// 압축 폭탄: 작게 압축된 것이 상한보다 크게 풀려도 상한까지만 읽는다
+    #[test]
+    #[cfg(feature = "docs")]
+    fn 압축_폭탄은_상한까지만_푼다() {
+        let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
+        let chunk = vec![0u8; 1024 * 1024];
+        for _ in 0..(MAX_INFLATED / (1024 * 1024) + 16) {
+            enc.write_all(&chunk).unwrap();
+        }
+        let bomb = enc.finish().unwrap();
+        assert!(bomb.len() < 1024 * 1024, "작게 압축돼야 폭탄이다: {}", bomb.len());
+        let out = inflate(&bomb).unwrap();
+        assert_eq!(out.len() as u64, MAX_INFLATED);
+    }
+
+    /// docx 안의 XML이 상한보다 커도 앞부분은 읽고, 상한에서 잘린 글자 때문에 실패하지 않는다
+    #[test]
+    #[cfg(feature = "docs")]
+    fn 큰_xml은_앞부분만_읽는다() {
+        let d = dir();
+        let p = d.path().join("큰.docx");
+        let f = std::fs::File::create(&p).unwrap();
+        let mut z = zip::ZipWriter::new(f);
+        let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        z.start_file("word/document.xml", opts).unwrap();
+        z.write_all("<w:p><w:t>맨 앞 문단</w:t></w:p>".as_bytes()).unwrap();
+        // 한글(3바이트)로 채워 상한 자리가 글자 한가운데 오게 한다
+        let filler = "<w:p><w:t>".to_string() + &"가".repeat(100_000) + "</w:t></w:p>";
+        let mut written = 0u64;
+        while written <= MAX_INFLATED {
+            z.write_all(filler.as_bytes()).unwrap();
+            written += filler.len() as u64;
+        }
+        z.finish().unwrap();
+
+        let r = extract(&p);
+        assert_eq!(r.status, Status::Ok);
+        assert!(r.text.starts_with("맨 앞 문단"));
+        assert_eq!(r.text.chars().count(), MAX_CHARS);
+    }
+
+    /// xlsx는 안에서 풀려서 상한을 걸 수 없다 — 풀린 크기가 너무 크게 적혀 있으면 읽지 않는다
+    #[test]
+    #[cfg(feature = "docs")]
+    fn 풀면_너무_큰_xlsx는_읽지_않는다() {
+        let d = dir();
+        let p = d.path().join("폭탄.xlsx");
+        let f = std::fs::File::create(&p).unwrap();
+        let mut z = zip::ZipWriter::new(f);
+        let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .large_file(true);
+        z.start_file("xl/worksheets/sheet1.xml", opts).unwrap();
+        let chunk = vec![b' '; 1024 * 1024];
+        for _ in 0..(MAX_INFLATED * 4 / (1024 * 1024) + 8) {
+            z.write_all(&chunk).unwrap();
+        }
+        z.finish().unwrap();
+        assert!(std::fs::metadata(&p).unwrap().len() < 4 * 1024 * 1024);
+
+        let r = extract(&p);
+        assert!(matches!(r.status, Status::Failed(ref m) if m.contains("너무 큰")), "{:?}", r.status);
     }
 
     #[test]
