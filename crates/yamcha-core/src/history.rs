@@ -256,12 +256,33 @@ pub fn move_note(vault: &Vault, from: &str, to: &str) -> Result<(), CoreError> {
 /// 앱 밖(옵시디언·탐색기)에서 지운 파일은 `delete_note`를 거치지 않아 스냅샷만 남는다.
 /// 예전 버전이 쌓아 둔 것도 여기서 함께 걷힌다. vault를 열 때 한 번 돈다.
 pub fn prune_orphans(vault: &Vault, live: &[String]) -> Result<u32, CoreError> {
+    prune_orphans_older_than(vault, live, ORPHAN_KEEP)
+}
+
+/// 주인 없는 기록이라도 마지막 스냅샷이 이보다 새것이면 남긴다.
+///
+/// "목록에 없다"가 "지워졌다"는 뜻이 아닐 수 있다 — 클라우드 동기화가 막 시작돼 한 폴더가 아직
+/// 안 보이거나, 연결이 끊긴 드라이브라 잠깐 못 읽으면 그 폴더의 모든 노트가 목록에서 빠진다. 예전엔
+/// 그 순간 그 노트들의 편집 기록을 통째로 지웠다. 휴지통처럼 한동안 두었다가 걷는다.
+pub const ORPHAN_KEEP: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 60 * 60);
+
+/// `prune_orphans`의 몸통 (시험이 기간을 줄 수 있게 뗐다)
+pub fn prune_orphans_older_than(
+    vault: &Vault,
+    live: &[String],
+    keep: std::time::Duration,
+) -> Result<u32, CoreError> {
     let root = vault.root().join(".yamcha").join("history");
     if !root.is_dir() {
         return Ok(0);
     }
+    // 목록이 통째로 비었으면 vault를 못 읽은 것이다 — 아무것도 지우지 않는다
+    if live.is_empty() {
+        return Ok(0);
+    }
     let alive: std::collections::HashSet<String> =
         live.iter().map(|rel| rel.replace(['/', '\\'], "__")).collect();
+    let now = std::time::SystemTime::now();
     let mut removed = 0u32;
     for entry in fs::read_dir(&root)?.flatten() {
         let path = entry.path();
@@ -269,7 +290,20 @@ pub fn prune_orphans(vault: &Vault, live: &[String]) -> Result<u32, CoreError> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        if !alive.contains(&name) && fs::remove_dir_all(&path).is_ok() {
+        if alive.contains(&name) {
+            continue;
+        }
+        // 가장 새 스냅샷의 시각 — 못 읽으면 새것으로 본다(지우지 않는 쪽)
+        let newest = fs::read_dir(&path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.metadata().and_then(|m| m.modified()).ok())
+            .max();
+        let old_enough = newest
+            .map(|t| now.duration_since(t).map(|age| age >= keep).unwrap_or(false))
+            .unwrap_or(true); // 빈 폴더
+        if old_enough && fs::remove_dir_all(&path).is_ok() {
             removed += 1;
         }
     }
@@ -487,11 +521,29 @@ mod tests {
             .into_iter()
             .map(|f| f.rel_path)
             .collect();
-        assert_eq!(prune_orphans(&v, &live).unwrap(), 1);
+        // 갓 생긴 고아는 남긴다 — 잠깐 못 읽은 것일 수 있다
+        assert_eq!(prune_orphans(&v, &live).unwrap(), 0);
+        assert!(!list(&v, &rel).unwrap().is_empty(), "갓 생긴 고아를 지웠다");
+        // 한동안 지나면 걷는다
+        assert_eq!(prune_orphans_older_than(&v, &live, std::time::Duration::ZERO).unwrap(), 1);
         assert!(list(&v, &rel).unwrap().is_empty(), "고아 스냅샷이 남았다");
         assert!(
             !list(&v, &other).unwrap().is_empty(),
             "살아 있는 노트의 이력까지 지웠다"
         );
+    }
+
+    /// 한 폴더를 잠깐 못 읽었다고(동기화 전·끊긴 드라이브) 그 노트들의 기록을 지우지 않는다.
+    /// 목록이 통째로 비면 아예 손대지 않는다.
+    #[test]
+    fn 잠깐_안_보이는_노트의_기록은_지우지_않는다() {
+        let (_d, v, rel) = setup();
+        snapshot(&v, &rel, None, EAGER).unwrap();
+        // 목록에서 빠졌다(파일은 그대로)
+        assert_eq!(prune_orphans(&v, &["Free/다른 노트.md".to_string()]).unwrap(), 0);
+        assert!(!list(&v, &rel).unwrap().is_empty());
+        // 목록이 비었다 — 기간이 지났어도 지우지 않는다
+        assert_eq!(prune_orphans_older_than(&v, &[], std::time::Duration::ZERO).unwrap(), 0);
+        assert!(!list(&v, &rel).unwrap().is_empty());
     }
 }
