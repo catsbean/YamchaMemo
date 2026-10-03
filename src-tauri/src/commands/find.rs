@@ -43,18 +43,22 @@ pub fn get_backlinks_detailed(
 /// `to`가 이미 쓰이는 태그면 그게 곧 병합이다.
 #[tauri::command(async)]
 #[specta::specta]
-pub fn rename_tag(state: State<'_, AppState>, from: String, to: String) -> Result<u32, String> {
-    with_ctx(&state, |c| {
-        let changed = c.vault.rename_tag(&from, &to)?;
-        // 바뀐 노트만 다시 색인한다 (전체 재색인은 비싸다)
-        for rel in &changed {
-            let rel = rel.clone();
-            let parsed = c.vault.parse_full(&rel)?;
-            c.indexer.upsert(&parsed)?;
-            c.search.upsert(&parsed)?;
+pub fn rename_tag(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> Result<yamcha_core::TagRename, String> {
+    with_ctx_write(&state, |c| {
+        let r = c.vault.rename_tag(&from, &to)?;
+        // 바뀐 노트만 다시 색인한다 (전체 재색인은 비싸다). 신원까지 남기고 잠깐 막혀도 다시
+        // 해 보는 길(`refresh_notes`)로 — 예전엔 신원을 안 남겨 다음 시작에 또 읽었다
+        if let Err(e) = refresh_notes(c, r.changed.iter().map(String::as_str)) {
+            crate::applog::warn(format!("태그 이름 바꾸기 뒤 색인 실패 — 다음 시작에 다시 읽는다: {e}"));
         }
-        c.search.commit()?;
-        Ok(changed.len() as u32)
+        if !r.skipped.is_empty() {
+            crate::applog::warn(format!("태그 이름 바꾸기 — 건너뛴 노트: {}", r.skipped.join(", ")));
+        }
+        Ok(r)
     })
 }
 

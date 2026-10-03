@@ -128,11 +128,21 @@ export default function TagBrowser() {
     }
     setEditing(null);
     setSelected(target);
+    const n = r.data.changed.length;
     setNote(
       merging
-        ? `#${from}을 #${target}에 합쳤습니다 (노트 ${r.data}개)`
-        : `#${from} → #${target} (노트 ${r.data}개)`,
+        ? `#${from}을 #${target}에 합쳤습니다 (노트 ${n}개)`
+        : `#${from} → #${target} (노트 ${n}개)`,
     );
+    if (r.data.skipped.length > 0) {
+      // 깨졌거나 다른 프로그램이 쥔 노트 — 고치려면 홈의 점검 화면으로
+      setError(
+        `노트 ${r.data.skipped.length}개는 읽거나 쓰지 못해 그대로 두었습니다: ${r.data.skipped
+          .slice(0, 3)
+          .map((p) => p.split("/").pop()?.replace(/\.md$/, ""))
+          .join(", ")}${r.data.skipped.length > 3 ? " 외" : ""} — 점검 화면에서 확인하세요.`,
+      );
+    }
     await refresh(); // 목록·태그를 다시 읽는다
   }
 

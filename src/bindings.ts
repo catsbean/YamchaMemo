@@ -364,7 +364,7 @@ async getTags() : Promise<Result<TagCount[], string>> {
  * 태그 이름 바꾸기 / 병합 → 바뀐 노트 수.
  * `to`가 이미 쓰이는 태그면 그게 곧 병합이다.
  */
-async renameTag(from: string, to: string) : Promise<Result<number, string>> {
+async renameTag(from: string, to: string) : Promise<Result<TagRename, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("rename_tag", { from, to }) };
 } catch (e) {
@@ -1572,6 +1572,19 @@ genre: string | null;
  * 이미 달린 태그 — 후보에서 제외한다
  */
 current_tags: string[] }
+/**
+ * 태그 이름 바꾸기의 결과
+ */
+export type TagRename = { 
+/**
+ * 고쳐 쓴 노트
+ */
+changed: string[]; 
+/**
+ * 읽거나 쓰지 못해 건너뛴 노트 — frontmatter가 깨졌거나 다른 프로그램이 쥐고 있다.
+ * 예전엔 이런 노트 하나에서 `?`로 멈춰, 앞의 노트만 바뀐 채 나머지는 옛 이름으로 남았다.
+ */
+skipped: string[] }
 /**
  * 태그 후보 하나
  */

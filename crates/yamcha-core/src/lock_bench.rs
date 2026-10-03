@@ -130,7 +130,7 @@ mod bench {
 
         // ④ 태그 이름 바꾸기 (전 노트를 고쳐 쓴다)
         let t = Instant::now();
-        let changed = v.rename_tag("독서", "읽기").unwrap().len();
+        let changed = v.rename_tag("독서", "읽기").unwrap().changed.len();
         println!("④ rename_tag (전 노트 재작성): {}ms, {changed}편", t.elapsed().as_millis());
 
         // ⑤ 노트 한 편 저장 — 자동저장이 3초마다 치르는 값. 여기가 제일 중요하다.

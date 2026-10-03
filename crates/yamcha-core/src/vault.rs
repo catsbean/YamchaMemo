@@ -95,6 +95,16 @@ impl Relocation {
     }
 }
 
+/// 태그 이름 바꾸기의 결과
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct TagRename {
+    /// 고쳐 쓴 노트
+    pub changed: Vec<String>,
+    /// 읽거나 쓰지 못해 건너뛴 노트 — frontmatter가 깨졌거나 다른 프로그램이 쥐고 있다.
+    /// 예전엔 이런 노트 하나에서 `?`로 멈춰, 앞의 노트만 바뀐 채 나머지는 옛 이름으로 남았다.
+    pub skipped: Vec<String>,
+}
+
 /// 휴지통에서 되살린 결과
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct TrashRestore {
@@ -1200,11 +1210,11 @@ impl Vault {
     /// 태그는 두 곳에 있다: frontmatter의 `tags` 배열과 본문의 인라인 `#태그`.
     /// 둘 다 고쳐야 이름이 진짜 바뀐다.
     /// `to`가 이미 있는 태그면 그게 곧 **병합**이다 (중복은 합쳐진다).
-    pub fn rename_tag(&self, from: &str, to: &str) -> Result<Vec<String>, CoreError> {
+    pub fn rename_tag(&self, from: &str, to: &str) -> Result<TagRename, CoreError> {
         let from = from.trim();
         let to = to.trim();
         if from.is_empty() || to.is_empty() || from == to {
-            return Ok(Vec::new());
+            return Ok(TagRename::default());
         }
         // 태그에 쓸 수 없는 글자를 막는다 (공백·# 등이 들어가면 다시 못 찾는다)
         if to.chars().any(|c| !(c.is_alphanumeric() || "/-_".contains(c))) {
@@ -1213,10 +1223,20 @@ impl Vault {
             ));
         }
 
-        let mut changed = Vec::new();
-        for summary in self.list_notes()? {
-            let rel = summary.rel_path.clone();
-            let parsed = self.parse_full(&rel)?;
+        let mut out = TagRename::default();
+        // 요약 목록(list_notes)이 아니라 파일 목록을 훑는다 — 요약은 frontmatter가 깨진 노트를 빼서,
+        // 그런 노트는 옛 태그를 단 채 아무 말 없이 남았다. 이제 건너뛴 것으로 알린다.
+        // 내려받지 않은 클라우드 파일은 열면 다운로드가 끝날 때까지 멈추므로 열지 않는다.
+        for file in self.list_note_files()? {
+            let rel = file.rel_path;
+            if file.offline {
+                out.skipped.push(rel);
+                continue;
+            }
+            let Ok(parsed) = self.parse_full(&rel) else {
+                out.skipped.push(rel);
+                continue;
+            };
             let mut fm = match serde_json::from_str::<Value>(&parsed.frontmatter_json) {
                 Ok(Value::Object(m)) => m,
                 _ => Map::new(),
@@ -1249,11 +1269,13 @@ impl Vault {
             let body_hit = body != parsed.body;
 
             if fm_hit || body_hit {
-                self.save_note(&rel, Value::Object(fm), &body)?;
-                changed.push(rel);
+                match self.save_note(&rel, Value::Object(fm), &body) {
+                    Ok(()) => out.changed.push(rel),
+                    Err(_) => out.skipped.push(rel),
+                }
             }
         }
-        Ok(changed)
+        Ok(out)
     }
 
     /// 요약 하나 — 파일이 그대로면 캐시에서, 아니면 열어서 만들고 캐시에 넣는다.
@@ -4341,7 +4363,7 @@ mod tests {
         let c = v.create_note("free", "다", json!({})).unwrap();
         v.save_note(&c, json!({}), "상관 없는 글").unwrap();
 
-        let changed = v.rename_tag("클린", "청소").unwrap();
+        let changed = v.rename_tag("클린", "청소").unwrap().changed;
         assert_eq!(changed.len(), 2, "상관 없는 노트는 건드리지 않는다");
 
         let pa = v.parse_full(&a).unwrap();
@@ -4377,8 +4399,35 @@ mod tests {
         assert!(v.rename_tag("가", "빈 칸 있음").is_err());
         assert!(v.rename_tag("가", "샵#포함").is_err());
         // 같은 이름이거나 비었으면 조용히 아무 일도 안 한다
-        assert_eq!(v.rename_tag("가", "가").unwrap().len(), 0);
-        assert_eq!(v.rename_tag("", "나").unwrap().len(), 0);
+        assert_eq!(v.rename_tag("가", "가").unwrap(), TagRename::default());
+        assert_eq!(v.rename_tag("", "나").unwrap(), TagRename::default());
+    }
+
+    /// frontmatter가 깨진 노트 하나가 끼어 있어도 나머지는 모두 바뀌고, 깨진 노트는 건너뛴 것으로 알린다.
+    /// 예전엔 그 노트에서 멈춰 앞의 노트만 바뀐 채 끝났다.
+    #[test]
+    fn 깨진_노트가_있어도_태그를_끝까지_바꾼다() {
+        let (_d, v) = vault();
+        let mut rels = Vec::new();
+        for t in ["가", "다", "마"] {
+            let r = v.create_note("free", t, json!({})).unwrap();
+            v.save_note(&r, json!({"tags": ["클린"]}), "#클린 본문").unwrap();
+            rels.push(r);
+        }
+        fs::write(
+            v.root().join("Free/나.md"),
+            "---\ntags: [클린\n  date: :\n---\n#클린 깨진 노트",
+        )
+        .unwrap();
+
+        let r = v.rename_tag("클린", "청소").unwrap();
+        assert_eq!(r.skipped, vec!["Free/나.md".to_string()], "{r:?}");
+        assert_eq!(r.changed.len(), 3);
+        for rel in &rels {
+            assert!(v.parse_full(rel).unwrap().tags.contains(&"청소".to_string()), "{rel}");
+        }
+        // 깨진 노트는 손대지 않았다
+        assert!(fs::read_to_string(v.root().join("Free/나.md")).unwrap().contains("#클린 깨진 노트"));
     }
 
 }
