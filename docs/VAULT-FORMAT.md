@@ -130,7 +130,7 @@ author: 김만중
 | `templates/daily.md` · `free.md` · `writing.md` | 사용자가 고친 본문 템플릿 | 넣음 |
 | `templates/title-<분류>.txt` | 제목 머릿글 템플릿 | 넣음 |
 | `history/<경로를 펼친 이름>/<시각>.md` | 저장 직전 스냅샷(편집 기록) | 안 넣음 |
-| `trash/<YYYYMMDD-HHMMSS>_<원래 이름>.md` | 휴지통 | 안 넣음 |
+| `trash/<YYYYMMDD-HHMMSS>_<원래 이름>.md` | 휴지통. 되살리면 분류 폴더로(일지는 `Daily/YYYY/MM/`로) 간다 | 안 넣음 |
 | `tmp/` | 원자적 쓰기의 임시 파일 | 안 넣음 |
 | `migrate-backup/<시각>/` | 형식 이전 전에 둔 사본 | 안 넣음 |
 

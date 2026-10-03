@@ -163,8 +163,8 @@ fn apply(c: &mut Ctx, model: &mut Model, op: &Op) {
         Op::Restore => {
             let Ok(trash) = c.vault.list_trash() else { return };
             let Some(latest) = trash.first() else { return };
-            if let Ok(rel) = restore_trash_in(c, &latest.file_name) {
-                model.notes.insert(rel);
+            if let Ok(r) = restore_trash_in(c, &latest.file_name) {
+                model.notes.insert(r.rel);
                 model.trash -= 1;
             }
         }

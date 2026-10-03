@@ -807,7 +807,7 @@ async listTrash() : Promise<Result<TrashItem[], string>> {
 /**
  * 휴지통에서 노트 복구 → 복구된 rel 경로
  */
-async restoreTrash(fileName: string) : Promise<Result<string, string>> {
+async restoreTrash(fileName: string) : Promise<Result<TrashRestore, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("restore_trash", { fileName }) };
 } catch (e) {
@@ -1617,6 +1617,19 @@ original_name: string;
  * 삭제 시각 (읽기 좋은 형식)
  */
 deleted_at: string }
+/**
+ * 휴지통에서 되살린 결과
+ */
+export type TrashRestore = { 
+/**
+ * 되살린 노트의 rel
+ */
+rel: string; 
+/**
+ * 그 날 일지가 이미 있어 같은 달 폴더에 따로 되살렸다 — 그 일지의 rel.
+ * 화면이 "두 편을 합치세요"라고 알린다.
+ */
+daily_taken: string | null }
 /**
  * 타입 하나의 전체 정의 (내장 + 사용자 정의 공통)
  */

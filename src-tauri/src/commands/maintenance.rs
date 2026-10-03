@@ -65,14 +65,20 @@ pub fn list_trash(state: State<'_, AppState>) -> Result<Vec<yamcha_core::TrashIt
 /// 휴지통에서 노트 복구 → 복구된 rel 경로
 #[tauri::command(async)]
 #[specta::specta]
-pub fn restore_trash(state: State<'_, AppState>, file_name: String) -> Result<String, String> {
+pub fn restore_trash(
+    state: State<'_, AppState>,
+    file_name: String,
+) -> Result<yamcha_core::TrashRestore, String> {
     with_ctx_write(&state, |c| restore_trash_in(c, &file_name))
 }
 
-pub(crate) fn restore_trash_in(c: &mut Ctx, file_name: &str) -> Result<String, yamcha_core::CoreError> {
-    let rel = c.vault.restore_trash(file_name)?;
-    refresh_note(c, &rel)?;
-    Ok(rel)
+pub(crate) fn restore_trash_in(
+    c: &mut Ctx,
+    file_name: &str,
+) -> Result<yamcha_core::TrashRestore, yamcha_core::CoreError> {
+    let r = c.vault.restore_trash(file_name)?;
+    refresh_note(c, &r.rel)?;
+    Ok(r)
 }
 
 /// 휴지통에서 retention_days보다 오래된 항목 영구 삭제 (0이면 안 함) → 삭제 개수

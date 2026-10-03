@@ -72,6 +72,27 @@ impl Relocation {
     }
 }
 
+/// 휴지통에서 되살린 결과
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct TrashRestore {
+    /// 되살린 노트의 rel
+    pub rel: String,
+    /// 그 날 일지가 이미 있어 같은 달 폴더에 따로 되살렸다 — 그 일지의 rel.
+    /// 화면이 "두 편을 합치세요"라고 알린다.
+    pub daily_taken: Option<String>,
+}
+
+/// `YYYY-MM-DD` 꼴이고 실제로 있는 날짜인가 (`2026-13-40`은 아니다).
+/// 일지 경로(`Daily/YYYY/MM/`)를 날짜 문자열에서 바로 잘라 만들므로, 이걸 지나야 자를 수 있다.
+pub fn is_ymd(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && [0, 1, 2, 3, 5, 6, 8, 9].iter().all(|&i| b[i].is_ascii_digit())
+        && chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
+}
+
 /// 휴지통에 있는 삭제된 노트 한 건
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct TrashItem {
@@ -1561,7 +1582,7 @@ impl Vault {
     /// 휴지통에서 노트를 복구한다. frontmatter의 type으로 원래 폴더를 정하고
     /// (타입이 사라졌거나 파싱 실패면 자유노트로), 이름 충돌은 unique_path로 피한다.
     /// 반환: 복구된 노트의 rel 경로.
-    pub fn restore_trash(&self, file_name: &str) -> Result<String, CoreError> {
+    pub fn restore_trash(&self, file_name: &str) -> Result<TrashRestore, CoreError> {
         if file_name.contains('/') || file_name.contains('\\') || file_name.contains("..") {
             return Err(CoreError::Invalid(format!("잘못된 파일명: {file_name}")));
         }
@@ -1584,18 +1605,38 @@ impl Vault {
                 Builtin::Free.id().to_string(),
             ),
         };
-        let dir = self.root.join(&folder);
-        fs::create_dir_all(&dir)?;
         let original = file_name
             .split_once('_')
             .map(|(_, r)| r.to_string())
             .unwrap_or_else(|| file_name.to_string());
         let stem = original.strip_suffix(".md").unwrap_or(&original);
+        // 일지는 날짜 폴더(`Daily/YYYY/MM/YYYY-MM-DD.md`)로 돌려놓는다. 분류 폴더 맨 위에 두면
+        // 그 날을 열 때(open_daily) 못 찾고 빈 일지를 새로 만들어, 같은 날 일지가 둘이 된다.
+        let daily_date = (resolved_type == Builtin::Daily.id())
+            .then(|| {
+                let fm_date = fm.get("date").and_then(|v| v.as_str()).unwrap_or("");
+                [stem, fm_date].into_iter().find(|d| is_ymd(d)).map(str::to_string)
+            })
+            .flatten();
+        let (dir, stem, daily_taken) = match &daily_date {
+            Some(date) => {
+                let dir = self
+                    .root
+                    .join(&folder)
+                    .join(&date[..4])
+                    .join(&date[5..7]);
+                let taken = dir.join(format!("{date}.md"));
+                let taken = taken.exists().then(|| self.rel_of(&taken));
+                (dir, date.as_str(), taken)
+            }
+            None => (self.root.join(&folder), stem, None),
+        };
+        fs::create_dir_all(&dir)?;
         let dest = self.unique_path(&dir, stem);
-        fs::rename(&src, &dest)?;
+        retry_while_locked(|| fs::rename(&src, &dest))?;
         let rel = self.rel_of(&dest);
         self.mark_index_stale(&resolved_type);
-        Ok(rel)
+        Ok(TrashRestore { rel, daily_taken })
     }
 
     /// 휴지통에서 retention_days보다 오래된 항목을 영구 삭제한다. 0이면 아무것도 안 함.
@@ -3430,7 +3471,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].original_name, "복구될 책.md");
 
-        let restored_rel = v.restore_trash(&items[0].file_name).unwrap();
+        let restored_rel = v.restore_trash(&items[0].file_name).unwrap().rel;
         // 책 타입이 살아있으므로 원래 폴더(Books)로 복귀
         assert_eq!(restored_rel, "Books/복구될 책.md");
         let note = v.read_note(&restored_rel).unwrap();
@@ -3520,8 +3561,72 @@ mod tests {
             "---\ntype: 사라진분류\ntitle: 떠도는 노트\n---\n내용",
         )
         .unwrap();
-        let rel = v.restore_trash("20260724-101500_떠도는 노트.md").unwrap();
+        let rel = v.restore_trash("20260724-101500_떠도는 노트.md").unwrap().rel;
         assert_eq!(rel, "Free/떠도는 노트.md");
+    }
+
+    /// 지운 일지를 되살리면 제 날짜 폴더로 돌아가, 그 날을 열면 그 일지가 열린다.
+    /// 예전엔 `Daily/` 맨 위로 돌아가서 그 날을 열면 빈 일지가 새로 생겼다.
+    #[test]
+    fn 되살린_일지는_제_날짜_폴더로_돌아간다() {
+        let (_d, v) = vault();
+        let rel = v.open_daily("2026-07-18").unwrap();
+        let opened = v.read_note(&rel).unwrap();
+        v.save_note(&rel, opened.frontmatter, "지운 날의 기록").unwrap();
+        v.delete_note(&rel).unwrap();
+
+        let item = v.list_trash().unwrap().remove(0);
+        let r = v.restore_trash(&item.file_name).unwrap();
+        assert_eq!(r.rel, "Daily/2026/07/2026-07-18.md");
+        assert_eq!(r.daily_taken, None);
+        assert_eq!(v.open_daily("2026-07-18").unwrap(), r.rel);
+        assert!(v.read_note(&r.rel).unwrap().body.contains("지운 날의 기록"));
+    }
+
+    /// 그 사이 같은 날 일지를 새로 썼으면 덮지 않고 같은 달 폴더에 따로 둔 뒤 알린다
+    #[test]
+    fn 같은_날_일지가_있으면_따로_되살리고_알린다() {
+        let (_d, v) = vault();
+        let rel = v.open_daily("2026-07-18").unwrap();
+        let opened = v.read_note(&rel).unwrap();
+        v.save_note(&rel, opened.frontmatter.clone(), "지운 일지").unwrap();
+        v.delete_note(&rel).unwrap();
+        let again = v.open_daily("2026-07-18").unwrap();
+        v.save_note(&again, opened.frontmatter, "새로 쓴 일지").unwrap();
+
+        let item = v.list_trash().unwrap().remove(0);
+        let r = v.restore_trash(&item.file_name).unwrap();
+        assert_eq!(r.rel, "Daily/2026/07/2026-07-18 (2).md");
+        assert_eq!(r.daily_taken.as_deref(), Some("Daily/2026/07/2026-07-18.md"));
+        assert!(v.read_note(&again).unwrap().body.contains("새로 쓴 일지"));
+        assert!(v.read_note(&r.rel).unwrap().body.contains("지운 일지"));
+    }
+
+    /// 파일 이름이 날짜가 아니어도(밖에서 이름을 바꿨다) frontmatter 날짜로 폴더를 찾는다
+    #[test]
+    fn 이름이_날짜가_아닌_일지는_frontmatter_날짜로() {
+        let (_d, v) = vault();
+        let trash = v.root().join(".yamcha/trash");
+        fs::create_dir_all(&trash).unwrap();
+        fs::write(
+            trash.join("20260724-101500_여행 첫날.md"),
+            "---\ntype: daily\ndate: 2026-05-01\n---\n내용",
+        )
+        .unwrap();
+        let r = v.restore_trash("20260724-101500_여행 첫날.md").unwrap();
+        assert_eq!(r.rel, "Daily/2026/05/2026-05-01.md");
+    }
+
+    #[test]
+    fn is_ymd는_실제_날짜만() {
+        assert!(is_ymd("2026-07-30"));
+        assert!(is_ymd("2024-02-29"));
+        assert!(!is_ymd("2026-02-29"));
+        assert!(!is_ymd("2026-13-01"));
+        assert!(!is_ymd("2026-7-30"));
+        assert!(!is_ymd("2026-07-30a"));
+        assert!(!is_ymd("무제"));
+        assert!(!is_ymd("가나다라마바")); // 바이트 길이가 10이 아니다
     }
 
     #[test]

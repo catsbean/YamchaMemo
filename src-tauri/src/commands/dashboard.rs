@@ -1,6 +1,8 @@
 //! 화면이 모아 보여 주는 것들 — 독서기록 엔트리·미완 할 일·일지 요약.
 
 use super::*;
+// `YYYY-MM-DD` 꼴인가 — 고정폭이라 기간 비교를 문자열 그대로 할 수 있다
+use yamcha_core::vault::is_ymd;
 
 /// 책 한 권의 기록 콜아웃 한 건 (어느 책의 것인지까지 붙여 평탄화한 형태)
 #[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone)]
@@ -402,17 +404,6 @@ fn day_date(rel_path: &str, fm_date: &str) -> String {
     } else {
         String::new()
     }
-}
-
-/// `YYYY-MM-DD` 꼴인가. 고정폭이라 기간 비교를 문자열 그대로 할 수 있다.
-fn is_ymd(s: &str) -> bool {
-    let b = s.as_bytes();
-    b.len() == 10
-        && b[4] == b'-'
-        && b[7] == b'-'
-        && [0, 1, 2, 3, 5, 6, 8, 9]
-            .iter()
-            .all(|&i| b[i].is_ascii_digit())
 }
 
 /// 회고 기간 전체를 한 번에 읽는다. `from`·`to`는 `YYYY-MM-DD`(양끝 포함).

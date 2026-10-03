@@ -9,6 +9,8 @@ export default function TrashWindow() {
   const [items, setItems] = useState<TrashItem[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  // 되살리며 알릴 것 (같은 날 일지가 이미 있어 따로 되살렸다 등)
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
 
   async function reload() {
@@ -26,10 +28,18 @@ export default function TrashWindow() {
     if (busy) return;
     setBusy(fileName);
     setError("");
+    setNotice("");
     const r = await commands.restoreTrash(fileName);
     if (r.status === "ok") {
+      const { rel, daily_taken } = r.data;
+      if (daily_taken) {
+        const name = rel.split("/").pop()?.replace(/\.md$/, "");
+        setNotice(
+          `그 날 일지가 이미 있어 "${name}"(으)로 따로 되살렸습니다. 두 편을 견주어 하나로 합치세요.`,
+        );
+      }
       // 메인 창이 목록·검색을 갱신하도록 알린다 (기존 외부변경 이벤트 재사용)
-      await emit("vault-external-change", [r.data]);
+      await emit("vault-external-change", [rel]);
       await reload();
     } else {
       setError(r.error);
@@ -56,6 +66,9 @@ export default function TrashWindow() {
 
       <div className="flex-1 overflow-y-auto p-3">
         {error && <p className="mb-2 text-sm text-rose-500">{error}</p>}
+        {notice && (
+          <p className="mb-2 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">{notice}</p>
+        )}
         {loading ? (
           <p className="mt-10 text-center text-sm text-neutral-400">
             불러오는 중…
