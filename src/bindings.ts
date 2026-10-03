@@ -860,9 +860,13 @@ async updateCustomTypeListFields(id: string, names: string[]) : Promise<Result<T
 }
 },
 /**
- * 사용자 정의 분류 제거 — 내부 노트는 자유노트로 이동
+ * 사용자 정의 분류 제거 — 내부 노트는 자유노트로 이동 → 옮긴 노트들.
+ * 
+ * 비동기 커맨드다(`rename_note`와 같은 까닭) — 진행은 `relocate-progress`로 알린다.
+ * 색인은 옮긴 노트와 링크를 고쳐 쓴 노트만 따라잡는다 — 예전엔 vault 전체를 다시 색인해
+ * 1만 편에 1분 가까이 상태 잠금을 쥐었다(그동안 앱 전체가 멈췄다).
  */
-async removeCustomType(id: string) : Promise<Result<null, string>> {
+async removeCustomType(id: string) : Promise<Result<MovedNote[], string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("remove_custom_type", { id }) };
 } catch (e) {
@@ -1377,6 +1381,10 @@ export type MirrorReport = { target: string; copied: number; skipped: number;
  * 미러 쪽이 더 새로워서 덮지 않은 파일 (rel 경로)
  */
 conflicts: string[]; errors: string[] }
+/**
+ * 자유노트로 옮겨 간 노트 한 편
+ */
+export type MovedNote = { from: string; to: string }
 /**
  * 보기 화면에 그릴 블록 하나.
  * `kind`가 "callout"이면 `entry_index`로 수정·삭제할 수 있고,

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useVault } from "../../stores/vault";
 import { Section } from "./ui";
 
@@ -8,17 +9,26 @@ export default function VaultSection({ onBusy }: { onBusy: (busy: boolean) => vo
   const [reindexing, setReindexing] = useState(false);
   const [reindexDone, setReindexDone] = useState(false);
   const [reindexCount, setReindexCount] = useState<number | null>(null);
+  // 몇 % 읽었나 — 1만 편이면 1분 가까이 걸려서, 숫자 없이 "재색인 중…"만 떠 있으면 멈춘 줄 안다
+  const [reindexPct, setReindexPct] = useState<number | null>(null);
 
   async function runReindex() {
     setReindexing(true);
     onBusy(true);
     setReindexDone(false);
+    setReindexPct(null);
+    const unlisten = await listen<[number, number]>("reindex-progress", (e) => {
+      const [done, total] = e.payload;
+      setReindexPct(total > 0 ? Math.floor((done * 100) / total) : null);
+    });
     try {
       const n = await reindexAll();
       setReindexCount(typeof n === "number" ? n : null);
       setReindexDone(true);
     } finally {
+      unlisten();
       setReindexing(false);
+      setReindexPct(null);
       onBusy(false);
     }
   }
@@ -46,7 +56,9 @@ export default function VaultSection({ onBusy }: { onBusy: (busy: boolean) => vo
           disabled={reindexing}
           onClick={runReindex}
         >
-          {reindexing ? "재색인 중…" : "전체 재색인"}
+          {reindexing
+            ? `재색인 중…${reindexPct !== null ? ` ${reindexPct}%` : ""}`
+            : "전체 재색인"}
         </button>
         {reindexDone && (
           <span className="self-center text-xs text-emerald-600">

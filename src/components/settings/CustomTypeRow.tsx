@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { commands, type FieldDef } from "../../bindings";
+import { useVault } from "../../stores/vault";
 import { TemplateEditor } from "./TemplateEditor";
 
 /** 목록 줄이 이미 보여 주는 칸 — 켜고 끌 것이 없으므로 아예 내놓지 않는다 */
@@ -22,6 +23,7 @@ export default function CustomTypeRow({
   onTemplateSaved: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  const removeCustomType = useVault((s) => s.removeCustomType);
   const [draft, setDraft] = useState(template);
   const [saved, setSaved] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -35,8 +37,8 @@ export default function CustomTypeRow({
 
   async function remove() {
     setBusy(true);
-    await commands.removeCustomType(id);
-    await onRemoved();
+    // 실패하면 스토어가 화면 알림으로 까닭을 띄운다(옮긴 노트·남은 노트 수)
+    if (await removeCustomType(id)) await onRemoved();
     setBusy(false);
   }
 

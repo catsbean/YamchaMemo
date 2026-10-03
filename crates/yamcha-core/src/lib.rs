@@ -35,7 +35,7 @@ pub use schema::{Builtin, EntryKind, FieldDef, FieldKind, TypeDef};
 pub use search::{SearchEngine, SearchFilter, SearchHit, SearchScope, FILE_TYPE};
 pub use vault::{
     file_identity, fingerprint, CalloutDef, NoteContent, NoteSummary, ParsedNote, Relocation,
-    SaveResult, TrashItem, TrashRestore, Vault,
+    SaveResult, TrashItem, TrashRestore, TypeRemoval, Vault,
 };
 
 /// 증분 색인 결과

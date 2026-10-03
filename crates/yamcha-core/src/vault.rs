@@ -59,6 +59,20 @@ pub struct Relocation {
     pub warnings: Vec<String>,
 }
 
+/// 사용자 분류를 지운 결과
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TypeRemoval {
+    /// 자유노트로 옮긴 노트 (옛 rel, 새 rel)
+    pub moved: Vec<(String, String)>,
+    /// 경로 링크를 고쳐 쓴 다른 노트들
+    pub rewritten: Vec<String>,
+    /// 옮기기는 됐지만 따라오지 못한 것 (편집 기록·일부 링크) — 로그에 남긴다
+    pub warnings: Vec<String>,
+    /// 옮기지 못한 노트(까닭과 함께). 하나라도 있으면 **분류는 지우지 않는다** — 지우면 그 노트가
+    /// 어느 분류에도 속하지 않는 폴더에 남는다. 옮긴 것은 옮긴 대로 둔다(다시 누르면 나머지를 옮긴다).
+    pub failed: Vec<String>,
+}
+
 impl Relocation {
     fn unchanged(rel: &str) -> Self {
         Relocation {
@@ -650,7 +664,21 @@ impl Vault {
     }
 
     /// 사용자 정의 타입 제거 — 내부 노트는 자유노트로 이동한다.
-    pub fn remove_custom_type(&mut self, id: &str) -> Result<(), CoreError> {
+    pub fn remove_custom_type(&mut self, id: &str) -> Result<TypeRemoval, CoreError> {
+        self.remove_custom_type_with(id, &mut |_, _| {})
+    }
+
+    /// `remove_custom_type` + 진행 알림(경로 링크를 고치느라 vault를 훑는 동안).
+    ///
+    /// 노트마다 제목 바꾸기와 같은 길(`relocate_file`)로 옮긴다 — 편집 기록이 따라가고, 반쯤 끝난
+    /// 채 실패하지 않는다. 폴더까지 적은 링크(`[[회의록/메모]]`)는 **한 번 훑어** 모두 고친다.
+    /// 예전엔 링크도 기록도 그대로 두었고(기록은 다음 시작에 고아로 지워졌다), 부르는 쪽이 vault
+    /// 전체를 다시 색인했다(1만 편 66초, 그동안 앱이 멈췄다).
+    pub fn remove_custom_type_with(
+        &mut self,
+        id: &str,
+        progress: crate::Progress<'_>,
+    ) -> Result<TypeRemoval, CoreError> {
         let def = self
             .types
             .iter()
@@ -658,26 +686,42 @@ impl Vault {
             .cloned()
             .ok_or_else(|| CoreError::Invalid(format!("삭제할 분류가 없습니다: {id}")))?;
 
-        // 노트를 Free/로 이동하고 type frontmatter를 free로 갱신
         let free_dir = self.root.join(Builtin::Free.folder());
-        let moved: Vec<String> = self
-            .list_notes()?
-            .into_iter()
-            .filter(|n| n.note_type == id)
-            .map(|n| n.rel_path)
-            .collect();
-        for rel in moved {
+        let mut out = TypeRemoval::default();
+        for file in self.note_files_of_type(id)? {
+            let rel = file.rel_path;
             let abs = self.abs(&rel)?;
             let stem = Path::new(&rel)
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "무제".into());
             let dest = self.unique_path(&free_dir, &stem);
-            retry_while_locked(|| fs::rename(&abs, &dest))?;
-            let dest_rel = self.rel_of(&dest);
             // save_note가 type을 free로 normalize
-            let note = self.read_note(&dest_rel)?;
-            self.save_note(&dest_rel, note.frontmatter, &note.body)?;
+            let moved = self.relocate_file(&rel, &abs, &dest, |dest_rel| {
+                let note = self.read_note(dest_rel)?;
+                self.save_note(dest_rel, note.frontmatter, &note.body)
+            });
+            match moved {
+                Ok((dest_rel, warnings)) => {
+                    out.warnings.extend(warnings);
+                    out.moved.push((rel, dest_rel));
+                }
+                Err(e) => out.failed.push(format!("{rel}: {e}")),
+            }
+        }
+        let rules: Vec<LinkRule> = out
+            .moved
+            .iter()
+            .map(|(from, to)| Self::path_link_rule(from, to))
+            .collect();
+        if !rules.is_empty() {
+            out.rewritten = self.replace_links_lenient(&rules, progress, &mut out.warnings);
+            let moved_to: HashSet<&str> = out.moved.iter().map(|(_, to)| to.as_str()).collect();
+            out.rewritten.retain(|r| !moved_to.contains(r.as_str()));
+        }
+        self.mark_index_stale(Builtin::Free.id());
+        if !out.failed.is_empty() {
+            return Ok(out);
         }
 
         // 폴더 정리: _index.md 제거 후 비어 있으면 삭제 (남은 파일 있으면 유지)
@@ -687,8 +731,7 @@ impl Vault {
 
         self.types.retain(|t| t.builtin || t.id != id);
         self.save_custom_types()?;
-        self.mark_index_stale(Builtin::Free.id());
-        Ok(())
+        Ok(out)
     }
 
     /// 노트를 다른 분류로 옮긴다. 파일을 새 분류의 폴더로 옮기고(파일명 충돌 시
@@ -4183,6 +4226,60 @@ mod tests {
         assert_eq!(moved.frontmatter["type"], "free");
         // 폴더는 비워져 삭제됨
         assert!(!dir.path().join("회의록").exists());
+    }
+
+    /// 분류를 지우면 폴더까지 적은 링크가 따라오고 편집 기록도 옮겨 간다.
+    /// 예전엔 링크가 끊긴 채 남았고, 기록은 다음 시작에 주인 없는 것으로 지워졌다.
+    #[test]
+    fn 분류를_지우면_경로_링크와_기록이_따라온다() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = Vault::open(dir.path()).unwrap();
+        v.add_custom_type("회의록", "회의록", vec![], "").unwrap();
+        let a = v.create_note("회의록", "주간 회의", json!({})).unwrap();
+        let b = v.create_note("회의록", "월간 회의", json!({})).unwrap();
+        v.save_note(&a, json!({}), "회의 내용").unwrap();
+        v.snapshot_before_change(&a).unwrap();
+        let other = v.create_note("free", "목차", json!({})).unwrap();
+        v.save_note(&other, json!({}), "[[회의록/주간 회의]] · [[회의록/월간 회의|월간]] · [[주간 회의]]")
+            .unwrap();
+        // 옮겨 간 노트끼리 서로 가리키는 링크도
+        v.save_note(&b, json!({}), "지난번: [[회의록/주간 회의]]").unwrap();
+
+        let r = v.remove_custom_type("회의록").unwrap();
+        assert!(r.failed.is_empty() && r.warnings.is_empty(), "{r:?}");
+        assert_eq!(r.moved.len(), 2);
+        assert_eq!(r.rewritten, vec![other.clone()], "옮긴 노트는 rewritten에 겹치지 않는다");
+        let body = v.read_note(&other).unwrap().body;
+        assert!(body.contains("[[Free/주간 회의]]"), "{body}");
+        assert!(body.contains("[[Free/월간 회의|월간]]"), "{body}");
+        assert!(body.contains("[[주간 회의]]"), "이름만 적은 링크는 그대로");
+        assert!(v.read_note("Free/월간 회의.md").unwrap().body.contains("[[Free/주간 회의]]"));
+        assert!(history_dir(&v, "Free/주간 회의.md").is_dir(), "편집 기록이 따라오지 않았다");
+        assert!(!history_dir(&v, &a).exists());
+    }
+
+    /// 한 편이라도 못 옮기면 분류는 남긴다 — 지우면 그 노트가 분류 없는 폴더에 남는다
+    #[cfg(windows)]
+    #[test]
+    fn 못_옮긴_노트가_있으면_분류를_남긴다() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = Vault::open(dir.path()).unwrap();
+        v.add_custom_type("회의록", "회의록", vec![], "").unwrap();
+        v.create_note("회의록", "주간 회의", json!({})).unwrap();
+        v.create_note("회의록", "월간 회의", json!({})).unwrap();
+        // 다른 프로그램이 공유 없이 쥐고 있다 (동기화 프로그램·편집기) → 옮기기가 끝내 실패한다
+        let _held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(dir.path().join("회의록/주간 회의.md"))
+            .unwrap();
+
+        let r = v.remove_custom_type("회의록").unwrap();
+        assert_eq!(r.moved.len(), 1, "쥐지 않은 노트는 옮긴다: {r:?}");
+        assert_eq!(r.failed.len(), 1, "{r:?}");
+        assert!(v.def_by_id("회의록").is_some(), "분류를 지웠다");
+        assert!(dir.path().join("회의록/주간 회의.md").exists(), "노트가 제자리에 없다");
     }
 
     #[test]

@@ -270,6 +270,9 @@ interface VaultStore {
   openVaultAt(path: string): Promise<void>;
   refresh(): Promise<void>;
   refreshSchemas(): Promise<void>;
+  /** 사용자 분류를 지운다 — 안의 노트는 자유노트로 옮겨 간다. 다 됐으면 true.
+   *  오래 걸리면(링크 고치기·색인) 제목 바꾸기와 같은 진행 창이 뜬다. 열린 노트가 옮겨 갔으면 새 자리를 쥔다. */
+  removeCustomType(id: string): Promise<boolean>;
   setLayout(mode: LayoutMode): Promise<void>;
   openNote(relPath: string): Promise<void>;
   closeNote(): Promise<void>;
@@ -1311,6 +1314,31 @@ export const useVault = create<VaultStore>((set, get) => {
         const schemas = await commands.getSchemas();
         set({ schemas });
       });
+    },
+
+    async removeCustomType(id) {
+      // 열린 노트의 못 쓴 글을 먼저 디스크로 — 옮긴 뒤에 옛 경로로 저장하면 노트가 둘이 된다
+      if (!(await flushCurrent())) return false;
+      const moved = await guard(async () =>
+        unwrap(await withRelocation(() => commands.removeCustomType(id))),
+      );
+      await get().refreshSchemas();
+      await get().refresh();
+      const cur = get().current;
+      const hit = cur && moved?.find((m) => m.from === cur.rel_path);
+      if (hit) {
+        const fresh = await commands.readNote(hit.to);
+        if (fresh.status === "ok") set({ current: fresh.data, nav: fresh.data.note_type });
+      } else if (!moved && cur?.note_type === id) {
+        // 일부만 옮겨졌을 수 있다 — 화면이 쥔 경로가 아직 있는지 모르니 내려놓는다(글은 저장돼 있다)
+        set({ current: null });
+      }
+      if (get().nav === id) set({ nav: "free" });
+      if (moved && moved.length > 0) {
+        await notifyOtherWindows(moved.flatMap((m) => [m.from, m.to]));
+        afterWrite();
+      }
+      return !!moved;
     },
 
     async setLayout(mode) {

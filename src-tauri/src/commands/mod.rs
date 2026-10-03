@@ -285,12 +285,37 @@ pub(crate) fn catch_up_relocation(
     moved: &yamcha_core::Relocation,
     progress: yamcha_core::Progress<'_>,
 ) {
+    catch_up_moves(
+        ctx,
+        &[(old_rel.to_string(), moved.rel.clone())],
+        &moved.rewritten,
+        &moved.warnings,
+        progress,
+    );
+}
+
+/// `catch_up_relocation`의 여러 편짜리 — 사용자 분류를 지워 노트 여럿이 한꺼번에 옮겨 갈 때.
+/// `moves`는 (옛 rel, 새 rel), `rewritten`은 링크를 고쳐 쓴 다른 노트들.
+pub(crate) fn catch_up_moves(
+    ctx: &mut Ctx,
+    moves: &[(String, String)],
+    rewritten: &[String],
+    warnings: &[String],
+    progress: yamcha_core::Progress<'_>,
+) {
     // 옮기기는 됐지만 따라오지 못한 것(편집 기록·일부 링크) — 실패가 아니라 로그에 남긴다
-    for w in &moved.warnings {
+    for w in warnings {
         crate::applog::warn(w);
     }
-    let touched: Vec<&str> = std::iter::once(moved.rel.as_str())
-        .chain(moved.rewritten.iter().map(String::as_str))
+    let touched: Vec<&str> = moves
+        .iter()
+        .map(|(_, to)| to.as_str())
+        .chain(rewritten.iter().map(String::as_str))
+        .collect();
+    let gone: Vec<&str> = moves
+        .iter()
+        .filter(|(from, to)| from != to)
+        .map(|(from, _)| from.as_str())
         .collect();
     // 다시 할 때(`with_index_retry`) 처음부터 다시 세도 화면의 막대는 거꾸로 가지 않게 —
     // 이미 알린 곳을 넘어설 때부터 다시 알린다
@@ -304,7 +329,7 @@ pub(crate) fn catch_up_relocation(
     let caught_up = with_index_retry(ctx, |ctx, force| {
         let mut states = Vec::new();
         let mut dirty = force;
-        if moved.rel != old_rel {
+        for old_rel in &gone {
             dirty |= unindex_one(ctx, old_rel)?;
         }
         // 마지막 한 칸은 커밋이다 — 수천 편이면 그 자체로 시간이 걸려서, 100%를 먼저 띄우면 멈춘 듯 보인다
@@ -324,7 +349,7 @@ pub(crate) fn catch_up_relocation(
     });
     if let Err(e) = caught_up {
         crate::applog::error(format!("색인 따라잡기 실패 — 다음 시작에 다시 읽는다: {e:?}"));
-        stale_identities(ctx, std::iter::once(old_rel).chain(touched.iter().copied()));
+        stale_identities(ctx, gone.iter().copied().chain(touched.iter().copied()));
     }
 }
 
@@ -726,15 +751,46 @@ pub fn update_custom_type_list_fields(
     with_ctx_write(&state, |c| c.vault.set_list_fields(&id, &names))
 }
 
-/// 사용자 정의 분류 제거 — 내부 노트는 자유노트로 이동
-#[tauri::command(async)]
+/// 자유노트로 옮겨 간 노트 한 편
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct MovedNote {
+    pub from: String,
+    pub to: String,
+}
+
+/// 사용자 정의 분류 제거 — 내부 노트는 자유노트로 이동 → 옮긴 노트들.
+///
+/// 비동기 커맨드다(`rename_note`와 같은 까닭) — 진행은 `relocate-progress`로 알린다.
+/// 색인은 옮긴 노트와 링크를 고쳐 쓴 노트만 따라잡는다 — 예전엔 vault 전체를 다시 색인해
+/// 1만 편에 1분 가까이 상태 잠금을 쥐었다(그동안 앱 전체가 멈췄다).
+#[tauri::command]
 #[specta::specta]
-pub fn remove_custom_type(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    with_ctx_write(&state, |c| {
-        c.vault.remove_custom_type(&id)?;
-        yamcha_core::reindex_all(&c.vault, &mut c.indexer, &mut c.search)?;
-        Ok(())
+pub async fn remove_custom_type(app: tauri::AppHandle, id: String) -> Result<Vec<MovedNote>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut report = relocate_reporter(&app);
+        with_ctx_write(&state, |c| remove_custom_type_in(c, &id, &mut report))
     })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub(crate) fn remove_custom_type_in(
+    c: &mut Ctx,
+    id: &str,
+    report: RelocateReport<'_>,
+) -> Result<Vec<MovedNote>, yamcha_core::CoreError> {
+    let r = c.vault.remove_custom_type_with(id, &mut |d, t| report("links", d, t))?;
+    catch_up_moves(c, &r.moved, &r.rewritten, &r.warnings, &mut |d, t| report("index", d, t));
+    if !r.failed.is_empty() {
+        crate::applog::warn(format!("분류 지우기 — 옮기지 못한 노트: {}", r.failed.join(" / ")));
+        return Err(yamcha_core::CoreError::Invalid(format!(
+            "노트 {}편을 옮기지 못해 분류를 지우지 않았습니다(다른 프로그램이 쓰고 있을 수 있습니다). 옮긴 {}편은 자유노트에 있습니다 — 잠시 뒤 다시 지워 보세요.",
+            r.failed.len(),
+            r.moved.len()
+        )));
+    }
+    Ok(r.moved.into_iter().map(|(from, to)| MovedNote { from, to }).collect())
 }
 
 /// 내보내기 파일 쓰기 — 사용자가 저장 대화상자에서 고른 경로에 그대로 쓴다.
@@ -760,16 +816,36 @@ pub fn preview_template(content: String, title: String) -> Result<String, String
 /// 전체 재색인 (인덱스 손상 대비 수동 명령)
 #[tauri::command(async)]
 #[specta::specta]
-pub fn reindex(state: State<'_, AppState>) -> Result<u32, String> {
-    with_ctx(&state, |c| {
-        let n = yamcha_core::reindex_all(&c.vault, &mut c.indexer, &mut c.search)?;
-        // 재색인은 색인을 비우고 노트만 다시 넣는다. 첨부 검색이 켜져 있으면
-        // 캐시에서 첨부도 다시 채운다 (재추출 없음).
-        if FILE_INDEX_ON.load(Ordering::Relaxed) {
-            yamcha_core::file_index::rebuild_from_cache(&c.vault, &mut c.indexer, &mut c.search)?;
-        }
-        Ok(n as u32)
+pub async fn reindex(app: tauri::AppHandle) -> Result<u32, String> {
+    // 비동기 + 진행 알림 — 1만 편이면 1분 가까이 걸린다. 진행 없이 "재색인 중…"만 떠 있으면
+    // 멈춘 줄 안다. 정수 %가 바뀔 때만 보낸다(`relocate_reporter`와 같은 까닭).
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut last: Option<usize> = None;
+        let mut report = |done: usize, total: usize| {
+            let pct = (done * 100).checked_div(total).unwrap_or(100);
+            if last != Some(pct) {
+                last = Some(pct);
+                let _ = app.emit("reindex-progress", (done, total));
+            }
+        };
+        with_ctx(&state, |c| reindex_in(c, &mut report))
     })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn reindex_in(
+    c: &mut Ctx,
+    report: &mut dyn FnMut(usize, usize),
+) -> Result<u32, yamcha_core::CoreError> {
+    let n = yamcha_core::reindex_all_with(&c.vault, &mut c.indexer, &mut c.search, report)?;
+    // 재색인은 색인을 비우고 노트만 다시 넣는다. 첨부 검색이 켜져 있으면
+    // 캐시에서 첨부도 다시 채운다 (재추출 없음).
+    if FILE_INDEX_ON.load(Ordering::Relaxed) {
+        yamcha_core::file_index::rebuild_from_cache(&c.vault, &mut c.indexer, &mut c.search)?;
+    }
+    Ok(n as u32)
 }
 
 #[cfg(test)]
