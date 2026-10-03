@@ -992,7 +992,14 @@ impl Vault {
         let mut new_rel = rel.to_string();
         let mut warnings = Vec::new();
         if new_stem != old_stem {
-            let dest = self.unique_path(&dir, &new_stem);
+            // 대소문자만 바꾼 이름(Windows)은 새 이름의 자리가 **이 파일 자신**이다 — 비었는지 묻는
+            // unique_path에 맡기면 "이미 있다"며 ` (2)`를 붙였다. 같은 파일이면 그 자리로 이름만 바꾼다.
+            let exact = dir.join(format!("{new_stem}.md"));
+            let same_file = matches!(
+                (fs::canonicalize(&exact), fs::canonicalize(&abs_old)),
+                (Ok(a), Ok(b)) if a == b
+            );
+            let dest = if same_file { exact } else { self.unique_path(&dir, &new_stem) };
             // 되돌릴 지점(편집 기록)은 제목을 바꿨다고 사라지면 안 된다 — relocate_file이 따라 옮긴다
             (new_rel, warnings) = self.relocate_file(rel, &abs_old, &dest, |new_rel| {
                 self.save_note(new_rel, fm2.clone(), &note.body)
@@ -3111,6 +3118,36 @@ mod tests {
         assert!(!r.warnings.is_empty(), "못 옮긴 것을 알려야 한다");
         assert!(v.read_note(&r.rel).unwrap().body.contains("본문 1"));
         assert!(!v.root().join(&rel).exists(), "옛 자리에 파일이 남았다");
+    }
+
+    /// 대소문자만 바꾼 제목에 ` (2)`가 붙지 않는다 (Windows는 파일 이름의 대소문자를 가리지 않는다).
+    /// 편집 기록도 그대로 따라온다 — 기록 폴더도 "같은 폴더"라 합치기로 가면 통째로 지워진다.
+    #[cfg(windows)]
+    #[test]
+    fn 대소문자만_바꾼_제목에_2가_붙지_않는다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "abc", json!({})).unwrap();
+        v.save_note(&rel, json!({}), "본문").unwrap();
+        v.snapshot_before_change(&rel).unwrap();
+        let other = v.create_note("free", "목차", json!({})).unwrap();
+        v.save_note(&other, json!({}), "[[abc]]").unwrap();
+
+        let r = v.rename_note(&rel, "ABC").unwrap();
+        assert_eq!(r.rel, "Free/ABC.md");
+        let names: Vec<String> = fs::read_dir(v.root().join("Free"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n.to_lowercase().starts_with("abc"))
+            .collect();
+        assert_eq!(names, vec!["ABC.md".to_string()], "실제 파일 이름까지 바뀌어야 한다");
+        let hist: Vec<String> = fs::read_dir(v.root().join(".yamcha/history"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|n| n.to_lowercase().starts_with("free__abc"))
+            .collect();
+        assert_eq!(hist, vec!["Free__ABC.md".to_string()]);
+        assert!(fs::read_dir(v.root().join(".yamcha/history/Free__ABC.md")).unwrap().count() >= 1);
+        assert!(v.read_note(&other).unwrap().body.contains("[[ABC]]"));
     }
 
     /// 옮겨갈 자리에 기록이 이미 있어도(같은 이름을 예전에 썼다) 바꾼 노트의 기록을 버리지 않는다
