@@ -67,8 +67,8 @@ fn is_note(rel: &str) -> bool {
     rel.ends_with(".md") && !rel.starts_with(".yamcha/")
 }
 
-/// 백업에 넣을 파일 (상대 경로, 절대 경로) — 경로 순으로
-fn files_to_back_up(root: &Path) -> Result<Vec<(String, PathBuf)>, CoreError> {
+/// 백업에 넣을 파일 (상대 경로, 절대 경로) — 경로 순으로. 미러도 같은 목록을 복제한다.
+pub(crate) fn files_to_back_up(root: &Path) -> Result<Vec<(String, PathBuf)>, CoreError> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) -> io::Result<()> {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;

@@ -23,49 +23,102 @@ pub struct MirrorReport {
 ///
 /// 동기화는 vault 전체를 훑는 느린 IO다. `Vault`를 그대로 빌리면 그동안 앱의 상태
 /// 잠금을 쥐고 있게 되어 저장·검색이 전부 뒤에 줄을 선다. 필요한 것은 루트 경로와
-/// 폴더 이름뿐이니 먼저 복사해 두고 잠금을 놓는다.
+/// 이름표뿐이니 먼저 복사해 두고 잠금을 놓는다.
 #[derive(Debug, Clone)]
 pub struct MirrorSource {
     pub root: PathBuf,
-    /// 타입 폴더 이름들 (vault 루트 기준)
-    pub folders: Vec<String>,
+    /// vault의 이름표 (`migrations::vault_id`) — 미러 폴더의 표시와 견준다
+    pub id: String,
 }
 
 impl MirrorSource {
-    pub fn of(vault: &Vault) -> MirrorSource {
-        MirrorSource {
+    pub fn of(vault: &Vault) -> Result<MirrorSource, CoreError> {
+        Ok(MirrorSource {
             root: vault.root().to_path_buf(),
-            folders: vault.types().iter().map(|t| t.folder.clone()).collect(),
+            id: crate::migrations::vault_id(vault)?,
+        })
+    }
+}
+
+/// 미러 폴더에 두는 표시 — 어느 vault의 미러인가
+pub const MARKER: &str = ".yamcha-mirror.json";
+
+#[derive(Serialize, Deserialize)]
+struct Marker {
+    vault_id: String,
+    /// 사람이 읽으라고 적어 두는 vault 경로 (판정에는 쓰지 않는다)
+    vault_path: String,
+}
+
+/// 미러로 고른 폴더가 어떤 상태인가
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetState {
+    /// 없거나 빈 폴더
+    Empty,
+    /// 이 vault의 미러 (표시가 있다)
+    Ours,
+    /// 다른 vault의 미러 — 쓰지 않는다
+    OtherVault,
+    /// 표시 없이 파일이 있다 — 고를 때 한 번 묻는다(예전 판이 만든 미러일 수도 있다)
+    NotEmpty,
+    /// vault 안이거나 vault를 품은 폴더 — 쓰지 않는다
+    Nested,
+}
+
+/// 아직 없는 경로도 견줄 수 있게: 있는 데까지 실제 경로로 바꾸고 나머지를 잇는다
+fn canonical_lenient(p: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut cur = p;
+    loop {
+        if let Ok(c) = fs::canonicalize(cur) {
+            let mut out = c;
+            for part in rest.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        match (cur.file_name(), cur.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name.to_os_string());
+                cur = parent;
+            }
+            _ => return p.to_path_buf(),
         }
     }
 }
 
-/// 미러 대상 파일 목록 (rel 경로): 타입 폴더의 모든 파일 + _attachments + _types.json
-pub fn file_list(src: &MirrorSource) -> Result<Vec<String>, CoreError> {
-    let mut out = Vec::new();
-    let mut dirs: Vec<PathBuf> = src.folders.iter().map(|f| src.root.join(f)).collect();
-    dirs.push(src.root.join("_attachments"));
+/// 미러로 쓸 폴더를 살핀다. 동기화도 매번 이걸 먼저 거친다.
+pub fn check_target(src: &MirrorSource, target: &Path) -> Result<TargetState, CoreError> {
+    let root = canonical_lenient(&src.root);
+    let t = canonical_lenient(target);
+    // vault 안의 폴더면 동기화마다 `Free/Free/Free/…`로 끝없이 자라고 그 사본이 vault의 노트로
+    // 잡힌다. vault를 품은 폴더면 미러가 vault 위에 사본을 쏟는다.
+    if t.starts_with(&root) || root.starts_with(&t) {
+        return Ok(TargetState::Nested);
+    }
+    if !target.is_dir() {
+        return Ok(TargetState::Empty);
+    }
+    if let Ok(text) = fs::read_to_string(target.join(MARKER)) {
+        return Ok(match serde_json::from_str::<Marker>(&text) {
+            Ok(m) if m.vault_id == src.id => TargetState::Ours,
+            Ok(_) => TargetState::OtherVault,
+            Err(_) => TargetState::NotEmpty,
+        });
+    }
+    let has_any = fs::read_dir(target)?.next().is_some();
+    Ok(if has_any { TargetState::NotEmpty } else { TargetState::Empty })
+}
 
-    fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(root, &path, out);
-            } else if let Ok(rel) = path.strip_prefix(root) {
-                out.push(rel.to_string_lossy().replace('\\', "/"));
-            }
-        }
-    }
-    for dir in dirs {
-        walk(&src.root, &dir, &mut out);
-    }
-    if src.root.join("_types.json").exists() {
-        out.push("_types.json".to_string());
-    }
-    Ok(out)
+/// 미러 대상 파일 목록 (rel 경로) — **백업과 같은 규칙**: vault의 파일 전부(분류 폴더 밖의
+/// `_callouts.json` 등 포함)와 `.yamcha/`의 템플릿·형식 판. 예전엔 분류 폴더·첨부·
+/// `_types.json`만 실어 기록 종류·템플릿이 미러에 없었다.
+pub fn file_list(src: &MirrorSource) -> Result<Vec<String>, CoreError> {
+    Ok(crate::backup::files_to_back_up(&src.root)?
+        .into_iter()
+        .map(|(rel, _)| rel)
+        .collect())
 }
 
 fn mtime(path: &Path) -> Option<std::time::SystemTime> {
@@ -78,7 +131,35 @@ pub fn sync_to(source: &MirrorSource, target_root: &Path) -> Result<MirrorReport
         target: target_root.to_string_lossy().to_string(),
         ..Default::default()
     };
-    fs::create_dir_all(target_root)?;
+    match check_target(source, target_root)? {
+        TargetState::Nested => {
+            return Err(CoreError::Invalid(
+                "vault 안의 폴더나 vault를 품은 폴더는 미러로 쓸 수 없습니다 — 다른 폴더를 고르세요".into(),
+            ))
+        }
+        TargetState::OtherVault => {
+            let other = fs::read_to_string(target_root.join(MARKER))
+                .ok()
+                .and_then(|t| serde_json::from_str::<Marker>(&t).ok())
+                .map(|m| m.vault_path)
+                .unwrap_or_default();
+            return Err(CoreError::Invalid(format!(
+                "이 폴더는 다른 vault({other})의 미러입니다 — 섞이지 않게 복제하지 않았습니다. 다른 폴더를 고르세요"
+            )));
+        }
+        TargetState::Ours => {}
+        TargetState::Empty | TargetState::NotEmpty => {
+            fs::create_dir_all(target_root)?;
+            let marker = Marker {
+                vault_id: source.id.clone(),
+                vault_path: source.root.to_string_lossy().to_string(),
+            };
+            let text = serde_json::to_string_pretty(&marker)
+                .map_err(|e| CoreError::Invalid(e.to_string()))?;
+            #[allow(clippy::disallowed_methods)] // 미러 쪽 표시 파일 — vault 밖이다
+            fs::write(target_root.join(MARKER), text)?;
+        }
+    }
 
     for rel in file_list(source)? {
         let src = source.root.join(&rel);
@@ -157,7 +238,8 @@ pub fn resolve(
     rel: &str,
     pull: bool,
 ) -> Result<(), CoreError> {
-    let src = vault.root().join(rel);
+    // 화면이 넘긴 경로다 — vault 밖(`..`·절대 경로)을 가리키면 거절한다 (`abs`가 가린다)
+    let src = vault.abs(rel)?;
     let dst = target_root.join(rel);
     if pull {
         // vault의 노트를 덮어쓴다 — 쓰다 끊기면 노트가 반쯤 쓰인 채 남으므로 원자적으로
@@ -198,19 +280,19 @@ mod tests {
         v.save_note(&rel, json!({}), "원본 내용").unwrap();
 
         // 첫 동기화: 복사됨
-        let r1 = sync_to(&MirrorSource::of(&v), mdir.path()).unwrap();
+        let r1 = sync_to(&MirrorSource::of(&v).unwrap(), mdir.path()).unwrap();
         assert!(r1.copied >= 1);
         assert!(r1.conflicts.is_empty());
         assert!(mdir.path().join(&rel).exists());
 
         // 변화 없으면 스킵
-        let r2 = sync_to(&MirrorSource::of(&v), mdir.path()).unwrap();
+        let r2 = sync_to(&MirrorSource::of(&v).unwrap(), mdir.path()).unwrap();
         assert_eq!(r2.copied, 0);
         assert!(r2.skipped >= 1);
 
         // vault 수정 → 다시 복사
         v.save_note(&rel, json!({}), "고친 내용").unwrap();
-        let r3 = sync_to(&MirrorSource::of(&v), mdir.path()).unwrap();
+        let r3 = sync_to(&MirrorSource::of(&v).unwrap(), mdir.path()).unwrap();
         assert!(r3.copied >= 1);
         let mirrored = fs::read_to_string(mdir.path().join(&rel)).unwrap();
         assert!(mirrored.contains("고친 내용"));
@@ -218,7 +300,7 @@ mod tests {
         // 미러 쪽을 직접(더 나중에) 수정 → 충돌로 보고, 덮지 않음
         std::thread::sleep(std::time::Duration::from_millis(30));
         fs::write(mdir.path().join(&rel), "미러에서 몰래 수정").unwrap();
-        let r4 = sync_to(&MirrorSource::of(&v), mdir.path()).unwrap();
+        let r4 = sync_to(&MirrorSource::of(&v).unwrap(), mdir.path()).unwrap();
         assert!(r4.conflicts.contains(&rel));
         let still = fs::read_to_string(mdir.path().join(&rel)).unwrap();
         assert!(still.contains("몰래"));
@@ -279,10 +361,104 @@ mod tests {
         v.add_custom_type("회의록", "회의록", vec![], "").unwrap();
         v.save_pasted_image(b"img", "png").unwrap();
 
-        sync_to(&MirrorSource::of(&v), mdir.path()).unwrap();
+        sync_to(&MirrorSource::of(&v).unwrap(), mdir.path()).unwrap();
         assert!(mdir.path().join("_types.json").exists());
         // _attachments 내 파일 복사 확인
-        let list = file_list(&MirrorSource::of(&v)).unwrap();
+        let list = file_list(&MirrorSource::of(&v).unwrap()).unwrap();
         assert!(list.iter().any(|p| p.starts_with("_attachments/")));
+    }
+
+    /// vault 안의 폴더·vault를 품은 폴더는 미러로 받지 않는다 — vault 안이면 동기화마다
+    /// `Free/Free/Free/…`로 자라고 그 사본이 노트로 잡혔다.
+    #[test]
+    fn 중첩된_폴더는_미러로_받지_않는다() {
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("vault");
+        let v = Vault::open(&root).unwrap();
+        v.create_note("free", "메모", json!({})).unwrap();
+        let src = MirrorSource::of(&v).unwrap();
+
+        let inside = root.join("Free");
+        assert_eq!(check_target(&src, &inside).unwrap(), TargetState::Nested);
+        assert!(sync_to(&src, &inside).is_err());
+        assert!(!root.join("Free/Free").exists(), "vault 안에 사본을 만들었다");
+        // 아직 없는 하위 폴더도
+        assert_eq!(check_target(&src, &root.join("새 폴더/미러")).unwrap(), TargetState::Nested);
+        // vault를 품은 폴더
+        assert_eq!(check_target(&src, base.path()).unwrap(), TargetState::Nested);
+        // 옆 폴더는 괜찮다
+        assert_eq!(check_target(&src, &base.path().join("미러")).unwrap(), TargetState::Empty);
+    }
+
+    /// 미러 폴더는 어느 vault의 것인지 기억한다 — 다른 vault가 같은 폴더로 섞여 들지 않는다
+    #[test]
+    fn 다른_vault의_미러에는_복제하지_않는다() {
+        let a_dir = tempfile::tempdir().unwrap();
+        let b_dir = tempfile::tempdir().unwrap();
+        let mdir = tempfile::tempdir().unwrap();
+        let a = Vault::open(a_dir.path()).unwrap();
+        let b = Vault::open(b_dir.path()).unwrap();
+        a.create_note("free", "A의 노트", json!({})).unwrap();
+        b.create_note("free", "B의 노트", json!({})).unwrap();
+
+        let src_a = MirrorSource::of(&a).unwrap();
+        sync_to(&src_a, mdir.path()).unwrap();
+        assert_eq!(check_target(&src_a, mdir.path()).unwrap(), TargetState::Ours);
+
+        let src_b = MirrorSource::of(&b).unwrap();
+        assert_eq!(check_target(&src_b, mdir.path()).unwrap(), TargetState::OtherVault);
+        assert!(sync_to(&src_b, mdir.path()).is_err());
+        assert!(!mdir.path().join("Free/B의 노트.md").exists(), "다른 vault가 섞였다");
+
+        // 이름표는 그대로 남는다 — 다시 열어도, 폴더를 옮겨도 같은 vault다
+        let again = Vault::open(a_dir.path()).unwrap();
+        assert_eq!(MirrorSource::of(&again).unwrap().id, src_a.id);
+    }
+
+    /// 표시 없이 파일이 든 폴더는 고를 때 물을 수 있게 알려 준다(예전 판의 미러일 수도 있다)
+    #[test]
+    fn 표시_없는_폴더는_비었는지로_가린다() {
+        let vdir = tempfile::tempdir().unwrap();
+        let mdir = tempfile::tempdir().unwrap();
+        let v = Vault::open(vdir.path()).unwrap();
+        let src = MirrorSource::of(&v).unwrap();
+        assert_eq!(check_target(&src, mdir.path()).unwrap(), TargetState::Empty);
+        fs::write(mdir.path().join("남의 파일.txt"), "x").unwrap();
+        assert_eq!(check_target(&src, mdir.path()).unwrap(), TargetState::NotEmpty);
+        // 동기화하면 이 vault의 미러로 받아들인다 (예전 판이 만든 미러)
+        sync_to(&src, mdir.path()).unwrap();
+        assert_eq!(check_target(&src, mdir.path()).unwrap(), TargetState::Ours);
+    }
+
+    /// 백업과 같은 것을 복제한다 — 기록 종류·템플릿·형식 판도
+    #[test]
+    fn 기록_종류와_템플릿도_복제한다() {
+        let vdir = tempfile::tempdir().unwrap();
+        let mdir = tempfile::tempdir().unwrap();
+        let v = Vault::open(vdir.path()).unwrap();
+        v.add_callout(crate::vault::CalloutDef {
+            label: "아이디어".into(),
+            icon: "💡".into(),
+            color: "amber".into(),
+            scope: "daily".into(),
+        })
+        .unwrap();
+        v.write_body_template_file("free", "## 템플릿\n").unwrap();
+        sync_to(&MirrorSource::of(&v).unwrap(), mdir.path()).unwrap();
+        assert!(mdir.path().join("_callouts.json").exists());
+        assert!(mdir.path().join(".yamcha/templates/free.md").exists());
+        assert!(mdir.path().join(".yamcha/format.json").exists());
+        // 편집 기록·휴지통은 싣지 않는다
+        assert!(!mdir.path().join(".yamcha/history").exists());
+    }
+
+    /// 충돌 해결은 화면이 넘긴 경로를 믿지 않는다
+    #[test]
+    fn 충돌_해결은_vault_밖을_건드리지_않는다() {
+        let vdir = tempfile::tempdir().unwrap();
+        let mdir = tempfile::tempdir().unwrap();
+        let v = Vault::open(vdir.path()).unwrap();
+        fs::write(mdir.path().join("x.md"), "미러").unwrap();
+        assert!(resolve(&v, mdir.path(), "../x.md", true).is_err());
     }
 }

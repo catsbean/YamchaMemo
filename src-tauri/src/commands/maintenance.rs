@@ -12,17 +12,37 @@ pub fn mirror_sync(
     // vault 전체를 훑는 느린 IO다. 필요한 정보만 뽑고 **잠금을 놓은 뒤** 복사한다 —
     // 쥔 채로 돌면 그동안 저장·검색을 포함한 모든 커맨드가 뒤에 줄을 선다.
     let source = with_ctx(&state, |c| {
-        Ok(yamcha_core::mirror::MirrorSource::of(&c.vault))
+        yamcha_core::mirror::MirrorSource::of(&c.vault)
     })?;
 
-    let mut reports = Vec::new();
-    for t in &targets {
-        reports.push(
-            yamcha_core::mirror::sync_to(&source, std::path::Path::new(t))
-                .map_err(|e| e.to_string())?,
-        );
-    }
+    // 한 폴더가 안 된다고(다른 vault의 미러·연결 끊긴 드라이브) 나머지를 멈추지 않는다 —
+    // 그 폴더의 보고에 까닭을 싣는다
+    let reports = targets
+        .iter()
+        .map(|t| {
+            yamcha_core::mirror::sync_to(&source, std::path::Path::new(t)).unwrap_or_else(|e| {
+                crate::applog::warn(format!("미러 동기화 실패 ({t}): {e}"));
+                yamcha_core::mirror::MirrorReport {
+                    target: t.clone(),
+                    errors: vec![e.to_string()],
+                    ..Default::default()
+                }
+            })
+        })
+        .collect();
     Ok(reports)
+}
+
+/// 미러로 고른 폴더를 살핀다 — 추가하기 전에 화면이 부른다
+/// (vault 안·다른 vault의 미러는 거절, 파일이 든 폴더는 한 번 묻는다)
+#[tauri::command(async)]
+#[specta::specta]
+pub fn mirror_check(
+    state: State<'_, AppState>,
+    target: String,
+) -> Result<yamcha_core::mirror::TargetState, String> {
+    let source = with_ctx(&state, |c| yamcha_core::mirror::MirrorSource::of(&c.vault))?;
+    yamcha_core::mirror::check_target(&source, std::path::Path::new(&target)).map_err(|e| e.to_string())
 }
 
 /// 낡은 `_index.md`를 지금 다시 만든다 → 다시 만든 타입 수.

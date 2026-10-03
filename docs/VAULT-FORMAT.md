@@ -12,8 +12,12 @@ YamchaMemo가 vault(메모를 저장하는 폴더)에 무엇을 어떤 모양으
 `.yamcha/format.json`:
 
 ```json
-{ "version": 1 }
+{ "version": 1, "id": "3f9c…" }
 ```
+
+`id`는 이 vault의 이름표다 — 처음 미러로 복제할 때 만들어 적는다. 미러 폴더가 "어느 vault의 미러인가"를 이걸로
+알아본다(경로가 아니라 이름표라서 vault 폴더를 옮기거나 백업을 새 자리에 풀어도 같은 vault다). 판을 올리지 않고
+덧붙인 칸이라 옛 앱은 모른 척 지나간다.
 
 | 판 | 바뀐 것 | 이전 |
 | --- | --- | --- |
@@ -133,6 +137,9 @@ author: 김만중
 | `trash/<YYYYMMDD-HHMMSS>_<원래 이름>.md` | 휴지통. 되살리면 분류 폴더로(일지는 `Daily/YYYY/MM/`로) 간다 | 안 넣음 |
 | `tmp/` | 원자적 쓰기의 임시 파일 | 안 넣음 |
 | `migrate-backup/<시각>/` | 형식 이전 전에 둔 사본 | 안 넣음 |
+
+미러는 백업과 같은 것("넣음")을 복제한다. 미러 폴더 맨 위에는 `.yamcha-mirror.json`(`vault_id`·`vault_path`)을
+두어 어느 vault의 미러인지 적는다 — 다른 vault의 미러, vault 안의 폴더, vault를 품은 폴더에는 복제하지 않는다.
 
 ## 다른 편집기(옵시디언 등)와 함께 쓸 때
 

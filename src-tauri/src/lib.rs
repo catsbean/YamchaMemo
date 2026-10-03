@@ -111,6 +111,7 @@ pub fn run() {
         commands::notes::get_note_template,
         commands::notes::set_note_template,
         commands::maintenance::mirror_sync,
+        commands::maintenance::mirror_check,
         commands::maintenance::mirror_resolve,
         commands::maintenance::flush_index_files,
     ]);

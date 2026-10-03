@@ -1073,6 +1073,18 @@ async mirrorSync(targets: string[]) : Promise<Result<MirrorReport[], string>> {
 }
 },
 /**
+ * 미러로 고른 폴더를 살핀다 — 추가하기 전에 화면이 부른다
+ * (vault 안·다른 vault의 미러는 거절, 파일이 든 폴더는 한 번 묻는다)
+ */
+async mirrorCheck(target: string) : Promise<Result<TargetState, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("mirror_check", { target }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 미러 충돌 해결: pull=true면 미러 내용을 vault로 가져오고 재색인
  */
 async mirrorResolve(target: string, relPath: string, pull: boolean) : Promise<Result<null, string>> {
@@ -1572,6 +1584,30 @@ existing: boolean;
  * 범주 태그인가 (고유명사 칩과 색을 달리한다)
  */
 category: boolean }
+/**
+ * 미러로 고른 폴더가 어떤 상태인가
+ */
+export type TargetState = 
+/**
+ * 없거나 빈 폴더
+ */
+"empty" | 
+/**
+ * 이 vault의 미러 (표시가 있다)
+ */
+"ours" | 
+/**
+ * 다른 vault의 미러 — 쓰지 않는다
+ */
+"other_vault" | 
+/**
+ * 표시 없이 파일이 있다 — 고를 때 한 번 묻는다(예전 판이 만든 미러일 수도 있다)
+ */
+"not_empty" | 
+/**
+ * vault 안이거나 vault를 품은 폴더 — 쓰지 않는다
+ */
+"nested"
 /**
  * 어느 노트에 있는 할 일 한 줄
  */

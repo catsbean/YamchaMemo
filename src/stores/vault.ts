@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { load } from "@tauri-apps/plugin-store";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { join } from "@tauri-apps/api/path";
 import { notifyOtherWindows } from "../lib/windowSync";
@@ -693,13 +693,47 @@ export const useVault = create<VaultStore>((set, get) => {
     }
   }
 
+  /** 미러 목록은 vault마다 따로 둔다(`mirrorsByVault`, 키는 vault 경로).
+   *  예전엔 앱 전체에 하나(`mirrorPaths`)라, vault를 바꾸면(백업을 풀어 열기 등) 다른 vault가
+   *  같은 미러 폴더로 섞여 들었다. 예전 목록은 처음 여는 vault의 것으로 옮기고 지운다. */
+  function mirrorKey(vaultPath: string) {
+    return vaultPath.replace(/[\\/]+$/, "").toLowerCase();
+  }
+  async function loadMirrors(vaultPath: string): Promise<string[]> {
+    const store = await settings();
+    const all = (await store.get<Record<string, string[]>>("mirrorsByVault")) ?? {};
+    const key = mirrorKey(vaultPath);
+    if (all[key]) return all[key];
+    const legacy = (await store.get<string[]>("mirrorPaths")) ?? [];
+    if (legacy.length > 0) {
+      all[key] = legacy;
+      await store.set("mirrorsByVault", all);
+      await store.delete("mirrorPaths");
+    }
+    return legacy;
+  }
+  async function saveMirrors(mirrors: string[]) {
+    const vaultPath = get().vaultPath;
+    if (!vaultPath) return;
+    const store = await settings();
+    const all = (await store.get<Record<string, string[]>>("mirrorsByVault")) ?? {};
+    all[mirrorKey(vaultPath)] = mirrors;
+    await store.set("mirrorsByVault", all);
+  }
+
   /** vault 경로를 열고 설정에 저장한 뒤 목록·스키마를 새로고침한다 */
   async function activateVault(vaultPath: string) {
     if (!(await flushCurrent())) return;
     unwrap(await commands.setVault(vaultPath));
     const store = await settings();
     await store.set("vaultPath", vaultPath);
-    set({ vaultPath, current: null, dirty: false });
+    set({
+      vaultPath,
+      current: null,
+      dirty: false,
+      mirrors: await loadMirrors(vaultPath),
+      mirrorReports: [],
+    });
     await commands.setHistoryPolicy(get().historyMax, get().historyIntervalSecs);
     await get().refreshSchemas();
     await get().refresh();
@@ -1027,7 +1061,6 @@ export const useVault = create<VaultStore>((set, get) => {
         const store = await settings();
         const layout = ((await store.get<string>("layout")) ??
           "three") as LayoutMode;
-        const mirrors = (await store.get<string[]>("mirrorPaths")) ?? [];
         const deleteConfirm =
           (await store.get<boolean>("deleteConfirm")) ?? true;
         const bookPickerView =
@@ -1106,6 +1139,7 @@ export const useVault = create<VaultStore>((set, get) => {
           if (err) set({ captureError: err });
         }
         const saved = (await store.get<string>("vaultPath")) ?? null;
+        const mirrors = saved ? await loadMirrors(saved) : [];
         if (saved) {
           unwrap(await commands.setVault(saved));
           set({ vaultPath: saved, layout, mirrors });
@@ -1657,10 +1691,27 @@ export const useVault = create<VaultStore>((set, get) => {
           title: "미러(백업) 폴더 선택 — 클라우드 동기화 폴더 추천",
         });
         if (typeof dir !== "string") return;
+        const state = unwrap(await commands.mirrorCheck(dir));
+        if (state === "nested") {
+          throw new Error(
+            "vault 안의 폴더나 vault를 품은 폴더는 미러로 쓸 수 없습니다 — 다른 폴더를 고르세요.",
+          );
+        }
+        if (state === "other_vault") {
+          throw new Error(
+            "이 폴더는 다른 vault의 미러입니다 — 섞이지 않게 다른 폴더를 고르세요.",
+          );
+        }
+        if (state === "not_empty") {
+          const go = await ask(
+            "이 폴더에는 이미 파일이 있습니다. 그 안에 vault 사본을 만들어 계속 맞춰 둡니다 — 이름이 겹치는 파일은 vault 것으로 바뀔 수 있습니다.\n\n계속할까요?",
+            { title: "미러 폴더", kind: "warning", okLabel: "이 폴더로", cancelLabel: "취소" },
+          );
+          if (!go) return;
+        }
         const mirrors = [...new Set([...get().mirrors, dir])];
         set({ mirrors });
-        const store = await settings();
-        await store.set("mirrorPaths", mirrors);
+        await saveMirrors(mirrors);
         await get().syncMirrors();
       });
     },
@@ -1668,8 +1719,7 @@ export const useVault = create<VaultStore>((set, get) => {
     async removeMirror(path) {
       const mirrors = get().mirrors.filter((m) => m !== path);
       set({ mirrors, mirrorReports: get().mirrorReports.filter((r) => r.target !== path) });
-      const store = await settings();
-      await store.set("mirrorPaths", mirrors);
+      await saveMirrors(mirrors);
     },
 
     async syncMirrors() {

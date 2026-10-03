@@ -31,6 +31,45 @@ const FORMAT_FILE: &str = "format.json";
 #[derive(Serialize, Deserialize)]
 struct FormatFile {
     version: u32,
+    /// 이 vault의 이름표 — 미러 폴더가 "어느 vault의 미러인가"를 기억할 때 쓴다(`vault_id`).
+    /// 판을 올리지 않고 덧붙인 칸이라 옛 앱은 모른 척 지나간다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+}
+
+fn read_format(root: &Path) -> Option<FormatFile> {
+    fs::read_to_string(format_path(root))
+        .ok()
+        .and_then(|s| serde_json::from_str::<FormatFile>(&s).ok())
+}
+
+fn write_format(vault: &Vault, f: &FormatFile) -> Result<(), CoreError> {
+    let text = serde_json::to_string_pretty(f).map_err(|e| CoreError::Invalid(e.to_string()))?;
+    fs::create_dir_all(vault.root().join(".yamcha"))?;
+    vault.atomic_write(&format_path(vault.root()), &text)
+}
+
+/// 이 vault의 이름표. 없으면 지금 만들어 `format.json`에 적는다.
+///
+/// 경로가 아니라 이름표로 알아보는 까닭: vault 폴더를 옮기거나 백업을 새 자리에 풀어도
+/// 같은 vault다(백업은 `format.json`을 함께 담는다). 경로로 알아보면 그때마다 제 미러를
+/// "남의 미러"라며 거부한다.
+pub fn vault_id(vault: &Vault) -> Result<String, CoreError> {
+    let mut f = read_format(vault.root()).unwrap_or(FormatFile { version: CURRENT_FORMAT, id: None });
+    if let Some(id) = &f.id {
+        return Ok(id.clone());
+    }
+    use std::hash::{Hash, Hasher};
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (nanos, std::process::id(), vault.root()).hash(&mut h);
+    let id = format!("{:016x}{:08x}", h.finish(), nanos as u32);
+    f.id = Some(id.clone());
+    write_format(vault, &f)?;
+    Ok(id)
 }
 
 fn format_path(root: &Path) -> std::path::PathBuf {
@@ -40,11 +79,7 @@ fn format_path(root: &Path) -> std::path::PathBuf {
 /// 이 vault의 판 — 표시가 없으면 0(판 표시가 생기기 전의 vault). 깨진 표시도 0으로 본다 —
 /// 이전은 두 번 돌아도 같으므로 다시 도는 쪽이 안전하다.
 pub fn format_of(root: &Path) -> u32 {
-    fs::read_to_string(format_path(root))
-        .ok()
-        .and_then(|s| serde_json::from_str::<FormatFile>(&s).ok())
-        .map(|f| f.version)
-        .unwrap_or(0)
+    read_format(root).map(|f| f.version).unwrap_or(0)
 }
 
 /// 열기 전에 — 이 앱보다 새 판이면 열지 않는다 (아무것도 만들거나 고치기 전에 본다)
@@ -81,10 +116,9 @@ pub fn run(vault: &Vault, found: u32) -> Result<MigrationReport, CoreError> {
     }
 
     if found != CURRENT_FORMAT {
-        let text = serde_json::to_string_pretty(&FormatFile { version: CURRENT_FORMAT })
-            .map_err(|e| CoreError::Invalid(e.to_string()))?;
-        fs::create_dir_all(vault.root().join(".yamcha"))?;
-        vault.atomic_write(&format_path(vault.root()), &text)?;
+        // 이름표는 판을 올려도 그대로 둔다
+        let id = read_format(vault.root()).and_then(|f| f.id);
+        write_format(vault, &FormatFile { version: CURRENT_FORMAT, id })?;
         report.to = CURRENT_FORMAT;
     }
     Ok(report)

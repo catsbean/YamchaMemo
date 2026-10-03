@@ -49,6 +49,12 @@ export default function MirrorSection() {
                   </button>
                 </span>
               </div>
+              {report && report.errors.length > 0 && (
+                <p className="mt-1 break-all text-rose-500" title={report.errors.join("\n")}>
+                  {report.errors[0]}
+                  {report.errors.length > 1 && ` 외 ${report.errors.length - 1}건`}
+                </p>
+              )}
               {report && report.conflicts.length > 0 && (
                 <div className="mt-1.5 rounded bg-amber-50 p-2">
                   <p className="mb-1 font-semibold text-amber-700">
