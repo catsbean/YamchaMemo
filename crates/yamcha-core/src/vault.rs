@@ -53,6 +53,10 @@ pub struct Relocation {
     pub rel: String,
     /// 링크를 고쳐 쓴 **다른** 노트들
     pub rewritten: Vec<String>,
+    /// 옮기기는 됐지만 따라오지 못한 것(편집 기록·일부 링크). **실패로 돌려주지 않는다** —
+    /// 파일이 이미 새 자리에 있는데 실패라고 하면 화면은 옛 경로를 쥔 채 남아, 다음 자동저장이
+    /// 옛 자리에 같은 노트를 하나 더 만든다. 부르는 쪽이 로그에 남긴다.
+    pub warnings: Vec<String>,
 }
 
 impl Relocation {
@@ -60,15 +64,20 @@ impl Relocation {
         Relocation {
             rel: rel.to_string(),
             rewritten: Vec::new(),
+            warnings: Vec::new(),
         }
     }
 
     /// 새 경로 + 고쳐 쓴 노트들. 겹친 것과 노트 자신(스스로를 가리킨 링크)은 뺀다.
-    fn relocated(rel: String, mut rewritten: Vec<String>) -> Self {
+    fn relocated(rel: String, mut rewritten: Vec<String>, warnings: Vec<String>) -> Self {
         rewritten.sort();
         rewritten.dedup();
         rewritten.retain(|r| *r != rel);
-        Relocation { rel, rewritten }
+        Relocation {
+            rel,
+            rewritten,
+            warnings,
+        }
     }
 }
 
@@ -200,7 +209,7 @@ pub(crate) fn is_transient_lock(e: &std::io::Error) -> bool {
 /// 그 찰나에 겹친 저장이 실패한다. 사람은 아무 잘못이 없는데 "저장 실패"만 본다.
 /// 대부분 수십 밀리초면 풀리므로 한 번 실패했다고 포기할 이유가 없다.
 /// 잠금이 아닌 오류는 그 자리에서 그대로 돌려준다.
-fn retry_while_locked<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+pub(crate) fn retry_while_locked<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
     const BACKOFF_MS: [u64; 5] = [20, 50, 120, 300, 600];
     let mut last = match op() {
         Ok(v) => return Ok(v),
@@ -664,7 +673,7 @@ impl Vault {
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "무제".into());
             let dest = self.unique_path(&free_dir, &stem);
-            fs::rename(&abs, &dest)?;
+            retry_while_locked(|| fs::rename(&abs, &dest))?;
             let dest_rel = self.rel_of(&dest);
             // save_note가 type을 free로 normalize
             let note = self.read_note(&dest_rel)?;
@@ -727,20 +736,86 @@ impl Vault {
             .unwrap_or_else(|| "무제".into());
         let dest_dir = self.root.join(&dest_def.folder);
         let dest = self.unique_path(&dest_dir, &stem);
-        fs::rename(&abs, &dest)?;
-        let dest_rel = self.rel_of(&dest);
-        // 스냅샷도 따라 옮긴다. **save_note보다 먼저** 해야 한다 —
-        // save_note가 새 경로로 스냅샷을 하나 뜨고 나면 옮겨갈 자리가 이미 차 있다.
-        crate::history::move_note(self, rel, &dest_rel)?;
         // save_note가 새 경로 기준으로 type을 다시 정규화한다
-        let moved = self.read_note(&dest_rel)?;
-        self.save_note(&dest_rel, moved.frontmatter, &moved.body)?;
+        let (dest_rel, mut warnings) = self.relocate_file(rel, &abs, &dest, |dest_rel| {
+            let moved = self.read_note(dest_rel)?;
+            self.save_note(dest_rel, moved.frontmatter, &moved.body)
+        })?;
         // 폴더까지 적어 가리킨 링크는 따라와야 한다 (`[[Free/메모]]` → `[[Writing/메모]]`)
-        let rewritten = self.replace_links(&[Self::path_link_rule(rel, &dest_rel)], progress)?;
+        let rewritten = self.replace_links_lenient(
+            &[Self::path_link_rule(rel, &dest_rel)],
+            progress,
+            &mut warnings,
+        );
 
         self.mark_index_stale(&cur_type);
         self.mark_index_stale(new_type_id);
-        Ok(Relocation::relocated(dest_rel, rewritten))
+        Ok(Relocation::relocated(dest_rel, rewritten, warnings))
+    }
+
+    /// 노트 파일을 `dest`로 옮기고 편집 기록을 따라 옮긴 뒤 `finish`(새 경로에 다시 쓰기)를 돈다.
+    /// → (새 rel, 경고들).
+    ///
+    /// **반쯤 끝난 채 실패로 돌아오지 않는다.** 예전엔 파일을 옮긴 뒤 기록 옮기기·다시 쓰기에서
+    /// `?`로 실패를 돌려줬다. 파일은 이미 새 자리인데 화면은 실패로 알고 옛 경로를 쥐어, 다음
+    /// 자동저장이 옛 자리에 같은 노트를 새로 만들었다(클라우드 동기화가 기록 폴더를 잠깐 쥐면 난다).
+    /// - 편집 기록은 덤이다 — 못 옮기면 경고로 남기고 넘어간다.
+    /// - `finish`가 실패하면 파일(과 기록)을 제자리로 되돌리고 실패를 돌려준다. 되돌리기마저
+    ///   실패하면 새 자리를 성공으로 돌려준다(그게 디스크의 사실이다).
+    /// - **기록 옮기기는 `finish`보다 먼저** — finish가 새 경로로 스냅샷을 하나 뜨면 옮겨갈 자리가 찬다.
+    fn relocate_file(
+        &self,
+        rel: &str,
+        abs: &Path,
+        dest: &Path,
+        finish: impl FnOnce(&str) -> Result<(), CoreError>,
+    ) -> Result<(String, Vec<String>), CoreError> {
+        retry_while_locked(|| fs::rename(abs, dest))?;
+        let dest_rel = self.rel_of(dest);
+        let mut warnings = Vec::new();
+        let history_moved = match crate::history::move_note(self, rel, &dest_rel) {
+            Ok(()) => true,
+            Err(e) => {
+                warnings.push(format!("편집 기록을 따라 옮기지 못했습니다 ({rel} → {dest_rel}): {e}"));
+                false
+            }
+        };
+        if let Err(e) = finish(&dest_rel) {
+            if retry_while_locked(|| fs::rename(dest, abs)).is_ok() {
+                if history_moved {
+                    let _ = crate::history::move_note(self, &dest_rel, rel);
+                }
+                return Err(e);
+            }
+            warnings.push(format!("옮긴 뒤 다시 쓰지 못했고 되돌리지도 못했습니다 ({dest_rel}): {e}"));
+        }
+        Ok((dest_rel, warnings))
+    }
+
+    /// `replace_links`와 같되 실패를 경고로 돌린다 — 옮기기가 끝난 뒤에 부르므로
+    /// 링크 몇 편을 못 고쳤다고 옮기기 전체를 실패로 돌릴 수 없다.
+    fn replace_links_lenient(
+        &self,
+        rules: &[LinkRule],
+        progress: crate::Progress<'_>,
+        warnings: &mut Vec<String>,
+    ) -> Vec<String> {
+        match self.replace_links(rules, progress) {
+            Ok((rewritten, failed)) => {
+                if !failed.is_empty() {
+                    warnings.push(format!(
+                        "링크를 고쳐 쓰지 못한 노트 {}편: {}",
+                        failed.len(),
+                        failed.join(", ")
+                    ));
+                }
+                rewritten
+            }
+            Err(e) => {
+                warnings.push(format!("링크를 고쳐 쓰지 못했습니다: {e}"));
+                Vec::new()
+            }
+        }
     }
 
     // ---------- 제목 변경 ----------
@@ -772,14 +847,17 @@ impl Vault {
     /// 고치는데, 예전에는 규칙마다 vault를 따로 훑어 노트를 두 번씩 읽었고 둘 다 걸린 노트는
     /// 두 번 썼다. 규칙끼리는 서로의 결과를 건드리지 않는다(이름엔 `/`가 없다) — 따로 훑을
     /// 때와 결과가 같다. `progress`에는 (훑은 노트, 전체)를 알린다.
+    ///
+    /// → (고쳐 쓴 노트, 고쳐 쓰지 못한 노트). 한 편을 못 쓴다고(잠김 등) 나머지를 버리지 않는다.
     fn replace_links(
         &self,
         rules: &[LinkRule],
         progress: crate::Progress<'_>,
-    ) -> Result<Vec<String>, CoreError> {
+    ) -> Result<(Vec<String>, Vec<String>), CoreError> {
         let notes = self.list_notes()?;
         let total = notes.len();
         let mut rewritten = Vec::new();
+        let mut failed = Vec::new();
         for (i, n) in notes.into_iter().enumerate() {
             progress(i, total);
             let abs = self.abs(&n.rel_path)?;
@@ -799,12 +877,14 @@ impl Vault {
                 }
             }
             if updated != content {
-                self.atomic_write(&abs, &updated)?;
-                rewritten.push(n.rel_path);
+                match self.atomic_write(&abs, &updated) {
+                    Ok(()) => rewritten.push(n.rel_path),
+                    Err(_) => failed.push(n.rel_path),
+                }
             }
         }
         progress(total, total);
-        Ok(rewritten)
+        Ok((rewritten, failed))
     }
 
     /// 노트 제목 변경: 파일명 변경 + frontmatter title 갱신 + 다른 노트의 위키링크 일괄 수정.
@@ -852,19 +932,21 @@ impl Vault {
             .parent()
             .ok_or_else(|| CoreError::Invalid("잘못된 경로".into()))?
             .to_path_buf();
-        let mut new_rel = rel.to_string();
-        if new_stem != old_stem {
-            let dest = self.unique_path(&dir, &new_stem);
-            fs::rename(&abs_old, &dest)?;
-            new_rel = self.rel_of(&dest);
-            // 되돌릴 지점은 제목을 바꿨다고 사라지면 안 된다 (save_note보다 먼저)
-            crate::history::move_note(self, rel, &new_rel)?;
-        }
-
         // frontmatter title 갱신 (save_note가 인덱스 파일도 갱신)
         let mut fm2 = fm.clone();
         fm2.insert("title".into(), json!(new_title));
-        self.save_note(&new_rel, Value::Object(fm2), &note.body)?;
+        let fm2 = Value::Object(fm2);
+        let mut new_rel = rel.to_string();
+        let mut warnings = Vec::new();
+        if new_stem != old_stem {
+            let dest = self.unique_path(&dir, &new_stem);
+            // 되돌릴 지점(편집 기록)은 제목을 바꿨다고 사라지면 안 된다 — relocate_file이 따라 옮긴다
+            (new_rel, warnings) = self.relocate_file(rel, &abs_old, &dest, |new_rel| {
+                self.save_note(new_rel, fm2.clone(), &note.body)
+            })?;
+        } else {
+            self.save_note(&new_rel, fm2, &note.body)?;
+        }
 
         // 링크 일괄 치환: 옛 파일명·옛 제목 → 새 파일명. 제목을 바꾸면 파일명이 바뀌므로
         // 경로도 바뀐다 — 폴더까지 적은 링크도 따라와야 한다. 둘을 한 번에 훑는다.
@@ -872,14 +954,15 @@ impl Vault {
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or(new_stem);
-        let rewritten = self.replace_links(
+        let rewritten = self.replace_links_lenient(
             &[
                 (vec![old_stem, old_title.clone()], final_stem),
                 Self::path_link_rule(rel, &new_rel),
             ],
             progress,
-        )?;
-        Ok(Relocation::relocated(new_rel, rewritten))
+            &mut warnings,
+        );
+        Ok(Relocation::relocated(new_rel, rewritten, warnings))
     }
 
     fn save_custom_types(&self) -> Result<(), CoreError> {
@@ -1541,7 +1624,8 @@ impl Vault {
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "note.md".into());
-        fs::rename(&abs, unique_trash_path(&trash, &stamp.to_string(), &name))?;
+        let dest = unique_trash_path(&trash, &stamp.to_string(), &name);
+        retry_while_locked(|| fs::rename(&abs, &dest))?;
         // 스냅샷을 남겨 두면 지운 글의 본문이 최대 20벌 vault 안에 계속 남는다.
         // 파일 자체는 휴지통에 통째로 있으므로 되돌릴 길은 그대로다.
         let _ = crate::history::clear_note(self, rel);
@@ -2942,6 +3026,75 @@ mod tests {
             .unwrap();
         assert!(!forced.conflict);
         assert!(v.read_note(&rel).unwrap().body.contains("A가 쓴 본문"));
+    }
+
+    fn history_dir(v: &Vault, rel: &str) -> PathBuf {
+        v.root()
+            .join(".yamcha/history")
+            .join(rel.replace('/', "__"))
+    }
+
+    /// 편집 기록을 못 옮겨도 제목 바꾸기는 성공한다 — 파일은 이미 새 자리다.
+    /// 예전엔 실패를 돌려줘, 화면이 옛 경로를 쥔 채 다음 자동저장이 옛 자리에 노트를 또 만들었다.
+    #[test]
+    fn 편집_기록을_못_옮겨도_제목_바꾸기는_성공한다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "옛 제목", json!({})).unwrap();
+        v.save_note(&rel, json!({}), "본문 1").unwrap();
+        v.snapshot_before_change(&rel).unwrap();
+        // 옮겨갈 기록 자리를 폴더가 아닌 파일로 막아 둔다 → 기록 옮기기가 실패한다
+        let blocked = history_dir(&v, "Free/새 제목.md");
+        fs::create_dir_all(blocked.parent().unwrap()).unwrap();
+        fs::write(&blocked, "막힘").unwrap();
+
+        let r = v.rename_note(&rel, "새 제목").unwrap();
+        assert_eq!(r.rel, "Free/새 제목.md");
+        assert!(!r.warnings.is_empty(), "못 옮긴 것을 알려야 한다");
+        assert!(v.read_note(&r.rel).unwrap().body.contains("본문 1"));
+        assert!(!v.root().join(&rel).exists(), "옛 자리에 파일이 남았다");
+    }
+
+    /// 옮겨갈 자리에 기록이 이미 있어도(같은 이름을 예전에 썼다) 바꾼 노트의 기록을 버리지 않는다
+    #[test]
+    fn 옮겨갈_자리에_기록이_있으면_합친다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "옛 제목", json!({})).unwrap();
+        v.save_note(&rel, json!({}), "본문 1").unwrap();
+        v.snapshot_before_change(&rel).unwrap();
+        let mine: Vec<_> = fs::read_dir(history_dir(&v, &rel))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert!(!mine.is_empty());
+        let there = history_dir(&v, "Free/새 제목.md");
+        fs::create_dir_all(&there).unwrap();
+        fs::write(there.join("20200101-000000-000.md"), "예전 같은 이름의 기록").unwrap();
+
+        let r = v.rename_note(&rel, "새 제목").unwrap();
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        for name in &mine {
+            assert!(there.join(name).exists(), "바꾼 노트의 기록이 사라졌다: {name:?}");
+        }
+        assert!(there.join("20200101-000000-000.md").exists());
+        assert!(!history_dir(&v, &rel).exists());
+    }
+
+    /// 옮긴 뒤 다시 쓰기가 실패하면 파일과 기록을 제자리로 되돌리고 실패를 돌려준다
+    #[test]
+    fn 옮긴_뒤_다시_쓰기가_실패하면_되돌린다() {
+        let (_d, v) = vault();
+        let rel = v.create_note("free", "메모", json!({})).unwrap();
+        v.save_note(&rel, json!({}), "본문").unwrap();
+        v.snapshot_before_change(&rel).unwrap();
+        let abs = v.abs(&rel).unwrap();
+        let dest = v.root().join("Free/옮길 자리.md");
+        let r = v.relocate_file(&rel, &abs, &dest, |_| {
+            Err(CoreError::Invalid("일부러 실패".into()))
+        });
+        assert!(r.is_err());
+        assert!(abs.exists(), "파일이 제자리로 돌아오지 않았다");
+        assert!(!dest.exists());
+        assert!(history_dir(&v, &rel).is_dir(), "기록이 제자리로 돌아오지 않았다");
     }
 
     /// 저장이 막힌 편집은 원래 노트를 건드리지 않고 자유노트 사본으로 남는다 —

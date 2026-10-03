@@ -225,11 +225,29 @@ pub fn move_note(vault: &Vault, from: &str, to: &str) -> Result<(), CoreError> {
         return Ok(());
     }
     let dst = note_dir(vault, to);
-    if dst.exists() {
-        // 옮겨갈 자리에 이미 이력이 있다 (같은 이름을 다시 쓴 경우) — 덮지 않는다
+    // 대소문자만 바꾼 이름이면(Windows) 두 경로가 **같은 폴더**다 — 합치기로 가면 스냅샷마다
+    // "이미 있다"며 건너뛴 뒤 폴더를 지워 기록이 통째로 사라진다. 그냥 이름만 바꾼다.
+    let same_dir = matches!(
+        (fs::canonicalize(&src), fs::canonicalize(&dst)),
+        (Ok(a), Ok(b)) if a == b
+    );
+    if !dst.exists() || same_dir {
+        crate::vault::retry_while_locked(|| fs::rename(&src, &dst))?;
         return Ok(());
     }
-    fs::rename(&src, &dst)?;
+    // 옮겨갈 자리에 이미 이력이 있다(같은 이름을 예전에 썼다). 예전엔 여기서 그냥 돌아섰다 —
+    // 남은 옛 경로의 기록은 다음 시작에 주인 없는 기록으로 지워져, 바꾼 노트의 기록이 통째로
+    // 사라졌다. 스냅샷을 하나씩 합친다(이름은 시각이라 겹치면 같은 판이다 — 있는 쪽을 둔다).
+    for entry in fs::read_dir(&src)? {
+        let entry = entry?;
+        let into = dst.join(entry.file_name());
+        if into.exists() {
+            continue;
+        }
+        let snap = entry.path();
+        crate::vault::retry_while_locked(|| fs::rename(&snap, &into))?;
+    }
+    let _ = fs::remove_dir_all(&src);
     Ok(())
 }
 

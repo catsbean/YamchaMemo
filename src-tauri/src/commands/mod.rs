@@ -245,6 +245,10 @@ pub(crate) fn catch_up_relocation(
     moved: &yamcha_core::Relocation,
     progress: yamcha_core::Progress<'_>,
 ) {
+    // 옮기기는 됐지만 따라오지 못한 것(편집 기록·일부 링크) — 실패가 아니라 로그에 남긴다
+    for w in &moved.warnings {
+        crate::applog::warn(w);
+    }
     let touched: Vec<&str> = std::iter::once(moved.rel.as_str())
         .chain(moved.rewritten.iter().map(String::as_str))
         .collect();
