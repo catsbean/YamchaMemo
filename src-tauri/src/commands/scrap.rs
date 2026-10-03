@@ -26,10 +26,23 @@ fn extract_article_html(html: &str, base: &url::Url) -> Option<(String, String)>
 }
 
 /// 갈래① — 그냥 받은 HTML
+/// 글 한 편으로 받을 HTML의 상한 — 크기를 미리 알려 주는 응답만 거른다(대부분이 알려 준다).
+/// 수십 MB짜리 응답(파일 내려받기 링크 등)을 통째로 메모리에 올리지 않게.
+const MAX_HTML_BYTES: u64 = 10 * 1024 * 1024;
+
+/// 스크랩할 수 있는 주소인가 — 웹 주소(http·https)만. `file://` 등은 숨은 창이 내 컴퓨터의
+/// 파일을 열게 된다(노트 안의 링크를 내가 눌러야 하지만, 열 까닭이 없다).
+fn is_web_url(url: &url::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+}
+
 async fn fetch_article(url: &url::Url) -> Option<(String, String)> {
     let client = quick_http_client();
     let resp = client.get(url.as_str()).send().await.ok()?;
     if !resp.status().is_success() {
+        return None;
+    }
+    if resp.content_length().is_some_and(|n| n > MAX_HTML_BYTES) {
         return None;
     }
     let html = resp.text().await.ok()?;
@@ -42,12 +55,15 @@ async fn render_article(app: &tauri::AppHandle, url: &url::Url) -> Option<(Strin
     use tauri::webview::PageLoadEvent;
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
+    // 같은 밀리초에 둘을 열어도 이름이 겹치지 않게 순번을 붙인다 (겹치면 창을 못 만들어 실패했다)
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let label = format!(
-        "scrap-{}",
+        "scrap-{}-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()?
-            .as_millis()
+            .as_millis(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
@@ -109,6 +125,9 @@ fn unwrap_eval_json(raw: &str) -> String {
 #[specta::specta]
 pub async fn scrape_article(app: tauri::AppHandle, url: String) -> Option<ScrapedArticle> {
     let parsed = url::Url::parse(&url).ok()?;
+    if !is_web_url(&parsed) {
+        return None;
+    }
 
     let html_result = fetch_article(&parsed).await;
     let html_len = html_result
@@ -400,6 +419,16 @@ mod url_paste_live_probe {
 #[cfg(test)]
 mod title_tests {
     use super::*;
+
+    #[test]
+    fn 웹_주소만_스크랩한다() {
+        for ok in ["https://example.com/a", "http://example.com"] {
+            assert!(is_web_url(&url::Url::parse(ok).unwrap()), "{ok}");
+        }
+        for bad in ["file:///C:/Users/x/secret.txt", "javascript:alert(1)", "ftp://x/y", "data:text/html,hi"] {
+            assert!(!is_web_url(&url::Url::parse(bad).unwrap()), "{bad}");
+        }
+    }
 
     /// 소문자로 바꾸면 길이가 달라지는 글자가 앞에 있어도 제목을 제대로 자른다
     #[test]
