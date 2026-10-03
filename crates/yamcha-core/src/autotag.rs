@@ -508,7 +508,8 @@ pub fn suggest_tags(input: &TagInput, dict: &[DictEntry], limit: usize) -> Vec<T
     result.sort_by(|a, b| {
         a.category
             .cmp(&b.category)
-            .then_with(|| b.score.partial_cmp(&a.score).unwrap())
+            // 점수가 NaN이어도(빈 글의 0/0 등) 패닉하지 않게 — total_cmp는 언제나 순서를 준다
+            .then_with(|| b.score.total_cmp(&a.score))
             .then_with(|| a.tag.cmp(&b.tag))
     });
     result.truncate(limit);

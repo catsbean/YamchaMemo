@@ -32,11 +32,7 @@ impl yamcha_core::file_index::IndexAccess for StateAccess<'_> {
         &self,
         f: impl FnOnce(&mut Indexer, &mut SearchEngine) -> Result<R, yamcha_core::CoreError>,
     ) -> Result<R, yamcha_core::CoreError> {
-        let mut guard = self
-            .0
-             .0
-            .lock()
-            .map_err(|e| yamcha_core::CoreError::Invalid(e.to_string()))?;
+        let mut guard = self.0.lock();
         let ctx = guard
             .as_mut()
             .ok_or_else(|| yamcha_core::CoreError::Invalid("vault가 설정되지 않았습니다".into()))?;
@@ -61,18 +57,16 @@ pub fn build_file_index(app: tauri::AppHandle) -> Result<(), String> {
         let state = app.state::<AppState>();
         // 첨부 목록은 짧게 잠금을 쥐고 뜬다
         let listed = {
-            match state.0.lock() {
-                Ok(guard) => guard
-                    .as_ref()
-                    .map(|c| {
-                        (
-                            c.vault.root().to_path_buf(),
-                            yamcha_core::file_index::list_attachments(&c.vault),
-                        )
-                    })
-                    .ok_or("vault가 설정되지 않았습니다".to_string()),
-                Err(e) => Err(e.to_string()),
-            }
+            state
+                .lock()
+                .as_ref()
+                .map(|c| {
+                    (
+                        c.vault.root().to_path_buf(),
+                        yamcha_core::file_index::list_attachments(&c.vault),
+                    )
+                })
+                .ok_or("vault가 설정되지 않았습니다".to_string())
         };
 
         let result = match listed {
@@ -81,10 +75,8 @@ pub fn build_file_index(app: tauri::AppHandle) -> Result<(), String> {
                 let access = StateAccess(&state);
                 // vault에서 사라진 첨부의 캐시 정리는 **전체 색인일 때만** 한다.
                 // (build 안에서 하면 파일 하나만 넘기는 watcher 경로가 나머지를 다 지운다)
-                if let Ok(mut guard) = state.0.lock() {
-                    if let Some(ctx) = guard.as_mut() {
-                        let _ = ctx.indexer.prune_docs(&rels);
-                    }
+                if let Some(ctx) = state.lock().as_mut() {
+                    let _ = ctx.indexer.prune_docs(&rels);
                 }
                 let progress_app = app.clone();
                 let cancel_for_loop = cancel.clone();
@@ -126,12 +118,7 @@ pub fn build_file_index(app: tauri::AppHandle) -> Result<(), String> {
 /// 사라진 파일은 추출할 것이 없으니 색인·캐시에서 뺀다.
 pub(crate) fn refresh_attachments(app: &tauri::AppHandle, rels: &[String]) {
     let state = app.state::<AppState>();
-    let Some(root) = state
-        .0
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|c| c.vault.root().to_path_buf()))
-    else {
+    let Some(root) = state.lock().as_ref().map(|c| c.vault.root().to_path_buf()) else {
         return;
     };
 
@@ -142,16 +129,14 @@ pub(crate) fn refresh_attachments(app: &tauri::AppHandle, rels: &[String]) {
 
     // 사라진 파일 — 추출할 것이 없으니 잠금을 짧게 쥐고 지운다
     if !gone.is_empty() {
-        if let Ok(mut guard) = state.0.lock() {
-            if let Some(ctx) = guard.as_mut() {
-                for rel in &gone {
-                    let _ = yamcha_core::file_index::refresh_one(
-                        &ctx.vault,
-                        &mut ctx.indexer,
-                        &mut ctx.search,
-                        rel,
-                    );
-                }
+        if let Some(ctx) = state.lock().as_mut() {
+            for rel in &gone {
+                let _ = yamcha_core::file_index::refresh_one(
+                    &ctx.vault,
+                    &mut ctx.indexer,
+                    &mut ctx.search,
+                    rel,
+                );
             }
         }
     }

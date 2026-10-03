@@ -75,7 +75,11 @@ async fn kyobo_meta_via_search(client: &reqwest::Client, isbn: &str) -> KyoboMet
 fn extract_kyobo_dq_id(html: &str, isbn: &str) -> Option<String> {
     let marker = format!("\"cmdtcode\":\"{isbn}\"");
     let start = html.find(&marker)?;
-    let window_end = (start + 2000).min(html.len());
+    // 2,000바이트 자리가 한글 한가운데면 그대로 자를 때 패닉했다 — 글자 경계까지 물린다
+    let mut window_end = (start + 2000).min(html.len());
+    while !html.is_char_boundary(window_end) {
+        window_end -= 1;
+    }
     let window = &html[start..window_end];
     let key = "\"dq_ID\":\"";
     let key_pos = window.find(key)? + key.len();
@@ -453,5 +457,24 @@ mod kyobo_live_probe {
         assert!(m.intro.contains("창조") || m.intro.contains("복음"), "intro 내용이 이상함: {}", m.intro);
         assert!(!m.intro.ends_with("..."), "og:description 요약으로 잘린 채 남음: {}", m.intro);
         assert!(m.intro.len() > 200, "너무 짧음(요약만 온 듯): len={} text={}", m.intro.len(), m.intro);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 2,000바이트 자리가 한글 한가운데여도 패닉하지 않는다
+    #[test]
+    fn 한글_경계에서_자르지_않는다() {
+        let isbn = "9788937460449";
+        let marker = format!("\"cmdtcode\":\"{isbn}\"");
+        for pad in 0..3 {
+            // 표시 뒤를 한글(3바이트)로 채워 2,000바이트 자리가 글자 한가운데 오게 한다
+            let html = format!("{marker}{}{}\"dq_ID\":\"S000001\"", "x".repeat(pad), "가".repeat(700));
+            assert_eq!(extract_kyobo_dq_id(&html, isbn), None);
+        }
+        let html = format!("{marker}가나다\"dq_ID\":\"S000001\"");
+        assert_eq!(extract_kyobo_dq_id(&html, isbn).as_deref(), Some("S000001"));
     }
 }

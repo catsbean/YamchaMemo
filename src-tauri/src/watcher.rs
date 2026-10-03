@@ -133,10 +133,8 @@ pub fn start(app: AppHandle, root: PathBuf) -> Option<WatcherHandle> {
             // 노트는 **내용으로** 자기 쓰기를 가린다. 시각으로 가리면 창이 파일을
             // 구분하지 못해서, 내가 A를 저장하는 사이에 온 남의 B 저장 알림까지 삼킨다.
             let mut external: Vec<String> = Vec::new();
-            if let Ok(mut guard) = state.0.lock() {
-                if let Some(ctx) = guard.as_mut() {
-                    external = apply_md_changes(ctx, &rels);
-                }
+            if let Some(ctx) = state.lock().as_mut() {
+                external = apply_md_changes(ctx, &rels);
             }
             // 노트가 아닌 것(첨부·_types.json)은 지문을 남기는 길이 없어 예전대로 시각으로 가린다
             if !was_suppressed {

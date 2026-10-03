@@ -190,10 +190,12 @@ pub fn save_scrap(
 
 /// `<title>...</title>`를 뽑아 엔티티를 풀고 공백을 정리한다. 없으면 None.
 fn extract_title(html: &str) -> Option<String> {
-    let lower = html.to_lowercase();
+    // **ASCII만** 소문자로 — 바이트 길이가 그대로라 찾은 자리를 원문에 그대로 쓸 수 있다.
+    // 예전엔 `to_lowercase`라 길이가 바뀌는 글자(İ 등)가 앞에 있으면 엉뚱한 곳을 자르거나 패닉했다.
+    let lower = html.to_ascii_lowercase();
     let start = lower.find("<title")?;
     let open_end = html[start..].find('>')? + start + 1;
-    let close = html[open_end..].to_lowercase().find("</title>")? + open_end;
+    let close = lower[open_end..].find("</title>")? + open_end;
     let raw = html_unescape(&html[open_end..close]);
     let cleaned: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     let cleaned = cleaned.trim().to_string();
@@ -392,5 +394,18 @@ mod url_paste_live_probe {
         let title = super::extract_title(&html);
         eprintln!("extract_title={title:?}");
         assert!(title.is_some(), "제목을 못 뽑았다");
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    /// 소문자로 바꾸면 길이가 달라지는 글자가 앞에 있어도 제목을 제대로 자른다
+    #[test]
+    fn 길이가_바뀌는_글자가_앞에_있어도() {
+        let html = "<html><head><meta name=x content=\"İİİİİİİİİİ\"><TITLE>진짜 제목</Title></head></html>";
+        assert_eq!(extract_title(html).as_deref(), Some("진짜 제목"));
+        assert_eq!(extract_title("<p>İ</p>").as_deref(), None);
     }
 }

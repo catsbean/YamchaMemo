@@ -331,7 +331,7 @@ pub async fn enrich_books(
         report.processed += 1;
         // 잠금은 작업 스레드를 쥔 채 기다리지 않게 `blocking`으로 (`with_ctx` 설명)
         let apply = blocking(|| -> Result<_, String> {
-            let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+            let mut guard = state.lock();
             let ctx = guard.as_mut().ok_or("vault가 설정되지 않았습니다")?;
             Ok(apply_enrichment(ctx, c, doc.as_ref(), &kyobo, cover_bytes))
         })?;
@@ -717,7 +717,7 @@ fn snapshot_candidates(state: &State<'_, AppState>) -> Result<Vec<Cand>, String>
 }
 
 fn collect_candidates(state: &State<'_, AppState>) -> Result<Vec<Cand>, String> {
-    let guard = state.0.lock().map_err(|e| e.to_string())?;
+    let guard = state.lock();
     let ctx = guard.as_ref().ok_or("vault가 설정되지 않았습니다")?;
     let mut v = Vec::new();
     for n in ctx.vault.list_notes().map_err(|e| e.to_string())? {

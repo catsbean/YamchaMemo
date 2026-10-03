@@ -48,6 +48,31 @@ pub struct Ctx {
 
 pub struct AppState(pub Mutex<Option<Ctx>>);
 
+impl AppState {
+    /// 상태 잠금을 쥔다. **오염돼 있어도 이어서 쓴다.**
+    ///
+    /// 잠금을 쥔 채 패닉이 나면 잠금이 "오염"되고, 예전엔 그 뒤 모든 커맨드가 그 오류를 돌려줘
+    /// 앱을 다시 켤 때까지 아무것도 되지 않았다. 상태의 진실원본은 파일이고 색인은 다시 만들 수
+    /// 있어서, 멈추는 것보다 잇는 쪽이 낫다. (`with_ctx`는 패닉을 잠금 안에서 잡아 애초에
+    /// 오염시키지 않는다 — 이건 그 밖의 자리를 위한 안전망이다.)
+    pub fn lock(&self) -> std::sync::MutexGuard<'_, Option<Ctx>> {
+        self.0.lock().unwrap_or_else(|poisoned| {
+            crate::applog::error("상태 잠금이 앞선 패닉으로 오염돼 있었다 — 이어서 쓴다");
+            self.0.clear_poison();
+            poisoned.into_inner()
+        })
+    }
+}
+
+/// 패닉에 실린 글 (`panic!`의 문장)
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "알 수 없는 패닉".into())
+}
+
 /// 파일 감시 핸들 (set_vault 시 교체)
 pub struct WatcherState(pub Mutex<Option<crate::watcher::WatcherHandle>>);
 
@@ -68,16 +93,31 @@ fn with_ctx<T>(
     f: impl FnOnce(&mut Ctx) -> Result<T, yamcha_core::CoreError>,
 ) -> Result<T, String> {
     let at = std::panic::Location::caller();
-    blocking(|| {
-        let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-        let ctx = guard.as_mut().ok_or("vault가 설정되지 않았습니다")?;
-        f(ctx).map_err(|e| {
+    blocking(|| run_locked(state, at, f))
+}
+
+/// `with_ctx`의 몸통 — 잠금을 쥐고 일하되 패닉은 실패로 돌린다 (시험이 State 없이 부를 수 있게 뗐다)
+fn run_locked<T>(
+    state: &AppState,
+    at: &std::panic::Location<'_>,
+    f: impl FnOnce(&mut Ctx) -> Result<T, yamcha_core::CoreError>,
+) -> Result<T, String> {
+    let mut guard = state.lock();
+    let ctx = guard.as_mut().ok_or("vault가 설정되지 않았습니다")?;
+    // 패닉은 **잠금 안에서** 잡아 실패로 돌린다 — 잠금을 쥔 채 풀려 나가면 잠금이 오염되고,
+    // 화면의 요청은 답을 못 받은 채 남는다. 패닉 자체는 훅이 위치와 함께 로그에 남긴다.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(ctx))) {
+        Ok(r) => r.map_err(|e| {
             if let yamcha_core::CoreError::Io(io) = &e {
                 crate::applog::warn(format!("파일 오류 ({at}): {io:?}"));
             }
             e.to_string()
-        })
-    })
+        }),
+        Err(payload) => {
+            crate::applog::error(format!("커맨드 패닉 ({at}): {}", panic_text(&*payload)));
+            Err("앱 안에서 오류가 나 이 일을 끝내지 못했습니다. 다시 해 보고, 되풀이되면 설정 › 정보의 진단 정보를 보내 주세요.".into())
+        }
+    }
 }
 
 /// 막힐 수 있는 일(상태 잠금 기다리기·그 안의 일)을 런타임에 알리고 돈다.
@@ -431,7 +471,7 @@ fn open_vault(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
         .allow_directory(std::path::Path::new(path), true);
     // 락을 먼저 잡아 동시 호출을 직렬화하고, 기존 Ctx를 놓아
     // tantivy IndexWriter 잠금(LockBusy)을 해제한 뒤 새로 연다.
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let mut guard = state.lock();
     if let Some(existing) = guard.as_ref() {
         if existing.vault.root() == std::path::Path::new(path) {
             return Ok(()); // 같은 vault 중복 호출 무시
@@ -525,7 +565,7 @@ fn spawn_hydrate(app: tauri::AppHandle, root: PathBuf, rels: Vec<String>) {
                 continue; // 못 받았다(오프라인 등) — 다음 시작에 다시 "바뀐 것"으로 잡힌다
             }
             let state = app.state::<AppState>();
-            let Ok(mut guard) = state.0.lock() else { break };
+            let mut guard = state.lock();
             let Some(ctx) = guard.as_mut() else { break };
             if ctx.vault.root() != root {
                 break; // 그 사이 다른 vault로 옮겼다
@@ -627,9 +667,7 @@ pub fn get_vault_path(state: State<'_, AppState>) -> Option<String> {
     // 잠금은 작업 스레드를 쥔 채 기다리지 않게 (`with_ctx` 설명)
     blocking(|| {
         state
-            .0
             .lock()
-            .ok()?
             .as_ref()
             .map(|c| c.vault.root().to_string_lossy().to_string())
     })
@@ -642,10 +680,9 @@ pub fn get_schemas(state: State<'_, AppState>) -> Vec<TypeDef> {
     // 잠금은 작업 스레드를 쥔 채 기다리지 않게 (`with_ctx` 설명)
     blocking(|| {
         state
-            .0
             .lock()
-            .ok()
-            .and_then(|g| g.as_ref().map(|c| c.vault.types().to_vec()))
+            .as_ref()
+            .map(|c| c.vault.types().to_vec())
             .unwrap_or_else(builtin_defs)
     })
 }
@@ -793,6 +830,67 @@ mod index_location_tests {
             dot.join("history").join("Free__메모.md").join("20260101-000000-000.md").exists(),
             "히스토리를 지웠다"
         );
+    }
+}
+
+#[cfg(test)]
+mod panic_tests {
+    use super::*;
+
+    fn state_with_vault(vault_root: &Path, index_root: &Path) -> AppState {
+        AppState(Mutex::new(Some(Ctx {
+            vault: Vault::open(vault_root).unwrap(),
+            indexer: Indexer::open(&index_root.join("index.db")).unwrap(),
+            search: SearchEngine::open(&index_root.join("search")).unwrap(),
+            todo_cache: dashboard::TodoCache::default(),
+        })))
+    }
+
+    /// 커맨드 하나가 패닉해도 실패로 돌아오고, 그 뒤 커맨드는 그대로 돈다.
+    /// 예전엔 잠금이 오염돼 앱을 다시 켤 때까지 모든 커맨드가 실패했다.
+    #[test]
+    fn 패닉한_커맨드_뒤에도_다음_커맨드가_돈다() {
+        let v = tempfile::tempdir().unwrap();
+        let i = tempfile::tempdir().unwrap();
+        let state = state_with_vault(v.path(), i.path());
+        let at = std::panic::Location::caller();
+
+        let r: Result<(), String> = run_locked(&state, at, |_| panic!("일부러"));
+        assert!(r.unwrap_err().contains("오류"));
+        assert!(!state.0.is_poisoned(), "잠금이 오염됐다");
+
+        let ok = run_locked(&state, at, |c| c.vault.create_note("free", "다음", serde_json::json!({})));
+        assert!(ok.is_ok(), "{ok:?}");
+    }
+
+    /// 다른 자리에서 오염된 잠금도 이어서 쓴다
+    #[test]
+    fn 오염된_잠금도_이어서_쓴다() {
+        let state = std::sync::Arc::new(AppState(Mutex::new(None)));
+        let s2 = state.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = s2.0.lock().unwrap();
+            panic!("잠금을 쥔 채 패닉");
+        })
+        .join();
+        assert!(state.0.is_poisoned());
+        assert!(state.lock().is_none());
+        assert!(!state.0.is_poisoned());
+    }
+
+    /// 형식이 다른 날짜로 일지를 열면 패닉이 아니라 오류
+    #[test]
+    fn 잘못된_날짜의_일지는_오류로_돌아온다() {
+        let v = tempfile::tempdir().unwrap();
+        let i = tempfile::tempdir().unwrap();
+        let state = state_with_vault(v.path(), i.path());
+        let at = std::panic::Location::caller();
+        for bad in ["2026-7", "", "가나다라마바사", "2026-13-01"] {
+            let r = run_locked(&state, at, |c| c.vault.open_daily(bad));
+            let e = r.unwrap_err();
+            assert!(e.contains("YYYY-MM-DD"), "{bad}: {e}");
+        }
+        assert!(!state.0.is_poisoned());
     }
 }
 

@@ -156,7 +156,8 @@ fn format_trash_stamp(stamp: &str) -> String {
         Some(rest) if rest.starts_with('-') => &stamp[..15],
         _ => stamp,
     };
-    if stamp.len() == 15 && stamp.as_bytes().get(8) == Some(&b'-') {
+    // 아래는 바이트 자리로 자른다 — 손으로 넣은 이름이 한글이면 글자 한가운데서 잘려 패닉이 났다
+    if stamp.len() == 15 && stamp.is_ascii() && stamp.as_bytes()[8] == b'-' {
         format!(
             "{}-{}-{} {}:{}",
             &stamp[0..4],
@@ -209,6 +210,13 @@ pub(crate) fn is_transient_lock(e: &std::io::Error) -> bool {
 /// 그 찰나에 겹친 저장이 실패한다. 사람은 아무 잘못이 없는데 "저장 실패"만 본다.
 /// 대부분 수십 밀리초면 풀리므로 한 번 실패했다고 포기할 이유가 없다.
 /// 잠금이 아닌 오류는 그 자리에서 그대로 돌려준다.
+/// 안의 작은 잠금(목록 파일 표시·자기쓰기 지문·요약 캐시)을 쥔다 — **오염돼도 이어서 쓴다.**
+/// 예전엔 `if let Ok`로 지나쳐서, 한 번 오염되면 그 뒤로 영영 표시가 안 남고(목록 파일이 낡은 채)
+/// 자기 쓰기를 못 알아봐 내 저장마다 "밖에서 바뀜"이 떴다. 안의 값은 모두 다시 만들 수 있는 것이다.
+fn relock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 pub(crate) fn retry_while_locked<T>(mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
     const BACKOFF_MS: [u64; 5] = [20, 50, 120, 300, 600];
     let mut last = match op() {
@@ -434,19 +442,14 @@ impl Vault {
 
     /// 이 타입의 `_index.md`가 낡았다고 표시한다 (실제 재생성은 `flush_index_files`가 한다)
     pub(crate) fn mark_index_stale(&self, type_id: &str) {
-        if let Ok(mut set) = self.index_stale.lock() {
-            set.insert(type_id.to_string());
-        }
+        relock(&self.index_stale).insert(type_id.to_string());
     }
 
     /// 낡은 `_index.md`를 모두 다시 만든다 → 다시 만든 타입 수.
     ///
     /// 손을 멈췄을 때 한 번만 부르면 된다. 여러 번 저장했어도 타입당 한 번만 돈다.
     pub fn flush_index_files(&self) -> Result<usize, CoreError> {
-        let stale: Vec<String> = match self.index_stale.lock() {
-            Ok(mut set) => set.drain().collect(),
-            Err(_) => return Ok(0),
-        };
+        let stale: Vec<String> = relock(&self.index_stale).drain().collect();
         let mut done = 0;
         for type_id in &stale {
             crate::index_file::update_index(self, type_id)?;
@@ -457,10 +460,7 @@ impl Vault {
 
     /// 아직 반영되지 않은 목록 파일이 있는가 (창을 닫기 전 확인용)
     pub fn has_stale_index(&self) -> bool {
-        self.index_stale
-            .lock()
-            .map(|s| !s.is_empty())
-            .unwrap_or(false)
+        !relock(&self.index_stale).is_empty()
     }
 
     pub fn history_policy(&self) -> crate::history::HistoryPolicy {
@@ -1073,12 +1073,10 @@ impl Vault {
         self.atomic_write_bytes(abs, content.as_bytes())?;
         // 방금 쓴 내용을 적어 둔다 — 파일 감시가 이걸로 자기 쓰기를 알아본다
         if let Ok(rel) = abs.strip_prefix(&self.root) {
-            if let Ok(mut map) = self.self_writes.lock() {
-                map.insert(
-                    rel.to_string_lossy().replace('\\', "/"),
-                    fingerprint(content),
-                );
-            }
+            relock(&self.self_writes).insert(
+                rel.to_string_lossy().replace('\\', "/"),
+                fingerprint(content),
+            );
         }
         Ok(())
     }
@@ -1139,11 +1137,9 @@ impl Vault {
             return false;
         };
         let now = fingerprint(&content);
-        self.self_writes
-            .lock()
-            .ok()
-            .and_then(|m| m.get(rel).cloned())
-            .is_some_and(|last| last == now)
+        relock(&self.self_writes)
+            .get(rel)
+            .is_some_and(|last| *last == now)
     }
 
     /// rel 경로에서 타입 id 추론 (최상위 폴더 기준)
@@ -1222,11 +1218,9 @@ impl Vault {
     /// 판단 잣대는 (수정시각, 크기)로 증분 색인과 같다. 수정시각은 나노초까지 본다 —
     /// 밀리초로 자르면 같은 밀리초 안에 크기가 같게 다시 저장된 편을 놓칠 수 있다.
     fn summary_of(&self, file: &NoteFile) -> Option<NoteSummary> {
-        if let Ok(cache) = self.summaries.lock() {
-            if let Some((mtime, size, cached)) = cache.get(&file.rel_path) {
-                if *mtime == file.mtime && *size == file.size {
-                    return Some(cached.clone());
-                }
+        if let Some((mtime, size, cached)) = relock(&self.summaries).get(&file.rel_path) {
+            if *mtime == file.mtime && *size == file.size {
+                return Some(cached.clone());
             }
         }
         // 아직 내려받지 않은 파일은 열지 않는다 — 열면 다운로드가 끝날 때까지 여기서 멈춘다.
@@ -1238,12 +1232,10 @@ impl Vault {
         let fresh = self
             .summarize(&self.root.join(&file.rel_path), &file.note_type)
             .ok()?;
-        if let Ok(mut cache) = self.summaries.lock() {
-            cache.insert(
-                file.rel_path.clone(),
-                (file.mtime, file.size, fresh.clone()),
-            );
-        }
+        relock(&self.summaries).insert(
+            file.rel_path.clone(),
+            (file.mtime, file.size, fresh.clone()),
+        );
         Some(fresh)
     }
 
@@ -1282,9 +1274,7 @@ impl Vault {
 
     /// 사라진 파일의 요약은 버린다 (안 버리면 캐시가 계속 자란다)
     fn prune_summaries(&self, live: &[NoteFile]) {
-        let Ok(mut cache) = self.summaries.lock() else {
-            return;
-        };
+        let mut cache = relock(&self.summaries);
         if cache.len() <= live.len() {
             return;
         }
@@ -1965,6 +1955,10 @@ impl Vault {
 
     /// 오늘의 데일리노트 (없으면 템플릿으로 생성)
     pub fn open_daily(&self, date: &str) -> Result<String, CoreError> {
+        // 날짜에서 바로 잘라 폴더를 만든다 — 형식이 다르면 자르다 패닉이 났다(상태 잠금을 쥔 채)
+        if !is_ymd(date) {
+            return Err(CoreError::Invalid(format!("날짜가 YYYY-MM-DD 꼴이 아닙니다: {date}")));
+        }
         let (year, month) = (&date[..4], &date[5..7]);
         let dir = self.root.join(Builtin::Daily.folder()).join(year).join(month);
         let abs = dir.join(format!("{date}.md"));
@@ -3768,6 +3762,16 @@ mod tests {
         .unwrap();
         let r = v.restore_trash("20260724-101500_여행 첫날.md").unwrap();
         assert_eq!(r.rel, "Daily/2026/05/2026-05-01.md");
+    }
+
+    /// 휴지통 이름이 한글이어도(손으로 넣은 파일) 날짜를 읽다 패닉하지 않는다
+    #[test]
+    fn 휴지통_시각_읽기는_한글에서_패닉하지_않는다() {
+        // 15바이트이고 9번째 바이트가 '-'인 한글 이름
+        let odd = "가나ab-다라";
+        assert_eq!(odd.len(), 15);
+        assert_eq!(format_trash_stamp(odd), odd);
+        assert_eq!(format_trash_stamp("20260926-104812"), "2026-09-26 10:48");
     }
 
     #[test]
