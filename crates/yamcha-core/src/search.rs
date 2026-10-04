@@ -732,7 +732,14 @@ fn excerpt(body: &str, query: &str) -> String {
         ),
         None => (0, fwd_chars(body, 0, NO_MATCH_LEN)),
     };
-    let mut s = body[start..end].replace('\n', " ");
+    // 마크다운 기호(## · > · [!발췌] · ** · [[ ]])는 걷어 낸다 — 결과 미리보기에
+    // "## 기록 > [!발췌] 2026-10-04 >"처럼 기호가 그대로 보였다. 찾은 말은 그대로 남는다.
+    let mut s = body[start..end]
+        .lines()
+        .map(clean_markup_line)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     if start > 0 {
         s.insert(0, '…');
     }
@@ -740,6 +747,62 @@ fn excerpt(body: &str, query: &str) -> String {
         s.push('…');
     }
     s
+}
+
+/// 미리보기 한 줄에서 마크다운 기호를 걷는다 (줄머리의 제목·인용·목록·콜아웃 표시, 줄 안의 강조·코드·링크 괄호).
+/// 태그(`#시험`)는 줄머리라도 남긴다 — 제목 표시는 `#` 뒤에 빈칸이 있을 때만이다.
+fn clean_markup_line(line: &str) -> String {
+    let mut l = line.trim();
+    loop {
+        let before = l;
+        if let Some(rest) = l.strip_prefix('>') {
+            l = rest.trim_start();
+        }
+        let hashes = l.len() - l.trim_start_matches('#').len();
+        if hashes > 0 && l[hashes..].starts_with(' ') {
+            l = l[hashes..].trim_start();
+        }
+        for marker in ["- [ ] ", "- [x] ", "- [X] ", "- ", "* ", "+ "] {
+            if let Some(rest) = l.strip_prefix(marker) {
+                l = rest.trim_start();
+                break;
+            }
+        }
+        let digits = l.len() - l.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0 && l[digits..].starts_with(". ") {
+            l = l[digits + 2..].trim_start();
+        }
+        if l == before {
+            break;
+        }
+    }
+    let mut out = String::with_capacity(l.len());
+    // 콜아웃 머리 `[!발췌]` → `발췌`
+    let mut rest = l;
+    if let Some(after) = rest.strip_prefix("[!") {
+        if let Some(close) = after.find(']') {
+            out.push_str(&after[..close]);
+            rest = &after[close + 1..];
+        }
+    }
+    // [[대상|보일 말]] → 보일 말, [[대상]] → 대상
+    while let Some(open) = rest.find("[[") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 2..];
+        match after.find("]]") {
+            Some(close) => {
+                let inner = &after[..close];
+                out.push_str(inner.rsplit('|').next().unwrap_or(inner));
+                rest = &after[close + 2..];
+            }
+            None => {
+                out.push_str(&rest[open..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out.replace("**", "").replace("__", "").replace('`', "").trim().to_string()
 }
 
 /// ASCII 대소문자만 무시하는 부분 문자열 검색 (바이트 오프셋).
@@ -1487,6 +1550,18 @@ mod tests {
         let hits = s.search_filtered("공고", &f, 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "안내.pdf");
+    }
+
+    #[test]
+    fn 미리보기는_마크다운_기호를_걷는다() {
+        let body = "## 소개\n\n소개 글\n\n## 기록\n\n> [!발췌] 2026-10-04\n> 새는 **알에서** 나오려고 투쟁한다.\n\n- [ ] [[데미안|헤세의 책]] 다시 읽기 #시험";
+        let s = excerpt(body, "알에서");
+        assert!(s.contains("알에서"), "{s}");
+        for bad in ["##", "> ", "[!", "**", "[[", "]]", "- [ ]"] {
+            assert!(!s.contains(bad), "{bad:?}가 남았다: {s}");
+        }
+        assert!(s.contains("발췌 2026-10-04"), "{s}");
+        assert!(s.contains("헤세의 책") && s.contains("#시험"), "{s}");
     }
 
     #[test]
