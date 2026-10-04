@@ -31,6 +31,7 @@ export default function HomeDashboard() {
     moveNoteTo,
     refreshTodos,
     toggleTodoItem,
+    createUntitled,
   } = useVault();
   const ctx = useContextMenu();
   const year = new Date().getFullYear();
@@ -121,6 +122,40 @@ export default function HomeDashboard() {
       <header className="border-b border-neutral-200 px-6 py-3">
         <h1 className="text-lg font-bold">홈</h1>
       </header>
+
+      {notes.length === 0 && (
+        // 빈 vault — 처음 쓰는 사람이 0만 늘어선 카드 앞에서 어디부터 할지 모르고 멈췄다(8-6).
+        // 노트가 한 편이라도 생기면 사라진다. 새 기능이 아니라 이미 있는 세 길로 바로 보내는 안내다.
+        <section className="mx-6 mt-6 rounded-xl border border-amber-200 bg-amber-50/60 p-5">
+          <h2 className="text-sm font-bold text-neutral-800">처음이세요? 이렇게 시작해 보세요</h2>
+          <p className="mt-1 text-xs text-neutral-500">
+            모든 메모는 이 컴퓨터의 평범한 .md 파일로 저장됩니다. 쓰는 동안 저절로 저장됩니다.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              className="rounded bg-neutral-800 px-3 py-1.5 text-sm text-white hover:bg-neutral-600"
+              onClick={() => createUntitled("free")}
+            >
+              📝 첫 메모 쓰기
+            </button>
+            <button
+              className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm hover:border-neutral-500"
+              onClick={() => setNav("book")}
+            >
+              📚 책 한 권 추가
+            </button>
+            <button
+              className="rounded border border-neutral-300 bg-white px-3 py-1.5 text-sm hover:border-neutral-500"
+              onClick={() => openToday()}
+            >
+              📅 오늘 일지 쓰기
+            </button>
+          </div>
+          <p className="mt-3 text-xs text-neutral-400">
+            무엇이든 찾을 땐 왼쪽 위 검색(Ctrl+K). 기능 설명은 설정 › 정보 › 도움말에 있습니다.
+          </p>
+        </section>
+      )}
 
       <div className="grid gap-4 p-6 lg:grid-cols-2">
         {/* 독서 카드 */}
