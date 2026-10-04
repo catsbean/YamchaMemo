@@ -186,7 +186,7 @@ export default function TodoDashboard() {
         <h1 className="text-lg font-bold">
           ☑ 할 일{" "}
           <span className="text-sm font-normal text-neutral-400">
-            {remaining > 0 ? `${remaining}건 남음` : "다 끝냈습니다"}
+            {remaining > 0 ? `${remaining}건 남음` : doneCount > 0 ? "다 끝냈습니다" : "아직 없습니다"}
           </span>
         </h1>
         <span className="flex-1" />

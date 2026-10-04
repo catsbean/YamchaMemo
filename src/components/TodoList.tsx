@@ -116,7 +116,8 @@ export default function TodoList({
         <span className="text-xs font-semibold text-neutral-600">
           ☑ 할 일{" "}
           <span className="font-normal text-neutral-400">
-            {remaining > 0 ? `${remaining}건 남음` : "다 끝냈습니다"}
+            {/* 하나도 없을 때 "다 끝냈다"고 하면 뭔가 한 것처럼 보인다 */}
+            {remaining > 0 ? `${remaining}건 남음` : todos.length > 0 ? "다 끝냈습니다" : "없음"}
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-2">
