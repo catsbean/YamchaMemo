@@ -48,6 +48,8 @@ export default function EditorPane() {
     openNote,
     closeNote,
     refresh,
+    refreshNote,
+    refreshTodos,
     renameCurrent,
     moveCurrent,
     externalChanged,
@@ -93,7 +95,12 @@ export default function EditorPane() {
   /** 보기 모드에서 항목을 고친 뒤: 파일에서 다시 읽고 다른 창에도 알린다 */
   async function onStructuredChange() {
     await reloadCurrent();
-    if (current) await notifyOtherWindows([current.rel_path]);
+    if (current) {
+      // 목록 요약과 할 일 수도 따라오게 (할 일을 체크·추가하면 왼쪽 메뉴의 수가 바뀐다)
+      await refreshNote(current.rel_path);
+      refreshTodos().catch(() => {});
+      await notifyOtherWindows([current.rel_path]);
+    }
   }
 
   /** 보기 ↔ 원문 편집 전환 (편집 중이던 내용은 흘리지 않고 저장한다) */

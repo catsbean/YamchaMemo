@@ -45,6 +45,7 @@ export default function BookView({ note }: { note: NoteContent }) {
     openNote,
     reloadCurrent,
     ensureSaved,
+    refreshNote,
   } = useVault();
   const [showIntro, setShowIntro] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -280,6 +281,8 @@ export default function BookView({ note }: { note: NoteContent }) {
             body={note.body}
             onChanged={async () => {
               await reloadCurrent();
+              // 기록을 고치거나 지우면 목록의 기록 수도 바뀐다
+              await refreshNote(note.rel_path);
               await notifyOtherWindows([note.rel_path]);
             }}
             beforeChange={ensureSaved}

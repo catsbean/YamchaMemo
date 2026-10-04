@@ -1503,6 +1503,8 @@ export const useVault = create<VaultStore>((set, get) => {
           await commands.appendReadingEntry(cur.rel_path, kind, text),
         );
         set({ current: updated, dirty: false });
+        // 목록의 요약(기록 수)도 따라오게 — 안 하면 왼쪽 메뉴의 독서기록 수가 그대로 남았다
+        await get().refreshNote(cur.rel_path);
         await notifyOtherWindows([cur.rel_path]);
         afterWrite();
       });
