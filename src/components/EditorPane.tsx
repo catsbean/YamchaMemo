@@ -185,6 +185,9 @@ export default function EditorPane() {
   }
 
   const schema = schemas.find((s) => s.id === current.note_type);
+  // 제목은 머리의 제목칸이 맡는다(파일 이름까지 함께 바꾼다). 아래 칸에도 "제목"이 있으면 같은 것이 둘로
+  // 보이고, 그쪽을 고치면 파일 이름은 그대로인 채 frontmatter만 바뀌었다 — 처음 쓰는 사람이 헷갈렸다.
+  const formSchema = schema && { ...schema, fields: schema.fields.filter((f) => f.name !== "title") };
   const fm = fmObject(current);
   const fileName = current.rel_path.split("/").pop()?.replace(/\.md$/, "");
   // 데일리(날짜=이름)는 직접 변경 불가
@@ -274,14 +277,18 @@ export default function EditorPane() {
               className="min-w-0 flex-1 rounded border border-neutral-300 px-2 py-0.5 text-base font-bold focus:border-neutral-500 focus:outline-none"
               placeholder={
                 autoNames
-                  ? "제목 (비워 두면 본문 첫 줄로 정해집니다)"
+                  ? "제목 (비우면 첫 줄로)"
                   : "제목"
               }
               value={editingTitle}
               onChange={(e) => setEditingTitle(e.target.value)}
               onBlur={commitRename}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !isImeEnter(e)) commitRename();
+                if (e.key === "Enter" && !isImeEnter(e)) {
+                  commitRename();
+                  // 제목을 정했으면 곧장 본문을 쓰게 한다 (예전엔 본문을 다시 눌러야 했다)
+                  editorView?.focus();
+                }
                 if (e.key === "Escape") {
                   titleCommitted.current = true;
                   setEditingTitle(null);
@@ -397,7 +404,7 @@ export default function EditorPane() {
         // 다음 노트 칸에 남는다. rel_path가 아니라 openSeq를 쓰는 건 제목 변경으로
         // 경로만 바뀔 때는 새로 짓지 않으려는 것이다.
         key={openSeq}
-        schema={schema}
+        schema={formSchema}
         value={fm}
         onChange={setFrontmatter}
         onPickImage={pickImage}
