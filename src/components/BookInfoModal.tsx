@@ -48,6 +48,7 @@ export default function BookInfoModal({
     genre: fmStr(fm0, "genre"),
     status: fmStr(fm0, "status") || "wishlist",
     rating: fmStr(fm0, "rating"),
+    storeRating: fmStr(fm0, "store_rating"),
     started: fmStr(fm0, "started"),
     finished: fmStr(fm0, "finished"),
     cover: fmStr(fm0, "cover"),
@@ -86,14 +87,15 @@ export default function BookInfoModal({
     const r = await commands.autofillBook(f.title.trim(), f.author.trim(), apiKey);
     if (r.status === "ok") {
       const m = r.data;
-      const rating = Number(m.rating) > 0 ? m.rating : "";
+      // 서점 평점은 내 별점과 따로 — 내 별점은 사람이 매길 때만 채운다
+      const storeRating = Number(m.rating) > 0 ? m.rating : "";
       setF((cur) => ({
         ...cur,
         author: cur.author.trim() || m.author,
         publisher: cur.publisher.trim() || m.publisher,
         isbn: cur.isbn.trim() || m.isbn,
         genre: cur.genre.trim() || m.genre,
-        rating: cur.rating.trim() || rating,
+        storeRating: cur.storeRating.trim() || storeRating,
         cover: cur.cover.trim() || m.cover_url,
       }));
       setIntroDraft((cur) => (cur.trim() ? cur : m.intro));
@@ -156,6 +158,7 @@ export default function BookInfoModal({
         genre: f.genre.trim() || null,
         status: f.status,
         rating: f.rating.trim() === "" ? null : Number(f.rating),
+        store_rating: f.storeRating.trim() === "" ? null : Number(f.storeRating),
         started: f.started.trim() || null,
         finished: f.finished.trim() || null,
         cover: cover || null,
@@ -316,7 +319,7 @@ export default function BookInfoModal({
               </select>
             </label>
             <label className="flex flex-col gap-0.5">
-              <span className="text-xs text-neutral-500">평점 (0~5)</span>
+              <span className="text-xs text-neutral-500">내 별점 (0~5)</span>
               <input
                 type="number"
                 min={0}
@@ -325,6 +328,18 @@ export default function BookInfoModal({
                 className={inputCls}
                 value={f.rating}
                 onChange={(e) => setF({ ...f, rating: e.target.value })}
+              />
+            </label>
+            <label className="flex flex-col gap-0.5">
+              <span className="text-xs text-neutral-500">서점 평점 (참고)</span>
+              <input
+                type="number"
+                min={0}
+                max={10}
+                step={0.01}
+                className={inputCls}
+                value={f.storeRating}
+                onChange={(e) => setF({ ...f, storeRating: e.target.value })}
               />
             </label>
             <label className="flex flex-col gap-0.5">

@@ -69,6 +69,7 @@ export default function BookView({ note }: { note: NoteContent }) {
   const genre = fmStr(fm, "genre");
   const status = fmStr(fm, "status");
   const rating = fmStr(fm, "rating");
+  const storeRating = fmStr(fm, "store_rating");
   const cover = fmStr(fm, "cover");
   const coverUrl = coverSrc(vaultPath, cover);
   const tags = note.frontmatter && typeof note.frontmatter === "object" && !Array.isArray(note.frontmatter)
@@ -219,6 +220,12 @@ export default function BookView({ note }: { note: NoteContent }) {
               value={rating ? Number(rating) : 0}
               onChange={(v) => patchInfo({ rating: v })}
             />
+            {/* 서점 평점은 내 별점과 따로 보인다 — 별을 칠하지 않고 숫자로만(내가 매긴 것처럼 보이지 않게) */}
+            {Number(storeRating) > 0 && (
+              <span className="text-neutral-400" title="서점(교보문고) 평점 — 내 별점과 따로 둡니다">
+                서점 ★{Number(storeRating).toFixed(1)}
+              </span>
+            )}
             <label className="flex items-center gap-1">
               <span className="text-neutral-400">시작</span>
               <input

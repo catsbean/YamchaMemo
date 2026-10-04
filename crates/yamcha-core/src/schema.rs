@@ -235,6 +235,8 @@ fn builtin_fields(b: Builtin) -> Vec<FieldDef> {
             f.push(FieldDef::new("publisher", "출판사", FieldKind::Text, false));
             f.push(FieldDef::new("cover", "표지", FieldKind::Image, false));
             f.push(FieldDef::new("rating", "평점", FieldKind::Number, false));
+            // 서점(교보) 평점 — 책을 찾아 넣을 때 채운다. 내 별점(rating)과 따로 둔다(8-6)
+            f.push(FieldDef::new("store_rating", "서점 평점", FieldKind::Number, false));
             f.push(FieldDef::new("started", "읽기 시작", FieldKind::Date, false));
             f.push(FieldDef::new("finished", "완독일", FieldKind::Date, false));
         }

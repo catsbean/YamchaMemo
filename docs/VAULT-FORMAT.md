@@ -89,7 +89,7 @@ author: 김만중
 | 분류(`type`) | 칸 |
 | --- | --- |
 | `daily` | (공통만) |
-| `book` | `title` · `author` · `genre` · `status`(`wishlist`·`reading`·`finished`·`paused`, 기본 `wishlist`) · `isbn` · `publisher` · `cover`(`_attachments/covers/…`) · `rating`(숫자) · `started` · `finished`(완독일) |
+| `book` | `title` · `author` · `genre` · `status`(`wishlist`·`reading`·`finished`·`paused`, 기본 `wishlist`) · `isbn` · `publisher` · `cover`(`_attachments/covers/…`) · `rating`(숫자, 내 별점) · `store_rating`(숫자, 서점 평점 — 찾아 넣을 때 채운다) · `started` · `finished`(완독일) |
 | `writing` | `title` · `status`(`idea`·`draft`·`revise`·`done`, 기본 `idea`) · `category` · `series` · `episode` · `goal`(목표 글자수) · `started` · `finished` |
 | `free` | `title` |
 | 사용자 정의 | `_types.json`의 `fields` |

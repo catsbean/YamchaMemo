@@ -33,24 +33,27 @@ export default function BookSearchDialog({ onClose }: { onClose: () => void }) {
     setBusy(false);
   }
 
-  /** 책장에 추가 — 검색 결과의 기본 정보에 더해 분야·소개·평점까지 자동으로 채운다.
+  /** 책장에 추가 — 검색 결과의 기본 정보에 더해 분야·소개·서점 평점까지 자동으로 채운다.
    *  (자동 채우기가 실패해도 책 자체는 만들어 둔다 — 나중에 [자동 채우기]로 보완 가능) */
   async function addBook(hit: BookSearchHit) {
     if (addingIsbn) return;
     setAddingIsbn(hit.isbn || hit.title);
     setError("");
 
-    const fields: Record<string, string> = {};
+    const fields: Record<string, string | number> = {};
     if (hit.authors) fields.author = hit.authors;
     if (hit.publisher) fields.publisher = hit.publisher;
     if (hit.isbn) fields.isbn = hit.isbn;
 
-    // 분야·소개·평점은 교보에서 따로 가져온다 (검색 결과에는 없는 값)
+    // 분야·소개·서점 평점은 교보에서 따로 가져온다 (검색 결과에는 없는 값)
     let intro = "";
     const meta = await commands.autofillBook(hit.title, hit.authors, apiKey ?? "");
     if (meta.status === "ok") {
       if (meta.data.genre) fields.genre = meta.data.genre;
-      if (meta.data.rating) fields.rating = meta.data.rating;
+      // 서점 평점은 **내 별점(rating)이 아니라** 따로(store_rating) 둔다 — 내 별점 칸에 넣으면
+      // 아직 읽지도 않은 책에 별 다섯 개가 붙어, 처음 쓰는 사람이 자기 별점으로 오해했다(8-6)
+      const storeRating = Number(meta.data.rating);
+      if (storeRating > 0) fields.store_rating = storeRating;
       if (!fields.author && meta.data.author) fields.author = meta.data.author;
       if (!fields.publisher && meta.data.publisher)
         fields.publisher = meta.data.publisher;
@@ -148,7 +151,7 @@ export default function BookSearchDialog({ onClose }: { onClose: () => void }) {
                     ? "추가됨 ✓"
                     : addingIsbn === key
                       ? "채우는 중…"
-                      : "책장에 추가"}
+                      : "도서리스트에 추가"}
                 </button>
               </li>
             );
@@ -156,7 +159,7 @@ export default function BookSearchDialog({ onClose }: { onClose: () => void }) {
           {hits.length === 0 && !busy && (
             <li className="px-4 py-8 text-center text-sm text-neutral-400">
               제목이나 ISBN을 검색해 추가하면 저자·출판사·표지에 더해
-              분야·소개·평점까지 자동으로 채워집니다
+              분야·소개·서점 평점까지 자동으로 채워집니다
             </li>
           )}
         </ul>
