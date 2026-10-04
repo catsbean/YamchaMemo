@@ -201,7 +201,30 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
         </div>
       </header>
 
-      {view === "grid" ? (
+      {books.length === 0 && view !== "stats" ? (
+        // 빈 책장 — 처음 쓰는 사람이 오른쪽 위 그림 버튼을 찾지 않아도 되게 여기 바로 둔다.
+        // (예전 문구는 "[+ 책 추가]로 시작해 보세요"였는데 그런 이름의 버튼이 없었다)
+        <div className="flex flex-1 flex-col items-center pt-16 text-center">
+          <p className="text-sm text-neutral-500">아직 책이 없습니다.</p>
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            <button
+              className="rounded bg-neutral-800 px-4 py-2 text-sm text-white hover:bg-neutral-600"
+              onClick={() => setSearching(true)}
+            >
+              🔍 제목으로 찾아 추가
+            </button>
+            <button
+              className="rounded border border-neutral-300 px-4 py-2 text-sm text-neutral-700 hover:border-neutral-500"
+              onClick={() => setCreating(true)}
+            >
+              ＋ 직접 입력
+            </button>
+          </div>
+          <p className="mt-3 text-xs text-neutral-400">
+            찾아 추가하면 저자·출판사·표지·소개가 채워집니다. 다음부터는 오른쪽 위 🔍·＋ 버튼으로 추가합니다.
+          </p>
+        </div>
+      ) : view === "grid" ? (
         <GridView
           books={books}
           compact={compact}
@@ -339,11 +362,6 @@ function GridView({
       )}
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
-        {books.length === 0 && (
-          <p className="mt-16 text-center text-sm text-neutral-400">
-            아직 책이 없습니다. [+ 책 추가]로 시작해 보세요.
-          </p>
-        )}
         {groups
           .filter(([group]) => !hidden.has(group))
           .map(([group, list]) => (
