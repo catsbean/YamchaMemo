@@ -618,6 +618,17 @@ pub struct StorageDir {
     pub path: String,
 }
 
+/// OneDrive 폴더의 표시 이름 — `OneDrive - 회사이름`이면 회사 이름을, `OneDrive`면 "개인"을 붙인다.
+fn onedrive_label(path: &std::path::Path) -> String {
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let who = name
+        .strip_prefix("OneDrive - ")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("개인");
+    format!("☁️ OneDrive ({who}) — 자동 백업(권장)")
+}
+
 /// 존재하는 클라우드 동기화 폴더를 감지해 제안 목록으로 반환한다.
 /// 마지막 항목은 항상 문서 폴더. 없는 경로는 건너뛴다.
 #[tauri::command(async)]
@@ -636,14 +647,17 @@ pub fn detect_storage_dirs() -> Vec<StorageDir> {
     #[cfg(target_os = "windows")]
     {
         let home = std::env::var("USERPROFILE").unwrap_or_default();
-        if let Ok(od) = std::env::var("OneDrive") {
-            push_if_exists("☁️ OneDrive — 자동 백업(권장)", std::path::PathBuf::from(od));
+        // 회사·학교 계정과 개인 계정이 함께 있으면 OneDrive가 둘이다 — 이름으로 갈라 보인다
+        // (예전엔 둘 다 "OneDrive — 자동 백업(권장)"이라 경로를 읽어야 구분됐다)
+        for var in ["OneDrive", "OneDriveCommercial", "OneDriveConsumer"] {
+            if let Ok(od) = std::env::var(var) {
+                let path = std::path::PathBuf::from(od);
+                push_if_exists(&onedrive_label(&path), path);
+            }
         }
         if !home.is_empty() {
-            push_if_exists(
-                "☁️ OneDrive — 자동 백업(권장)",
-                std::path::Path::new(&home).join("OneDrive"),
-            );
+            let path = std::path::Path::new(&home).join("OneDrive");
+            push_if_exists(&onedrive_label(&path), path);
             push_if_exists(
                 "☁️ iCloud Drive",
                 std::path::Path::new(&home).join("iCloudDrive"),
@@ -906,6 +920,20 @@ mod index_location_tests {
             dot.join("history").join("Free__메모.md").join("20260101-000000-000.md").exists(),
             "히스토리를 지웠다"
         );
+    }
+}
+
+#[cfg(test)]
+mod storage_label_tests {
+    use super::*;
+
+    #[test]
+    fn 원드라이브_둘을_이름으로_가른다() {
+        assert_eq!(
+            onedrive_label(Path::new("C:/Users/SG/OneDrive - 주식회사 테켐아그로")),
+            "☁️ OneDrive (주식회사 테켐아그로) — 자동 백업(권장)"
+        );
+        assert_eq!(onedrive_label(Path::new("C:/Users/SG/OneDrive")), "☁️ OneDrive (개인) — 자동 백업(권장)");
     }
 }
 
