@@ -16,7 +16,7 @@ const KIND_HINT: Record<IssueKind, string> = {
   missing_date: "날짜가 없거나 형식이 달라 정렬·달력에서 빠집니다.",
   type_mismatch:
     "폴더와 frontmatter의 분류가 다릅니다. 이 앱은 폴더를 기준으로 삼습니다.",
-  unknown_status: "상태값이 정의 밖이라 책장·글쓰기 어느 칸에도 들어가지 않습니다.",
+  unknown_status: "상태값이 정의 밖이라 도서리스트·글쓰기 어느 칸에도 들어가지 않습니다.",
   shadowed_alias:
     "적어 둔 별칭과 같은 이름의 글이 따로 있습니다. 링크는 그 글로 가므로 이 별칭은 아무 일도 하지 않습니다. 나중에 같은 이름의 글을 만들면 이렇게 되는데, 그 노트를 다시 열어 보지 않는 한 알기 어렵습니다.",
   duplicate_alias:

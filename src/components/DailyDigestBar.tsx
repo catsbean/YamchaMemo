@@ -44,7 +44,7 @@ export default function DailyDigestBar({ date }: { date: string }) {
             ? openNote(d.reading_rels[0])
             : setNav("book")
         }
-        title={d.reading_titles.join(", ") || "책장 열기"}
+        title={d.reading_titles.join(", ") || "도서리스트 열기"}
       >
         📖 {readingLabel}
       </button>

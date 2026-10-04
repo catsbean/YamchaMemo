@@ -166,7 +166,7 @@ export default function HomeDashboard() {
               className="text-xs text-neutral-400 hover:text-neutral-600"
               onClick={() => setNav("book")}
             >
-              책장 열기 →
+              도서리스트 열기 →
             </button>
           </div>
           <div className="mb-3 grid grid-cols-3 gap-2 text-center">

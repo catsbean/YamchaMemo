@@ -124,7 +124,7 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
     <div className="flex h-full flex-col overflow-hidden">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 px-4 py-2">
         <h1 className="text-base font-bold">
-          책장{" "}
+          도서리스트{" "}
           <span className="text-sm font-normal text-neutral-400">
             {books.length}권
           </span>
@@ -138,7 +138,7 @@ export default function Bookshelf({ compact = false }: { compact?: boolean }) {
             }`}
             onClick={() => setView("grid")}
           >
-            책장
+            표지
           </button>
           <button
             className={`rounded px-2.5 py-1 ${

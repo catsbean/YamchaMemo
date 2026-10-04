@@ -11,7 +11,7 @@ export default function BookPickerSection() {
       <Segmented
         value={bookPickerView}
         options={[
-          ["grid", "책장(표지)"],
+          ["grid", "표지"],
           ["list", "목록"],
         ]}
         onChange={setBookPickerView}

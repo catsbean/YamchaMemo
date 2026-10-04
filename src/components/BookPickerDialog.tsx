@@ -48,7 +48,7 @@ export default function BookPickerDialog({ onClose }: { onClose: () => void }) {
             <button
               className={`rounded px-2 py-1 ${bookPickerView === "grid" ? "bg-neutral-200" : "text-neutral-400 hover:bg-neutral-100"}`}
               onClick={() => setBookPickerView("grid")}
-              title="책장 보기"
+              title="표지로 보기"
             >
               ▦
             </button>
