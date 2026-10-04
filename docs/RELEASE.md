@@ -52,6 +52,10 @@ pnpm release:win
 `notes`에 넣습니다(`scripts/changelog.mjs`). 절이 없으면 `release.bat`이 태그를 찍기 전에 멈추고,
 CI도 멈춥니다.
 
+릴리스 **페이지**의 설명에는 그 위에 설치 경고 넘기기 안내(`scripts/release-header.md`)가 고정으로 붙습니다 —
+빌드가 `latest.json`을 만든 뒤에 Windows 잡이 붙이므로 **업데이트 창에는 들어가지 않습니다**(이미 쓰는 사람에겐 소음).
+안내 문구를 고치려면 그 파일을 고칩니다.
+
 ### ①·② `scripts\release.bat` 실행
 
 버전을 올리고(`package.json`·`src-tauri/tauri.conf.json`·`src-tauri/Cargo.toml`·

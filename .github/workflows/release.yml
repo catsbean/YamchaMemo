@@ -106,6 +106,22 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
+      # 처음 받는 사람이 가장 먼저 만나는 벽은 서명이 없어 뜨는 설치 경고다(8-6). 넘기는 법을 릴리스 페이지
+      # 맨 위에 고정 머리말로 붙인다(scripts/release-header.md). **업데이트 창(latest.json의 notes)에는
+      # 넣지 않는다** — 이미 쓰는 사람에게는 소음이다. latest.json은 위 단계가 이미 만들어 올렸으므로 여기서
+      # 릴리스 설명만 고친다. 두 잡이 한꺼번에 고치지 않게 Windows 잡에서만, 다시 돌아도 한 번만 붙게(표시 줄).
+      - name: Put install guide on top of the release notes
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          body=$(gh release view "${{ github.ref_name }}" --json body -q .body)
+          if ! grep -q "<!-- install-guide -->" <<<"$body"; then
+            { cat scripts/release-header.md; printf '%s\n' "$body"; } > release-notes.md
+            gh release edit "${{ github.ref_name }}" --notes-file release-notes.md
+          fi
+
       # Mac 실행 허용 스크립트(mac-unlock.command)를 릴리스에 첨부한다.
       # 실행 권한(+x)은 zip이 macOS에서 만들어져야 보존되므로, 이 macOS 잡에서 압축한다.
       - name: Package and upload Mac unlock script
