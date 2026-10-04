@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { commands } from "../bindings";
 import { useVault } from "../stores/vault";
 import { openTrashWindow } from "../lib/trashWindow";
 import { shortcutTextOf, useModKeyHeld, useShortcut } from "../lib/shortcuts";
@@ -43,7 +44,15 @@ export default function Sidebar({
   for (const n of notes) {
     counts.set(n.note_type, (counts.get(n.note_type) ?? 0) + 1);
   }
-  counts.set("tags", new Set(notes.flatMap((n) => n.tags)).size);
+  // 태그 수는 태그 화면과 같은 곳(색인)에서 센다 — 노트 요약의 태그는 frontmatter 것뿐이라 본문의 #태그를
+  // 빠뜨려, 태그 화면엔 있는데 메뉴엔 0이 떴다. 목록이 바뀔 때마다(저장 포함) 다시 센다.
+  const [tagCount, setTagCount] = useState(0);
+  useEffect(() => {
+    commands.getTags().then((r) => {
+      if (r.status === "ok") setTagCount(r.data.length);
+    });
+  }, [notes]);
+  counts.set("tags", tagCount);
   // 할 일 메뉴의 숫자는 노트 수가 아니라 **아직 남은 할 일** 수다.
   // 목록은 상한에 걸려 잘릴 수 있어서 길이를 세지 않고 백엔드가 센 총계를 쓴다.
   // 다 끝냈으면 아예 안 붙인다 — 0이 붙어 있으면 빈 분류처럼 보인다
