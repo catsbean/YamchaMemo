@@ -223,3 +223,32 @@ textarea,
   --color-yellow-700: oklch(84% .135 66.442);
   --color-yellow-800: oklch(88% .114 61.907);
 }
+
+/* 편집기의 `[[` 자동완성 창.
+   CodeMirror 기본값은 밝은 바탕(#f5f5f5)에 글자색은 물려받는다 — 어두운 화면에서는
+   밝은 바탕에 흰 글씨가 되어 읽을 수 없었다. 색을 토큰으로 주면 위 `.dark` 팔레트가
+   알아서 뒤집는다. 고른 줄은 기록 입력창의 추천 목록(bg-sky-100)과 같은 색.
+   (선택자를 길게 쓴 것은 CodeMirror가 나중에 끼워 넣는 기본 스타일을 이기기 위해서다) */
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete {
+  background: var(--color-white);
+  color: var(--color-neutral-800);
+  border: 1px solid var(--color-neutral-300);
+  border-radius: 0.25rem;
+  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+}
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li {
+  padding: 0.25rem 0.75rem;
+}
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--color-sky-100);
+  color: var(--color-neutral-800);
+}
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete .cm-completionDetail {
+  margin-left: 1em;
+  font-style: normal;
+  font-size: var(--text-2xs);
+  color: var(--color-neutral-400);
+}
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete .cm-completionIcon {
+  display: none;
+}
