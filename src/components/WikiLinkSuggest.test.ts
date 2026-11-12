@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LinkOption } from "../lib/resolveLink";
-import { matches as rank } from "./WikiLinkSuggest";
+import { contextKey, matches as rank, refreshAction } from "./WikiLinkSuggest";
 
 const TITLES = [
   "역사적 예수",
@@ -56,5 +56,39 @@ describe("위키링크 추천 고르기", () => {
   it("여덟 개를 넘기지 않는다", () => {
     const many = Array.from({ length: 20 }, (_, i) => `노트 ${i}`);
     expect(matches(many, "노트")).toHaveLength(8);
+  });
+});
+
+describe("목록을 새로 잡을지 그대로 둘지", () => {
+  // `[[역사`까지 친 상태 — 커서는 네 글자 뒤
+  const at = { query: "역사", caret: 4 };
+
+  it("처음 열릴 때는 새로 잡는다", () => {
+    expect(refreshAction(null, at)).toBe("reset");
+  });
+
+  // 고쳐진 자리 — ↓로 내려간 뒤 손을 떼면(keyup) 맨 위로 되돌아갔다
+  it("화살표를 눌렀다 떼도 고른 자리를 되돌리지 않는다", () => {
+    const shown = contextKey(at);
+    // keyup은 글자도 커서도 안 바꾼 채 refresh를 부른다
+    expect(refreshAction(shown, at)).toBe("keep");
+    expect(refreshAction(shown, { ...at })).toBe("keep");
+  });
+
+  it("글자를 더 치면 새로 잡는다", () => {
+    expect(refreshAction(contextKey(at), { query: "역사적", caret: 5 })).toBe("reset");
+  });
+
+  it("글자를 지워도 새로 잡는다", () => {
+    expect(refreshAction(contextKey(at), { query: "역", caret: 3 })).toBe("reset");
+  });
+
+  it("같은 글자라도 다른 자리의 `[[`면 새로 잡는다", () => {
+    expect(refreshAction(contextKey(at), { query: "역사", caret: 20 })).toBe("reset");
+  });
+
+  it("링크 밖으로 나가면 닫는다", () => {
+    expect(refreshAction(contextKey(at), null)).toBe("close");
+    expect(refreshAction(null, null)).toBe("close");
   });
 });

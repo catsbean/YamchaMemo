@@ -17,6 +17,25 @@ function openLinkAt(el: HTMLTextAreaElement): { query: string; caret: number } |
   return found ? { query: found[1], caret } : null;
 }
 
+/** 지금 열려 있는 `[[…` 조각을 가리키는 열쇠 — 시작 자리와 친 글자.
+ *  같은 조각을 두고 `refresh`가 또 불렸는지 가리는 데 쓴다. */
+export function contextKey(at: { query: string; caret: number }): string {
+  return `${at.caret - at.query.length}:${at.query}`;
+}
+
+/** `refresh`가 할 일 — 닫을지, 그대로 둘지, 목록을 새로 잡을지.
+ *
+ *  `refresh`는 글자를 칠 때만이 아니라 **키에서 손을 뗄 때마다**(keyup) 불린다. 그때마다
+ *  목록을 새로 잡으면 고른 자리도 맨 위로 돌아간다 — ↓로 한 칸 내려가도 손을 떼는 순간
+ *  되돌아와서, 화살표로는 아무것도 고를 수 없었다. 조각이 그대로면 손대지 않는다. */
+export function refreshAction(
+  shownKey: string | null,
+  at: { query: string; caret: number } | null,
+): "close" | "keep" | "reset" {
+  if (!at) return "close";
+  return contextKey(at) === shownKey ? "keep" : "reset";
+}
+
 /** 고른 제목으로 `[[…`를 채운다 */
 function insert(el: HTMLTextAreaElement, title: string) {
   const at = openLinkAt(el);
@@ -89,7 +108,11 @@ export default function WikiLinkSuggest({
     // 만들면 React가 매번 값이 바뀐 것으로 보고 다시 그린다 — 추천이 뜰 일이 없는
     // 평범한 타이핑에서도 글자마다·keyup마다 그랬다. 이 입력창의 규칙은
     // "타이핑 중에는 리렌더가 없어야 한다"(lib/ime.ts 규칙 2)이므로 어기면 안 된다.
+    // 지금 목록이 어느 `[[…` 조각을 보고 만든 것인지 (`contextKey`). 닫혀 있으면 null
+    let shownKey: string | null = null;
+
     const close = () => {
+      shownKey = null;
       setItems((cur) => (cur.length === 0 ? cur : []));
       setActive(0);
     };
@@ -98,8 +121,12 @@ export default function WikiLinkSuggest({
       const target = inputRef.current;
       if (!target) return;
       const at = openLinkAt(target);
-      if (!at) return close();
+      const action = refreshAction(shownKey, at);
+      if (action === "close" || !at) return close();
       if (dismissed) return;
+      // 같은 조각이면 그대로 둔다 — 화살표로 고른 자리가 keyup에 되돌아가지 않게
+      if (action === "keep") return;
+      shownKey = contextKey(at);
       // 후보를 만드는 규칙은 에디터 자동완성과 같은 함수를 쓴다 (파일명·제목·별칭)
       setItems(matches(latest.current.options, at.query));
       setActive(0);
@@ -177,8 +204,9 @@ export default function WikiLinkSuggest({
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => {
               const el = inputRef.current;
+              // insert가 알리는 `input`이 refresh → close를 불러 목록을 닫는다
               if (el) insert(el, o.insert);
-              setItems([]);
+              else setItems([]);
             }}
           >
             <span className="truncate">{o.label}</span>
