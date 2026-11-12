@@ -697,3 +697,161 @@ pub(crate) fn auto_title_note_in(
         }
     }
 }
+
+/// 가리키는 글이 없는 `[[링크]]` 대상을 자유노트에 만든다 → 만든 글들.
+///
+/// 화면이 "없다"고 본 이름을 그대로 믿지 않고 여기서 다시 풀어 본다(다른 창이 방금 만든
+/// 글과 겹치지 않게). 규칙과 만들지 않는 이름은 `yamcha_core::linkstub`.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn ensure_link_targets(
+    state: State<'_, AppState>,
+    targets: Vec<String>,
+) -> Result<Vec<yamcha_core::CreatedLink>, String> {
+    with_ctx_write(&state, |c| ensure_link_targets_in(c, &targets))
+}
+
+pub(crate) fn ensure_link_targets_in(
+    c: &mut Ctx,
+    targets: &[String],
+) -> Result<Vec<yamcha_core::CreatedLink>, yamcha_core::CoreError> {
+    let made = c.vault.ensure_link_targets(targets)?;
+    refresh_notes(c, made.iter().map(|m| m.rel_path.as_str()))?;
+    Ok(made)
+}
+
+/// 링크에서 자동으로 만든 글 가운데 **아무도 손대지 않았고 아무도 가리키지 않는** 것을
+/// 휴지통으로 보낸다 → 보낸 글들의 rel.
+///
+/// `[[회의]]`를 `[[회의록]]`으로 고치면 `회의`가 빈 채로 남는다. 그걸 치우는 자리다.
+/// 세 조건(자동 생성 표시 · 만들 때 그대로인 본문 · 백링크 0)을 **여기서** 다시 확인한다 —
+/// 화면이 넘긴 목록은 후보일 뿐이다. `even_if_linked`는 방금 만든 것을 [되돌리기]할 때만
+/// 쓴다(링크가 아직 본문에 있어 백링크가 0이 아니다). 그때도 손댄 글은 건드리지 않는다.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn prune_link_stubs(
+    state: State<'_, AppState>,
+    rel_paths: Vec<String>,
+    even_if_linked: bool,
+) -> Result<Vec<String>, String> {
+    with_ctx_write(&state, |c| prune_link_stubs_in(c, &rel_paths, even_if_linked))
+}
+
+pub(crate) fn prune_link_stubs_in(
+    c: &mut Ctx,
+    rel_paths: &[String],
+    even_if_linked: bool,
+) -> Result<Vec<String>, yamcha_core::CoreError> {
+    let mut gone = Vec::new();
+    for rel in rel_paths {
+        // 이미 없거나 못 읽는 글은 건너뛴다 — 치우는 일이 다른 일을 막으면 안 된다
+        if !matches!(c.vault.is_untouched_link_stub(rel), Ok(true)) {
+            continue;
+        }
+        if !even_if_linked && !c.indexer.backlinks(&c.vault, rel)?.is_empty() {
+            continue;
+        }
+        delete_note_in(c, rel)?;
+        gone.push(rel.clone());
+    }
+    Ok(gone)
+}
+
+#[cfg(test)]
+mod link_stub_tests {
+    use super::*;
+    use std::path::Path;
+
+    fn ctx(vault_root: &Path, index_root: &Path) -> Ctx {
+        Ctx {
+            vault: Vault::open(vault_root).unwrap(),
+            indexer: Indexer::open(&index_root.join("index.db")).unwrap(),
+            search: SearchEngine::open(&index_root.join("search")).unwrap(),
+            todo_cache: dashboard::TodoCache::default(),
+        }
+    }
+
+    /// 원글의 본문을 바꿔 저장한다 (색인까지)
+    fn write_body(c: &mut Ctx, rel: &str, body: &str) {
+        let note = c.vault.read_note(rel).unwrap();
+        save_note_in(c, rel, note.frontmatter, body, None).unwrap();
+    }
+
+    fn one(s: &str) -> Vec<String> {
+        vec![s.to_string()]
+    }
+
+    /// `[[회의]]`를 `[[회의록]]`으로 고치면 빈 `회의`는 치워지고, 그 전에는 남는다.
+    #[test]
+    fn 아무도_가리키지_않게_된_빈_글만_치운다() {
+        let (v, i) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut c = ctx(v.path(), i.path());
+        let src = create_note_in(&mut c, "free", "원글", serde_json::Value::Null).unwrap();
+        write_body(&mut c, &src, "오늘 [[회의]] 했다");
+        let stub = ensure_link_targets_in(&mut c, &one("회의")).unwrap().remove(0).rel_path;
+
+        // 아직 원글이 가리킨다 — 남는다
+        assert!(prune_link_stubs_in(&mut c, std::slice::from_ref(&stub), false).unwrap().is_empty());
+        assert!(v.path().join(&stub).exists());
+
+        write_body(&mut c, &src, "오늘 [[회의록]] 썼다");
+        assert_eq!(prune_link_stubs_in(&mut c, std::slice::from_ref(&stub), false).unwrap(), vec![stub.clone()]);
+        assert!(!v.path().join(&stub).exists(), "빈 글이 남았다");
+        // 지운 게 아니라 휴지통에 있다
+        assert_eq!(c.vault.list_trash().unwrap().len(), 1);
+        // 색인에서도 빠졌다
+        assert!(!c.indexer.note_states().unwrap().contains_key(&stub));
+    }
+
+    /// 손댄 글은 아무도 안 가리켜도, [되돌리기]로 불러도 치우지 않는다.
+    #[test]
+    fn 손댄_글은_어떤_경우에도_치우지_않는다() {
+        let (v, i) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut c = ctx(v.path(), i.path());
+        let stub = ensure_link_targets_in(&mut c, &one("회의")).unwrap().remove(0).rel_path;
+        let body = format!("{}\n안건 하나", c.vault.read_note(&stub).unwrap().body);
+        write_body(&mut c, &stub, &body);
+
+        assert!(prune_link_stubs_in(&mut c, std::slice::from_ref(&stub), false).unwrap().is_empty());
+        assert!(prune_link_stubs_in(&mut c, std::slice::from_ref(&stub), true).unwrap().is_empty());
+        assert!(v.path().join(&stub).exists());
+    }
+
+    /// 사람이 직접 만든 빈 글은 후보로 넘어와도 치우지 않는다. 없는 경로는 조용히 건너뛴다.
+    #[test]
+    fn 자동으로_만든_글이_아니면_치우지_않는다() {
+        let (v, i) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut c = ctx(v.path(), i.path());
+        let mine = create_note_in(&mut c, "free", "내 빈 글", serde_json::Value::Null).unwrap();
+        let gone = prune_link_stubs_in(&mut c, &[mine.clone(), "Free/없는 글.md".into()], true).unwrap();
+        assert!(gone.is_empty());
+        assert!(v.path().join(&mine).exists());
+    }
+
+    /// [되돌리기] — 링크가 아직 본문에 있어도 방금 만든 빈 글은 거둔다.
+    #[test]
+    fn 되돌리기는_링크가_남아_있어도_거둔다() {
+        let (v, i) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut c = ctx(v.path(), i.path());
+        let src = create_note_in(&mut c, "free", "원글", serde_json::Value::Null).unwrap();
+        write_body(&mut c, &src, "[[회의]]");
+        let stub = ensure_link_targets_in(&mut c, &one("회의")).unwrap().remove(0).rel_path;
+        assert_eq!(prune_link_stubs_in(&mut c, std::slice::from_ref(&stub), true).unwrap(), vec![stub.clone()]);
+        assert!(!v.path().join(&stub).exists());
+    }
+
+    /// 만든 글은 색인에 들어가 곧바로 백링크·검색에 잡힌다.
+    #[test]
+    fn 만든_글은_색인에_들어간다() {
+        let (v, i) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut c = ctx(v.path(), i.path());
+        let src = create_note_in(&mut c, "free", "원글", serde_json::Value::Null).unwrap();
+        write_body(&mut c, &src, "[[회의: 3월]]");
+        let stub = ensure_link_targets_in(&mut c, &one("회의: 3월")).unwrap().remove(0).rel_path;
+        assert!(c.indexer.note_states().unwrap().contains_key(&stub));
+        // 다듬어진 제목이어도 원글이 백링크로 잡힌다 (별칭을 심었다)
+        let back = c.indexer.backlinks(&c.vault, &stub).unwrap();
+        assert_eq!(back.len(), 1, "{back:?}");
+        assert_eq!(back[0].rel_path, src);
+    }
+}

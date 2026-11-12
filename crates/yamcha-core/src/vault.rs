@@ -1926,7 +1926,7 @@ impl Vault {
 
     /// 생성 시 쓸 본문 템플릿: 커스텀 파일이 있으면 그 내용, 없으면 내장 기본값.
     /// frontmatter에는 영향을 주지 않는다(본문만).
-    fn body_template(&self, b: Builtin) -> String {
+    pub(crate) fn body_template(&self, b: Builtin) -> String {
         let kind = match b {
             Builtin::Daily => "daily",
             Builtin::Free => "free",

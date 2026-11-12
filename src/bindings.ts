@@ -116,6 +116,37 @@ async deleteNote(relPath: string) : Promise<Result<null, string>> {
 }
 },
 /**
+ * 가리키는 글이 없는 `[[링크]]` 대상을 자유노트에 만든다 → 만든 글들.
+ * 
+ * 화면이 "없다"고 본 이름을 그대로 믿지 않고 여기서 다시 풀어 본다(다른 창이 방금 만든
+ * 글과 겹치지 않게). 규칙과 만들지 않는 이름은 `yamcha_core::linkstub`.
+ */
+async ensureLinkTargets(targets: string[]) : Promise<Result<CreatedLink[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("ensure_link_targets", { targets }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 링크에서 자동으로 만든 글 가운데 **아무도 손대지 않았고 아무도 가리키지 않는** 것을
+ * 휴지통으로 보낸다 → 보낸 글들의 rel.
+ * 
+ * `[[회의]]`를 `[[회의록]]`으로 고치면 `회의`가 빈 채로 남는다. 그걸 치우는 자리다.
+ * 세 조건(자동 생성 표시 · 만들 때 그대로인 본문 · 백링크 0)을 **여기서** 다시 확인한다 —
+ * 화면이 넘긴 목록은 후보일 뿐이다. `even_if_linked`는 방금 만든 것을 [되돌리기]할 때만
+ * 쓴다(링크가 아직 본문에 있어 백링크가 0이 아니다). 그때도 손댄 글은 건드리지 않는다.
+ */
+async pruneLinkStubs(relPaths: string[], evenIfLinked: boolean) : Promise<Result<string[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("prune_link_stubs", { relPaths, evenIfLinked }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 오늘의 데일리노트 열기 (없으면 생성)
  */
 async openTodayDaily() : Promise<Result<string, string>> {
@@ -1177,6 +1208,14 @@ color: string;
  * 어디에 쓸지: "daily" | "book" | "both"
  */
 scope: string }
+/**
+ * 자동으로 만든 글 하나
+ */
+export type CreatedLink = { 
+/**
+ * 링크에 적힌 이름 (`[[이것]]`)
+ */
+target: string; rel_path: string; title: string }
 /**
  * 데일리노트 하단 요약 바에 뿌릴 값들 (템플릿과 무관하게 항상 계산한다)
  */
