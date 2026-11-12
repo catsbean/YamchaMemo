@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { commands, type TagSuggestion } from "../bindings";
 import { isImeEnter } from "../lib/ime";
+import { linkOptions, type LinkOption } from "../lib/resolveLink";
 import { notifyOtherWindows } from "../lib/windowSync";
 import TagSuggestionRow from "./TagSuggestionRow";
+import WikiLinkSuggest from "./WikiLinkSuggest";
 
 /** 이미 본문에 적힌 인라인 #태그 — 이미 쓴 것을 다시 제안하지 않는다 */
 function inlineTagsOf(text: string): string[] {
@@ -24,6 +26,18 @@ export default function CaptureWindow() {
 
   useEffect(() => {
     ref.current?.focus();
+  }, []);
+
+  // `[[` 추천 후보. 이 창은 스토어를 초기화하지 않으므로 노트 목록을 직접 한 번 읽는다 —
+  // 창이 뜰 때마다 새로 뜨는 것이라 그 뒤로 갱신할 일은 없다. 실패하면 추천만 안 뜬다.
+  const [linkables, setLinkables] = useState<LinkOption[]>([]);
+  useEffect(() => {
+    Promise.all([commands.listNotes(), commands.getSchemas()]).then(
+      ([notes, schemas]) => {
+        if (notes.status === "ok") setLinkables(linkOptions(notes.data, schemas));
+      },
+      () => {},
+    );
   }, []);
 
   // 자동 태그 제안 — 창이 작으니 최대 3개, 타이핑이 멎고 500ms 뒤에만
@@ -96,15 +110,26 @@ export default function CaptureWindow() {
 
   return (
     <div className="flex h-screen flex-col bg-white text-neutral-900">
-      <textarea
-        ref={ref}
-        autoFocus
-        className="flex-1 resize-none px-4 py-3 text-sm focus:outline-none"
-        placeholder="담을 내용 — Enter로 담고, Shift+Enter는 줄바꿈, Esc는 취소"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-      />
+      {/* 추천 목록은 창이 작아(560×200) 입력칸 아래가 아니라 그 안의 오른쪽 아래에 겹쳐 띄운다
+          — 왼쪽 위에서 시작하는 쓰던 글을 가리지 않게.
+          목록이 떠 있을 때의 ↑↓·Enter·Tab·Esc는 추천이 먼저 받는다 (입력칸에 직접 단
+          리스너가 아래 onKeyDown보다 먼저 돈다) — Enter가 "담기"로 새지 않는다. */}
+      <div className="relative flex min-h-0 flex-1">
+        <textarea
+          ref={ref}
+          autoFocus
+          className="flex-1 resize-none px-4 py-3 text-sm focus:outline-none"
+          placeholder="담을 내용 — Enter로 담고, Shift+Enter는 줄바꿈, Esc는 취소"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={onKeyDown}
+        />
+        <WikiLinkSuggest
+          inputRef={ref}
+          options={linkables}
+          placement="absolute bottom-1 right-3 max-h-24"
+        />
+      </div>
       {error && (
         <div className="px-4 pb-1 text-xs text-rose-600">{error}</div>
       )}
