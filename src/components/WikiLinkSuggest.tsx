@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isImeEnter } from "../lib/ime";
+import { matchLinkOptions, suggestKey } from "../lib/linkMatch";
 import { linkOptions, type LinkOption } from "../lib/resolveLink";
 import { useVault } from "../stores/vault";
 
-/** 추천을 띄울 최대 개수 */
-const MAX = 8;
+export { suggestKey };
+
+/** 추천을 띄울 최대 개수. 화면에는 여덟 줄쯤 보이고 나머지는 스크롤된다 —
+ *  예전에는 여덟 개에서 잘라서, 아홉째부터는 글자를 더 쳐야만 닿을 수 있었다. */
+const MAX = 30;
 
 /** 커서 앞에서 `[[`로 시작해 아직 닫히지 않은 부분을 찾는다.
  *  `]` `|` `#` 줄바꿈이 끼면 링크가 이미 끝났거나 다른 문법이라 보지 않는다. */
@@ -46,19 +50,9 @@ function insert(el: HTMLTextAreaElement, title: string) {
   el.focus();
 }
 
-/** 질의에 맞는 후보들. 앞부터 맞는 것을 위로 —
- *  `역사적`이면 `역사적 예수`가 `한국의 역사적 인물`보다 먼저 와야 한다. */
+/** 질의에 맞는 후보들 — 규칙은 편집기와 같은 `matchLinkOptions` */
 export function matches(options: LinkOption[], raw: string): LinkOption[] {
-  const query = raw.trim().toLowerCase();
-  const hit = query
-    ? options.filter((o) => o.label.toLowerCase().includes(query))
-    : [...options];
-  hit.sort((a, b) => {
-    const ai = a.label.toLowerCase().startsWith(query) ? 0 : 1;
-    const bi = b.label.toLowerCase().startsWith(query) ? 0 : 1;
-    return ai - bi || a.label.localeCompare(b.label, "ko");
-  });
-  return hit.slice(0, MAX);
+  return matchLinkOptions(options, raw, MAX);
 }
 
 /** 입력창에서 `[[`를 치면 노트 제목을 추천한다.
@@ -81,16 +75,30 @@ export function matches(options: LinkOption[], raw: string): LinkOption[] {
  *  부모는 이 컴포넌트를 `relative`인 칸 안에 두어야 목록이 입력창 아래에 붙는다. */
 export default function WikiLinkSuggest({
   inputRef,
+  options: given,
+  placement = "absolute left-0 top-full mt-1 max-h-60",
 }: {
   inputRef: { current: HTMLTextAreaElement | null };
+  /** 후보를 직접 넘긴다 — 스토어를 초기화하지 않는 창(빠른 담기)을 위해서다.
+   *  안 넘기면 스토어의 노트로 만든다. */
+  options?: LinkOption[];
+  /** 목록이 놓일 자리와 높이 (Tailwind 클래스). 기본은 입력창 바로 아래 */
+  placement?: string;
 }) {
   const notes = useVault((s) => s.notes);
   const schemas = useVault((s) => s.schemas);
   // 후보 목록은 노트가 바뀔 때만 다시 만든다. `refresh`는 keyup마다 도는데,
   // 거기서 매번 전체 노트를 훑으면 링크를 치는 내내 그 값을 문다.
-  const options = useMemo(() => linkOptions(notes, schemas), [notes, schemas]);
+  const stored = useMemo(() => linkOptions(notes, schemas), [notes, schemas]);
+  const options = given ?? stored;
   const [items, setItems] = useState<LinkOption[]>([]);
   const [active, setActive] = useState(0);
+
+  // 화살표로 내려가다 보이는 범위를 벗어나면 고른 줄을 따라 스크롤한다
+  const listRef = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    listRef.current?.children[active]?.scrollIntoView({ block: "nearest" });
+  }, [active, items]);
 
   // 네이티브 리스너가 최신 값을 보게 하는 거울 (리스너를 매번 다시 달지 않으려고)
   const latest = useRef({ items, active, options });
@@ -141,7 +149,7 @@ export default function WikiLinkSuggest({
         e.preventDefault();
         e.stopPropagation();
       };
-      switch (e.key) {
+      switch (suggestKey(e)) {
         case "ArrowDown":
           setActive((i) => (i + 1) % list.length);
           return stop();
@@ -191,7 +199,10 @@ export default function WikiLinkSuggest({
   if (items.length === 0) return null;
 
   return (
-    <ul className="absolute left-0 top-full z-30 mt-1 max-h-60 w-80 overflow-y-auto rounded border border-neutral-300 bg-white py-1 shadow-lg dark:border-neutral-600 dark:bg-neutral-800">
+    <ul
+      ref={listRef}
+      className={`${placement} z-30 w-80 overflow-y-auto rounded border border-neutral-300 bg-white py-1 shadow-lg dark:border-neutral-600 dark:bg-neutral-800`}
+    >
       {items.map((o, i) => (
         <li key={`${o.label} ${o.insert}`}>
           <button

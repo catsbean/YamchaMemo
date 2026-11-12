@@ -15,8 +15,8 @@ import EditorToolbar from "./EditorToolbar";
 import { editorMenuItems } from "../editor/editorMenu";
 import { useContextMenu, useSuppressNativeContextMenu } from "../lib/contextMenu";
 import { splitBookBody, composeBookBody } from "../lib/book";
+import { useLinkOptions } from "../lib/useLinkOptions";
 import {
-  linkOptions,
   resolveLink,
   type LinkHit,
 } from "../lib/resolveLink";
@@ -44,6 +44,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
   const [saveError, setSaveError] = useState("");
   const [schemas, setSchemas] = useState<TypeDef[]>([]);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
+  const getLinkOptions = useLinkOptions(notes, schemas);
   // 서식 툴바가 명령을 실행하려면 CodeMirror 뷰가 필요하다
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   // 이름이 겹쳐 고르게 해야 하는 링크 / 가리키는 글이 없는 링크
@@ -537,7 +538,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
           onContextMenu={(e, view) =>
             ctx.open(e, editorMenuItems(view, [], { event: e, onNavigate: navigate }))
           }
-          getLinkOptions={() => linkOptions(notes, schemas)}
+          getLinkOptions={getLinkOptions}
         />
       </div>
 

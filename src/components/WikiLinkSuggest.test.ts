@@ -1,6 +1,25 @@
 import { describe, expect, it } from "vitest";
 import type { LinkOption } from "../lib/resolveLink";
-import { contextKey, matches as rank, refreshAction } from "./WikiLinkSuggest";
+import { contextKey, matches as rank, refreshAction, suggestKey } from "./WikiLinkSuggest";
+
+describe("조합 중에 눌린 키 알아보기", () => {
+  // 실제 앱(WebView2)에서 본 것 — `[[이`를 조합 중에 ↓를 누르면 key는 Process로 온다
+  it("조합 중 화살표는 물리 키로 알아본다", () => {
+    expect(suggestKey({ key: "Process", code: "ArrowDown", keyCode: 229 })).toBe("ArrowDown");
+    expect(suggestKey({ key: "Process", code: "ArrowUp", keyCode: 229 })).toBe("ArrowUp");
+  });
+
+  it("조합 중 Enter·Tab은 풀어 주지 않는다 (IME가 글자를 확정하게 둔다)", () => {
+    expect(suggestKey({ key: "Process", code: "Enter", keyCode: 229 })).toBe("Process");
+    expect(suggestKey({ key: "Process", code: "Tab", keyCode: 229 })).toBe("Process");
+  });
+
+  it("평소 키는 그대로", () => {
+    expect(suggestKey({ key: "ArrowDown", code: "ArrowDown", keyCode: 40 })).toBe("ArrowDown");
+    expect(suggestKey({ key: "Enter", code: "Enter", keyCode: 13 })).toBe("Enter");
+    expect(suggestKey({ key: "a", code: "KeyA", keyCode: 65 })).toBe("a");
+  });
+});
 
 const TITLES = [
   "역사적 예수",
@@ -53,9 +72,55 @@ describe("위키링크 추천 고르기", () => {
     expect(matches(TITLES, "없는제목")).toEqual([]);
   });
 
-  it("여덟 개를 넘기지 않는다", () => {
-    const many = Array.from({ length: 20 }, (_, i) => `노트 ${i}`);
-    expect(matches(many, "노트")).toHaveLength(8);
+  // 예전에는 여덟 개에서 잘라, 아홉째부터는 글자를 더 쳐야만 닿았다 (목록은 스크롤된다)
+  it("아홉째 후보도 목록에 있다 — 서른 개까지", () => {
+    const many = Array.from({ length: 40 }, (_, i) => `노트 ${i}`);
+    expect(matches(many, "노트")).toHaveLength(30);
+  });
+});
+
+describe("초성으로 찾기", () => {
+  it("초성만 쳐도 찾는다", () => {
+    expect(matches(TITLES, "ㅇㅅ")).toEqual([
+      "역사 개론",
+      "역사적 예수",
+      "한국의 역사적 인물",
+    ]);
+  });
+
+  it("띄어쓰기는 무시한다", () => {
+    expect(matches(TITLES, "ㅇㅅㄱㄹ")).toEqual(["역사 개론"]);
+    expect(matches(TITLES, "ㅋㄹ ㅇㅋ")).toEqual(["클린 아키텍처"]);
+  });
+
+  it("초성 한 글자로도 건다 (`역`을 치는 첫 순간이 `ㅇ`이다)", () => {
+    expect(matches(TITLES, "ㅋ")).toEqual(["클린 아키텍처"]);
+  });
+
+  it("완성된 글자가 섞이면 초성으로 보지 않는다", () => {
+    expect(matches(TITLES, "역ㅅ")).toEqual([]);
+  });
+
+  it("영문 이름은 초성에 걸리지 않는다", () => {
+    // `Clean Code`의 C를 ㅊ·ㅋ으로 읽어 주지 않는다 (ㅋ은 `클린 아키텍처`만 건다)
+    expect(matches(TITLES, "ㅋㄷ")).toEqual([]);
+  });
+});
+
+describe("후보가 많을 때의 속도", () => {
+  // 편집기는 글자마다 이 함수를 부른다. 1만 편(이름 1만 5천 개)에서 한 프레임을 넘기면 안 된다
+  it("1만 5천 개에서도 눈에 띄게 멈추지 않는다 (실측 3~36ms — 넉넉히 200ms로 지킨다)", () => {
+    const many = opts(
+      Array.from({ length: 15000 }, (_, i) => `노트 ${i} 역사적 기록 ${i % 97}`),
+    );
+    const time = (q: string) => {
+      const t = performance.now();
+      rank(many, q);
+      return performance.now() - t;
+    };
+    const took = { empty: time(""), one: time("역"), initials: time("ㅇㅅ"), miss: time("없는말") };
+    console.log("matchLinkOptions 15000개:", took);
+    for (const ms of Object.values(took)) expect(ms).toBeLessThan(200);
   });
 });
 

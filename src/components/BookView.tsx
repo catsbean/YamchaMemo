@@ -5,7 +5,7 @@ import TagSuggestionRow from "./TagSuggestionRow";
 import { fmObject, useVault } from "../stores/vault";
 import SaveProblemBanner from "./SaveProblemBanner";
 import { composeBookBody, splitBookBody } from "../lib/book";
-import { linkOptions } from "../lib/resolveLink";
+import { useLinkOptions } from "../lib/useLinkOptions";
 import {
   BOOK_STATUS_LABELS as STATUS_LABELS,
   coverSrc,
@@ -47,6 +47,7 @@ export default function BookView({ note }: { note: NoteContent }) {
     ensureSaved,
     refreshNote,
   } = useVault();
+  const getLinkOptions = useLinkOptions(notes, schemas);
   const [showIntro, setShowIntro] = useState(false);
   const [editing, setEditing] = useState(false);
   // 기본은 기록 카드 보기 — [원문 편집]을 눌러야 생 마크다운이 나온다
@@ -310,7 +311,7 @@ export default function BookView({ note }: { note: NoteContent }) {
           value={records}
           onChange={onRecordsChange}
           onNavigate={openByTitle}
-          getLinkOptions={() => linkOptions(notes, schemas)}
+          getLinkOptions={getLinkOptions}
           onContextMenu={(e, view) =>
             ctx.open(
               e,

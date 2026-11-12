@@ -8,7 +8,7 @@ import { editorMenuItems, type UrlHit } from "../editor/editorMenu";
 import { useContextMenu } from "../lib/contextMenu";
 import { isImeEnter } from "../lib/ime";
 import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
-import { linkOptions } from "../lib/resolveLink";
+import { useLinkOptions } from "../lib/useLinkOptions";
 import { openNoteWindow } from "../lib/trashWindow";
 import ContextMenu from "./ContextMenu";
 import BacklinksPanel from "./BacklinksPanel";
@@ -64,6 +64,7 @@ export default function EditorPane() {
     todoBig,
     toggleTodoBig,
   } = useVault();
+  const getLinkOptions = useLinkOptions(notes, schemas);
   const [editingTitle, setEditingTitle] = useState<string | null>(null);
   // Enter로 제목을 확정하면 칸이 사라지면서 blur가 한 번 더 온다 — 그 두 번째
   // 호출이 같은 이름으로 또 바꾸려다("이미 없는 파일") 오류를 띄우지 않게 막는다
@@ -487,7 +488,7 @@ export default function EditorPane() {
                 }),
               )
             }
-            getLinkOptions={() => linkOptions(notes, schemas)}
+            getLinkOptions={getLinkOptions}
           />
         </div>
         </>

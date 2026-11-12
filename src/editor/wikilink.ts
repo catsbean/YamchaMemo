@@ -2,14 +2,22 @@
 
 import {
   autocompletion,
+  completionStatus,
+  moveCompletionSelection,
+  type Completion,
   type CompletionContext,
   type CompletionResult,
 } from "@codemirror/autocomplete";
 import { syntaxTree } from "@codemirror/language";
+import { Prec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import type { MarkdownConfig } from "@lezer/markdown";
+import { matchLinkOptions, suggestKey } from "../lib/linkMatch";
 import type { LinkOption } from "../lib/resolveLink";
+
+/** 편집기 자동완성이 한 번에 내놓는 최대 개수 (목록은 스크롤된다) */
+const EDITOR_MAX = 50;
 
 const OPEN = 91; // [
 const CLOSE = 93; // ]
@@ -82,16 +90,52 @@ export function wikiLinkCompletion(getOptions: () => LinkOption[]) {
     const match = context.matchBefore(/\[\[([^\]|#\n]*)$/);
     if (!match) return null;
     const from = match.from + 2;
+    // 고르기·줄 세우기를 CodeMirror에 맡기지 않는다(`filter: false`) — 기록 입력창과
+    // 같은 답을 내려고 `matchLinkOptions`를 직접 돌린다. `validFor`를 주지 않으므로
+    // 글자를 칠 때마다 이 함수가 다시 불린다.
+    const query = context.state.sliceDoc(from, context.pos);
     return {
       from,
-      options: getOptions().map((o) => ({
+      filter: false,
+      options: matchLinkOptions(getOptions(), query, EDITOR_MAX).map(completionOf),
+    };
+  }
+
+  // 같은 후보에는 **같은 객체**를 돌려준다. CodeMirror는 목록을 새로 받을 때 고른 줄을
+  // 객체가 같은지로 찾아 이어 간다 — 매번 새로 만들면, 화살표로 내려간 뒤 한글 조합이
+  // 확정되는 것만으로(글자는 그대로인데 문서는 바뀐 것으로 친다) 맨 위로 되돌아간다.
+  const made = new Map<string, Completion>();
+  function completionOf(o: LinkOption): Completion {
+    const key = `${o.label}\u0000${o.insert}\u0000${o.detail}`;
+    let c = made.get(key);
+    if (!c) {
+      c = {
         label: o.label,
         detail: o.detail || undefined,
         type: "text",
         apply: `${o.insert}]]`,
-      })),
-      validFor: /^[^\]|#\n]*$/,
-    };
+      };
+      made.set(key, c);
+    }
+    return c;
   }
-  return autocompletion({ override: [source] });
+  return [autocompletion({ override: [source] }), composingArrows];
 }
+
+/** 한글을 조합 중일 때 눌린 ↑↓도 자동완성 목록을 움직이게 한다.
+ *
+ *  조합 중의 키는 `Process`(229)로 가려져 와서 CodeMirror의 키맵에 걸리지 않는다.
+ *  `[[이`까지 치고 곧바로 ↓를 누르면 첫 번째가 헛돌았다 (까닭은 `suggestKey`). */
+const composingArrows = Prec.highest(
+  EditorView.domEventHandlers({
+    keydown(event, view) {
+      // 평소의 화살표는 CodeMirror 키맵이 이미 처리한다 — 가려진 것만 여기서 받는다
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") return false;
+      const key = suggestKey(event);
+      if (key !== "ArrowDown" && key !== "ArrowUp") return false;
+      if (completionStatus(view.state) !== "active") return false;
+      event.preventDefault();
+      return moveCompletionSelection(key === "ArrowDown")(view);
+    },
+  }),
+);
