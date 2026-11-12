@@ -14,6 +14,7 @@ import { EditorView } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import type { MarkdownConfig } from "@lezer/markdown";
 import { matchLinkOptions, suggestKey } from "../lib/linkMatch";
+import { newNoteOption } from "../lib/linkStubs";
 import type { LinkOption } from "../lib/resolveLink";
 
 /** 편집기 자동완성이 한 번에 내놓는 최대 개수 (목록은 스크롤된다) */
@@ -94,11 +95,12 @@ export function wikiLinkCompletion(getOptions: () => LinkOption[]) {
     // 같은 답을 내려고 `matchLinkOptions`를 직접 돌린다. `validFor`를 주지 않으므로
     // 글자를 칠 때마다 이 함수가 다시 불린다.
     const query = context.state.sliceDoc(from, context.pos);
-    return {
-      from,
-      filter: false,
-      options: matchLinkOptions(getOptions(), query, EDITOR_MAX).map(completionOf),
-    };
+    const all = getOptions();
+    const options = matchLinkOptions(all, query, EDITOR_MAX).map(completionOf);
+    // 맞는 이름이 없으면 "이 이름으로 새 글" 줄을 끝에 붙인다 (자동 만들기가 켜져 있을 때)
+    const fresh = newNoteOption(query, all);
+    if (fresh) options.push(completionOf(fresh));
+    return { from, filter: false, options };
   }
 
   // 같은 후보에는 **같은 객체**를 돌려준다. CodeMirror는 목록을 새로 받을 때 고른 줄을

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isImeEnter } from "../lib/ime";
 import { matchLinkOptions, suggestKey } from "../lib/linkMatch";
+import { newNoteOption } from "../lib/linkStubs";
 import { linkOptions, type LinkOption } from "../lib/resolveLink";
 import { useVault } from "../stores/vault";
 
@@ -136,7 +137,10 @@ export default function WikiLinkSuggest({
       if (action === "keep") return;
       shownKey = contextKey(at);
       // 후보를 만드는 규칙은 에디터 자동완성과 같은 함수를 쓴다 (파일명·제목·별칭)
-      setItems(matches(latest.current.options, at.query));
+      const found = matches(latest.current.options, at.query);
+      // 맞는 이름이 없으면 "이 이름으로 새 글" 줄을 끝에 붙인다 (자동 만들기가 켜져 있을 때)
+      const fresh = newNoteOption(at.query, latest.current.options);
+      setItems(fresh ? [...found, fresh] : found);
       setActive(0);
     };
 
