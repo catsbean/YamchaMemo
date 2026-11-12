@@ -4,6 +4,7 @@ import { ask, message } from "@tauri-apps/plugin-dialog";
 import Dashboard from "./components/Dashboard";
 import EditorPane from "./components/EditorPane";
 import LinkPickerDialog from "./components/LinkPickerDialog";
+import LinkStubToast from "./components/LinkStubToast";
 import MissingLinkToast from "./components/MissingLinkToast";
 import MoveUndoToast from "./components/MoveUndoToast";
 import RelocateProgressDialog from "./components/RelocateProgressDialog";
@@ -207,6 +208,7 @@ export default function App() {
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       <LinkPickerDialog />
       <MissingLinkToast />
+      <LinkStubToast />
       <MoveUndoToast />
       <RelocateProgressDialog />
       {startupNotice && (

@@ -24,10 +24,12 @@ import type { LinkOption } from "../lib/resolveLink";
 import { formatKeymap } from "./format";
 import { livePreview } from "./livePreview";
 import { urlPaste } from "./urlPaste";
+import { registerCursorLinkProbe } from "../lib/linkStubs";
 import {
   wikiLinkClick,
   wikiLinkCompletion,
   wikiLinkMarkdown,
+  wikiLinkTargetAt,
 } from "./wikilink";
 
 /** Ctrl+F 검색 패널 문구 한국어화 */
@@ -189,6 +191,11 @@ export default function Editor({
     const view = new EditorView({ state, parent: containerRef.current });
     viewRef.current = view;
     onViewRef.current?.(view);
+    // 커서가 든 링크는 "아직 쓰는 중"이다 — 없는 글 자동 만들기가 그 이름을 건너뛰게 알려 준다.
+    // 편집기에 포커스가 없으면 고치는 중이 아니다.
+    const forgetProbe = registerCursorLinkProbe(() =>
+      view.hasFocus ? wikiLinkTargetAt(view, view.state.selection.main.head) : null,
+    );
     onReadyRef.current?.((line: number) => {
       const l = view.state.doc.line(Math.min(Math.max(line, 1), view.state.doc.lines));
       view.dispatch({
@@ -198,6 +205,7 @@ export default function Editor({
       view.focus();
     });
     return () => {
+      forgetProbe();
       view.destroy();
       viewRef.current = null;
     };

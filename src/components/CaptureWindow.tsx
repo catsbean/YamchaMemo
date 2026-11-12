@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { commands, type TagSuggestion } from "../bindings";
+import { load } from "@tauri-apps/plugin-store";
+import { commands, type NoteSummary, type TagSuggestion } from "../bindings";
 import { isImeEnter } from "../lib/ime";
+import { MAX_LINK_STUBS, missingTargets, setAutoCreateHint } from "../lib/linkStubs";
 import { linkOptions, type LinkOption } from "../lib/resolveLink";
 import { notifyOtherWindows } from "../lib/windowSync";
 import TagSuggestionRow from "./TagSuggestionRow";
@@ -31,13 +33,27 @@ export default function CaptureWindow() {
   // `[[` 추천 후보. 이 창은 스토어를 초기화하지 않으므로 노트 목록을 직접 한 번 읽는다 —
   // 창이 뜰 때마다 새로 뜨는 것이라 그 뒤로 갱신할 일은 없다. 실패하면 추천만 안 뜬다.
   const [linkables, setLinkables] = useState<LinkOption[]>([]);
+  // 담은 뒤 없는 링크 대상을 만들 때 쓴다 (노트 목록 · 자동 만들기 설정)
+  const notesRef = useRef<NoteSummary[]>([]);
+  const autoCreateRef = useRef(true);
   useEffect(() => {
     Promise.all([commands.listNotes(), commands.getSchemas()]).then(
       ([notes, schemas]) => {
-        if (notes.status === "ok") setLinkables(linkOptions(notes.data, schemas));
+        if (notes.status !== "ok") return;
+        notesRef.current = notes.data;
+        setLinkables(linkOptions(notes.data, schemas));
       },
       () => {},
     );
+    load("settings.json", { autoSave: true, defaults: {} })
+      .then((s) => s.get<boolean>("autoCreateLinkTargets"))
+      .then(
+        (v) => {
+          autoCreateRef.current = v ?? true;
+          setAutoCreateHint(autoCreateRef.current);
+        },
+        () => {},
+      );
   }, []);
 
   // 자동 태그 제안 — 창이 작으니 최대 3개, 타이핑이 멎고 500ms 뒤에만
@@ -84,6 +100,17 @@ export default function CaptureWindow() {
     // 그 일지를 열어 둔 창이 있으면 지금 담은 줄이 바로 보이게 알린다.
     // 백엔드 watcher는 앱 자신의 쓰기를 억제하므로 창끼리 직접 알려야 한다.
     await notifyOtherWindows([r.data]);
+    // 없는 글로 이어진 링크를 담았으면 그 글을 자유노트에 만들어 둔다 (편집기·기록 입력창과
+    // 같은 규칙). 이 창은 곧 닫히므로 알림도 되돌리기도 없다 — 실패해도 담기는 이미 끝났다.
+    if (autoCreateRef.current) {
+      const want = missingTargets(text, notesRef.current, null);
+      if (want.length > 0 && want.length <= MAX_LINK_STUBS) {
+        const made = await commands.ensureLinkTargets(want);
+        if (made.status === "ok" && made.data.length > 0) {
+          await notifyOtherWindows(made.data.map((m) => m.rel_path));
+        }
+      }
+    }
     // 담았다는 것만 잠깐 보여 주고 사라진다
     setDone(true);
     setTimeout(close, 700);

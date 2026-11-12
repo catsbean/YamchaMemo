@@ -4,7 +4,6 @@ import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { join } from "@tauri-apps/api/path";
 import { notifyOtherWindows } from "../lib/windowSync";
-import { canMoveType } from "../lib/note";
 import { normalizeFilter, type ReviewFilter } from "../lib/reviewFilter";
 import type { SortSpec } from "../lib/sort";
 import {
@@ -13,6 +12,12 @@ import {
   resolveLink,
   type LinkHit,
 } from "../lib/resolveLink";
+import {
+  markLinkBaseline,
+  setAutoCreateHint,
+  syncLinkStubs,
+  undoLinkStubs,
+} from "../lib/linkStubs";
 import {
   DEFAULT_CAPTURE_SHORTCUT,
   disableCapture,
@@ -103,16 +108,6 @@ function renamedStem(oldRel: string, newRel: string): string | undefined {
   const stem = (r: string) => r.split("/").pop()?.replace(/\.md$/i, "") ?? "";
   const next = stem(newRel);
   return next === stem(oldRel) ? undefined : next;
-}
-
-/** 없는 링크에서 새 글을 만들 분류. 보던 글과 같은 분류에 두되,
- *  거기 만들 수 없거나 그새 사라진 분류면 자유노트로 보낸다. */
-export function createTypeFor(
-  typeId: string | undefined,
-  schemas: { id: string }[],
-): string {
-  if (!typeId || !canMoveType(typeId)) return "free";
-  return schemas.some((s) => s.id === typeId) ? typeId : "free";
 }
 
 interface VaultStore {
@@ -319,6 +314,13 @@ interface VaultStore {
   /** 없는 링크 알림에 [만들기]를 띄울지 (기본 켬) */
   createOnMissingLink: boolean;
   setCreateOnMissingLink(v: boolean): Promise<void>;
+  /** 없는 글로 이어진 링크를 쓰면 자유노트에 자동으로 만들지 (기본 켬) */
+  autoCreateLinkTargets: boolean;
+  setAutoCreateLinkTargets(v: boolean): Promise<void>;
+  /** 방금 링크에서 자동으로 만든 글들 — 알림과 [되돌리기]용. `tooMany`는 너무 많아 안 만든 개수 */
+  linkStubs: { made: { target: string; rel_path: string; title: string }[]; tooMany: number } | null;
+  dismissLinkStubs(): void;
+  undoLinkStubs(): Promise<void>;
   addCustomType(
     label: string,
     id: string,
@@ -528,6 +530,8 @@ export const useVault = create<VaultStore>((set, get) => {
         // 같은 노트를 띄운 다른 창이 따라오도록 알린다
         await notifyOtherWindows([cur.rel_path]);
         afterWrite();
+        // 없는 글로 이어진 링크의 대상을 만들어 둔다 (저장을 기다리게 하지 않는다)
+        void syncStubs(cur.rel_path, cur.body);
       });
     } while (resaveRequested);
   }
@@ -667,6 +671,41 @@ export const useVault = create<VaultStore>((set, get) => {
    *  예전엔 2초였다. 자동저장이 3초마다 도니까 타이머가 저장 사이사이에 끼어들어,
    *  타이핑하는 내내 몇 초에 한 번씩 vault 전체를 훑었다. 미러는 백업이지 실시간
    *  동기화가 아니므로 한참 쉬었을 때만 돌면 된다. 창을 닫을 때도 따로 한 번 돈다. */
+  /** 저장·기록 추가 직후 — 없는 링크 대상을 자유노트에 만들고, 이 글에서 만들었다가 링크가
+   *  사라진 빈 글을 거둔다 (규칙은 `lib/linkStubs.ts`). 실패는 조용히 넘긴다: 덤으로 하는 일이
+   *  저장을 실패로 보이게 하면 안 된다. `added`는 방금 덧붙인 글(기록 [추가]) — 주면 그 안의
+   *  링크만 새로 쓴 것으로 본다. */
+  async function syncStubs(rel: string, body: string, added?: string) {
+    try {
+      const r = await syncLinkStubs({
+        source: rel,
+        body,
+        notes: get().notes,
+        create: get().autoCreateLinkTargets,
+        added,
+      });
+      // 커서가 든 링크는 미뤄 둔다. 커서만 옮기면 저장이 돌지 않으니 조금 뒤에 다시 묻는다 —
+      // 그새 더 쳤으면(dirty) 다음 저장이 알아서 부른다.
+      if (r.deferred) {
+        setTimeout(() => {
+          const now = get().current;
+          if (now?.rel_path === rel && !get().dirty) void syncStubs(rel, now.body);
+        }, 2000);
+      }
+      if (r.made.length === 0 && r.gone.length === 0 && r.tooMany === 0) return;
+      if (r.made.length > 0 || r.gone.length > 0) {
+        await get().refresh();
+        await notifyOtherWindows([...r.made.map((m) => m.rel_path), ...r.gone]);
+        afterWrite();
+      }
+      if (r.made.length > 0 || r.tooMany > 0) {
+        set({ linkStubs: { made: r.made, tooMany: r.tooMany } });
+      }
+    } catch (e) {
+      console.warn("링크 대상 만들기 실패", e);
+    }
+  }
+
   function afterWrite() {
     scheduleIndexFiles();
     if (get().mirrors.length === 0) return;
@@ -945,6 +984,7 @@ export const useVault = create<VaultStore>((set, get) => {
         await get().refresh();
         await notifyOtherWindows([rel]);
         afterWrite();
+        void syncStubs(updated.rel_path, updated.body, value);
       });
     },
     dailyKindOrder: DEFAULT_DAILY_KIND_ORDER,
@@ -1102,6 +1142,9 @@ export const useVault = create<VaultStore>((set, get) => {
         const shortcutsOff = (await store.get<string[]>("shortcutsOff")) ?? [];
         const createOnMissingLink =
           (await store.get<boolean>("createOnMissingLink")) ?? true;
+        const autoCreateLinkTargets =
+          (await store.get<boolean>("autoCreateLinkTargets")) ?? true;
+        setAutoCreateHint(autoCreateLinkTargets);
         const theme = (await store.get<ThemeMode>("theme")) ?? "light";
         applyTheme(theme);
         const startupMode =
@@ -1135,6 +1178,7 @@ export const useVault = create<VaultStore>((set, get) => {
           searchInFiles,
           dailyKindOrder,
           createOnMissingLink,
+          autoCreateLinkTargets,
         });
         // 켜 둔 채로 앱을 껐었다면 다시 걸어 준다. 실패해도 시작을 막지 않는다.
         if (quickCaptureOn) {
@@ -1355,6 +1399,7 @@ export const useVault = create<VaultStore>((set, get) => {
       }
       await guard(async () => {
         const note = unwrap(await commands.readNote(relPath));
+        markLinkBaseline(note.rel_path, note.body);
         const switching = get().current?.rel_path !== relPath;
         set({
           current: note,
@@ -1507,6 +1552,7 @@ export const useVault = create<VaultStore>((set, get) => {
         await get().refreshNote(cur.rel_path);
         await notifyOtherWindows([cur.rel_path]);
         afterWrite();
+        void syncStubs(updated.rel_path, updated.body, text);
       });
     },
 
@@ -1523,6 +1569,7 @@ export const useVault = create<VaultStore>((set, get) => {
         await get().refresh();
         await notifyOtherWindows([cur.rel_path]);
         afterWrite();
+        void syncStubs(updated.rel_path, updated.body, text);
       });
     },
 
@@ -1539,6 +1586,7 @@ export const useVault = create<VaultStore>((set, get) => {
         await get().refresh();
         await notifyOtherWindows([cur.rel_path]);
         afterWrite();
+        void syncStubs(updated.rel_path, updated.body, text);
       });
     },
 
@@ -1567,10 +1615,9 @@ export const useVault = create<VaultStore>((set, get) => {
         return;
       }
       set({
-        missingLink: {
-          target: t,
-          typeId: createTypeFor(get().current?.note_type, get().schemas),
-        },
+        // 새 글은 늘 자유노트에 — 쓰는 순간 자동으로 만드는 쪽과 같은 자리여야
+        // "어디 갔지"가 없다. (예전엔 보던 글의 분류에 만들었다)
+        missingLink: { target: t, typeId: "free" },
       });
     },
 
@@ -1594,6 +1641,27 @@ export const useVault = create<VaultStore>((set, get) => {
       const m = get().missingLink;
       if (!m) return;
       set({ missingLink: null });
+      // 자동 만들기와 **같은 커맨드**로 만든다 — 닿는지 확인하고 별칭을 심는 절차가 한 벌이다.
+      // 쓰던 글부터 저장한다(만든 글을 열면서 화면을 떠난다).
+      if (!(await flushCurrent())) return;
+      const made = await guard(async () => {
+        const r = unwrap(await commands.ensureLinkTargets([m.target]));
+        await get().refresh();
+        return r[0]?.rel_path ?? null;
+      });
+      if (made) {
+        await notifyOtherWindows([made]);
+        afterWrite();
+        await get().openNote(made);
+        return;
+      }
+      // 그 커맨드가 만들지 않는 이름(폴더까지 적은 링크·날짜 모양)은 사람이 [만들기]를
+      // 눌렀으니 예전 길로 만든다. 그새 누가 만들어 이미 있으면 그 글을 연다.
+      const hits = resolveLink(get().notes, m.target);
+      if (hits.length > 0) {
+        await get().openNote(hits[0].note.rel_path);
+        return;
+      }
       await get().createNote(m.typeId, m.target, {});
       const rel = get().current?.rel_path;
       if (!rel || linkReaches(get().notes, m.target, rel)) return;
@@ -1608,6 +1676,32 @@ export const useVault = create<VaultStore>((set, get) => {
       set({ createOnMissingLink: v });
       const store = await settings();
       await store.set("createOnMissingLink", v);
+    },
+
+    autoCreateLinkTargets: true,
+    async setAutoCreateLinkTargets(v) {
+      set({ autoCreateLinkTargets: v });
+      setAutoCreateHint(v);
+      const store = await settings();
+      await store.set("autoCreateLinkTargets", v);
+    },
+
+    linkStubs: null,
+    dismissLinkStubs() {
+      set({ linkStubs: null });
+    },
+    /** 방금 자동으로 만든 글을 거둔다. 그새 손댄 글은 남는다(백엔드가 가린다). */
+    async undoLinkStubs() {
+      const s = get().linkStubs;
+      set({ linkStubs: null });
+      if (!s || s.made.length === 0) return;
+      await guard(async () => {
+        const gone = await undoLinkStubs(s.made.map((m) => m.rel_path));
+        if (gone.length === 0) return;
+        await get().refresh();
+        await notifyOtherWindows(gone);
+        afterWrite();
+      });
     },
 
     async addCustomType(label, id, fields, template) {
@@ -1790,6 +1884,7 @@ export const useVault = create<VaultStore>((set, get) => {
       if (!cur) return;
       await guard(async () => {
         const note = unwrap(await commands.readNote(cur.rel_path));
+        markLinkBaseline(note.rel_path, note.body);
         set({
           current: note,
           dirty: false,

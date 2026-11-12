@@ -8,6 +8,7 @@ import {
   type NoteContent,
   type NoteSummary,
   type TypeDef,
+  type CreatedLink,
 } from "../bindings";
 import type { EditorView } from "@codemirror/view";
 import Editor from "../editor/Editor";
@@ -15,6 +16,13 @@ import EditorToolbar from "./EditorToolbar";
 import { editorMenuItems } from "../editor/editorMenu";
 import { useContextMenu, useSuppressNativeContextMenu } from "../lib/contextMenu";
 import { splitBookBody, composeBookBody } from "../lib/book";
+import { load as loadSettings } from "@tauri-apps/plugin-store";
+import {
+  markLinkBaseline,
+  setAutoCreateHint,
+  syncLinkStubs,
+  undoLinkStubs,
+} from "../lib/linkStubs";
 import { useLinkOptions } from "../lib/useLinkOptions";
 import {
   resolveLink,
@@ -25,6 +33,7 @@ import { shortcutTextOf, useShortcut } from "../lib/shortcuts";
 import { notifyOtherWindows } from "../lib/windowSync";
 import { fmObject } from "../stores/vault";
 import ContextMenu from "./ContextMenu";
+import Toast from "./Toast";
 import DailyEntryBar from "./DailyEntryBar";
 import FrontmatterForm from "./FrontmatterForm";
 import { LinkPicker } from "./LinkPickerDialog";
@@ -45,6 +54,40 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
   const [schemas, setSchemas] = useState<TypeDef[]>([]);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const getLinkOptions = useLinkOptions(notes, schemas);
+  const notesRef = useRef(notes);
+  notesRef.current = notes;
+
+  // 링크에서 자동으로 만든 글 알림 (메인 창의 LinkStubToast와 같은 것 — 이 창은 스토어가 없다)
+  const [stubs, setStubs] = useState<{ made: CreatedLink[]; tooMany: number } | null>(null);
+  const syncStubs = useCallback(
+    async (full: string) => {
+      try {
+        const store = await loadSettings("settings.json", { autoSave: true, defaults: {} });
+        const create = (await store.get<boolean>("autoCreateLinkTargets")) ?? true;
+        setAutoCreateHint(create);
+        const r = await syncLinkStubs({ source: relPath, body: full, notes: notesRef.current, create });
+        if (r.made.length > 0 || r.gone.length > 0) {
+          const list = await commands.listNotes();
+          if (list.status === "ok") setNotes(list.data);
+          await notifyOtherWindows([...r.made.map((m) => m.rel_path), ...r.gone]);
+        }
+        if (r.made.length > 0 || r.tooMany > 0) setStubs({ made: r.made, tooMany: r.tooMany });
+      } catch (e) {
+        console.warn("링크 대상 만들기 실패", e);
+      }
+    },
+    [relPath],
+  );
+  const undoStubs = useCallback(async () => {
+    const s = stubs;
+    setStubs(null);
+    if (!s || s.made.length === 0) return;
+    const gone = await undoLinkStubs(s.made.map((m) => m.rel_path));
+    if (gone.length === 0) return;
+    const list = await commands.listNotes();
+    if (list.status === "ok") setNotes(list.data);
+    await notifyOtherWindows(gone);
+  }, [stubs]);
   // 서식 툴바가 명령을 실행하려면 CodeMirror 뷰가 필요하다
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   // 이름이 겹쳐 고르게 해야 하는 링크 / 가리키는 글이 없는 링크
@@ -127,6 +170,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
     commands.readNote(relPath).then((r) => {
       if (r.status === "ok") {
         setNote(r.data);
+        markLinkBaseline(relPath, r.data.body);
         stampRef.current = r.data.stamp;
         setBody(
           r.data.note_type === "book"
@@ -213,6 +257,8 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
       if (revRef.current === rev) setDirty(false);
       // 메인 창이 목록·검색을 갱신하도록 알린다 (외부변경 이벤트 재사용)
       await notifyOtherWindows([relPath]);
+      // 없는 글로 이어진 링크의 대상을 만들어 둔다 (메인 창과 같은 규칙 — `lib/linkStubs.ts`)
+      void syncStubs(full);
     } while (resaveRef.current);
   }, [relPath]);
 
@@ -290,6 +336,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
       return;
     }
     setNote(r.data);
+    markLinkBaseline(relPath, r.data.body);
     stampRef.current = r.data.stamp;
     forceRef.current = false;
     setBody(
@@ -559,6 +606,31 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
           }}
           onClose={() => setLinkChoice(null)}
         />
+      )}
+      {stubs && (
+        <Toast
+          resetKey={stubs}
+          onDone={() => setStubs(null)}
+          action={
+            stubs.made.length > 0
+              ? { label: "되돌리기", title: "방금 만든 빈 글을 휴지통으로 보냅니다", onClick: undoStubs }
+              : undefined
+          }
+        >
+          {stubs.made.length > 0 ? (
+            <>
+              <span className="font-medium">{stubs.made[0].target}</span>
+              <span className="text-neutral-300">
+                {stubs.made.length > 1 ? ` 외 ${stubs.made.length - 1}편을` : " 글을"} 자유노트에
+                만들었습니다
+              </span>
+            </>
+          ) : (
+            <span className="text-neutral-300">
+              없는 글로 이어진 링크가 {stubs.tooMany}개라 자동으로 만들지 않았습니다
+            </span>
+          )}
+        </Toast>
       )}
       {missingLink && (
         <MissingLinkNotice
