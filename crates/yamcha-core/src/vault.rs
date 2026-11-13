@@ -59,6 +59,19 @@ pub struct Relocation {
     pub warnings: Vec<String>,
 }
 
+/// 노트 여러 편을 한 번에 옮긴 결과 (`Vault::move_notes_with`)
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MoveBatch {
+    /// 옮긴 노트 (옛 rel, 새 rel) — 넘겨받은 순서대로
+    pub moved: Vec<(String, String)>,
+    /// 경로 링크를 고쳐 쓴 **다른** 노트들
+    pub rewritten: Vec<String>,
+    /// 옮기기는 됐지만 따라오지 못한 것 (편집 기록·일부 링크) — 로그에 남긴다
+    pub warnings: Vec<String>,
+    /// 옮기지 못한 노트 (rel, 까닭). 나머지는 옮긴 대로 둔다
+    pub skipped: Vec<(String, String)>,
+}
+
 /// 사용자 분류를 지운 결과
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TypeRemoval {
@@ -804,6 +817,107 @@ impl Vault {
         self.mark_index_stale(&cur_type);
         self.mark_index_stale(new_type_id);
         Ok(Relocation::relocated(dest_rel, rewritten, warnings))
+    }
+
+    /// 노트 여러 편을 한 번에 다른 분류로 옮긴다.
+    ///
+    /// `move_note`를 편수만큼 부르면 편마다 vault 전체를 훑어 경로 링크를 고친다(50편이면 50번).
+    /// 여기서는 파일을 먼저 다 옮기고 **규칙을 모아 한 번만** 훑는다.
+    ///
+    /// **한 편이 안 돼도 나머지는 옮긴다.** 못 옮긴 것은 까닭과 함께 `skipped`로 돌려준다
+    /// (책·일지, 이미 그 분류, 없는 파일, 다른 프로그램이 쥔 파일). 대상 분류가 틀렸을 때만
+    /// 통째로 실패한다 — 그건 한 편의 문제가 아니다.
+    pub fn move_notes_with(
+        &self,
+        rels: &[String],
+        new_type_id: &str,
+        progress: crate::Progress<'_>,
+    ) -> Result<MoveBatch, CoreError> {
+        let locked = |id: &str| {
+            matches!(
+                Builtin::from_id(id),
+                Some(Builtin::Daily) | Some(Builtin::Book)
+            )
+        };
+        if locked(new_type_id) {
+            return Err(CoreError::Invalid(
+                "책·데일리는 다른 분류로 옮길 수 없습니다".into(),
+            ));
+        }
+        let dest_def = self
+            .def_by_id(new_type_id)
+            .ok_or_else(|| CoreError::Invalid(format!("알 수 없는 분류: {new_type_id}")))?
+            .clone();
+        let dest_dir = self.root.join(&dest_def.folder);
+
+        let mut out = MoveBatch::default();
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut from_types: HashSet<String> = HashSet::new();
+        for rel in rels {
+            if !seen.insert(rel.as_str()) {
+                continue;
+            }
+            let mut skip = |why: String| out.skipped.push((rel.clone(), why));
+            let note = match self.read_note(rel) {
+                Ok(n) => n,
+                Err(e) => {
+                    skip(e.to_string());
+                    continue;
+                }
+            };
+            if note.note_type == new_type_id {
+                skip("이미 그 분류에 있습니다".into());
+                continue;
+            }
+            if locked(&note.note_type) {
+                skip("책·데일리는 다른 분류로 옮길 수 없습니다".into());
+                continue;
+            }
+            let abs = match self.abs(rel) {
+                Ok(a) => a,
+                Err(e) => {
+                    skip(e.to_string());
+                    continue;
+                }
+            };
+            let stem = Path::new(rel)
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "무제".into());
+            let dest = self.unique_path(&dest_dir, &stem);
+            // save_note가 새 경로 기준으로 type을 다시 정규화한다
+            let moved = self.relocate_file(rel, &abs, &dest, |dest_rel| {
+                let moved = self.read_note(dest_rel)?;
+                self.save_note(dest_rel, moved.frontmatter, &moved.body)
+            });
+            match moved {
+                Ok((dest_rel, warnings)) => {
+                    out.warnings.extend(warnings);
+                    from_types.insert(note.note_type);
+                    out.moved.push((rel.clone(), dest_rel));
+                }
+                Err(e) => out.skipped.push((rel.clone(), e.to_string())),
+            }
+        }
+
+        // 폴더까지 적어 가리킨 링크는 따라와야 한다 — 옮긴 것 전부를 한 번 훑어 고친다
+        let rules: Vec<LinkRule> = out
+            .moved
+            .iter()
+            .map(|(from, to)| Self::path_link_rule(from, to))
+            .collect();
+        if !rules.is_empty() {
+            out.rewritten = self.replace_links_lenient(&rules, progress, &mut out.warnings);
+            out.rewritten.sort();
+            out.rewritten.dedup();
+            let moved_to: HashSet<&str> = out.moved.iter().map(|(_, to)| to.as_str()).collect();
+            out.rewritten.retain(|r| !moved_to.contains(r.as_str()));
+            for t in &from_types {
+                self.mark_index_stale(t);
+            }
+            self.mark_index_stale(new_type_id);
+        }
+        Ok(out)
     }
 
     /// 노트 파일을 `dest`로 옮기고 편집 기록을 따라 옮긴 뒤 `finish`(새 경로에 다시 쓰기)를 돈다.

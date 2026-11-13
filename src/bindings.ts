@@ -147,6 +147,21 @@ async pruneLinkStubs(relPaths: string[], evenIfLinked: boolean) : Promise<Result
 }
 },
 /**
+ * 노트 여러 편을 한 번에 다른 분류로 옮긴다.
+ * 
+ * `move_note`를 편수만큼 부르지 않는 까닭: 편마다 vault 전체를 훑어 경로 링크를 고친다.
+ * 여기서는 파일을 다 옮긴 뒤 한 번만 훑고, 색인도 한 번에 따라잡는다. 한 편이 안 돼도
+ * 나머지는 옮기고 못 옮긴 것을 까닭과 함께 돌려준다. 진행은 `relocate-progress`.
+ */
+async moveNotes(relPaths: string[], newTypeId: string) : Promise<Result<MovedNotes, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("move_notes", { relPaths, newTypeId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 오늘의 데일리노트 열기 (없으면 생성)
  */
 async openTodayDaily() : Promise<Result<string, string>> {
@@ -1425,6 +1440,18 @@ conflicts: string[]; errors: string[] }
  */
 export type MovedNote = { from: string; to: string }
 /**
+ * 여러 편을 한 번에 옮긴 결과
+ */
+export type MovedNotes = { 
+/**
+ * 옮긴 노트 (옛 rel → 새 rel)
+ */
+moved: MovedNote[]; 
+/**
+ * 옮기지 못한 노트와 까닭 — 나머지는 옮긴 대로다
+ */
+skipped: SkippedNote[] }
+/**
  * 보기 화면에 그릴 블록 하나.
  * `kind`가 "callout"이면 `entry_index`로 수정·삭제할 수 있고,
  * "raw"면 외부 편집기에서 콜아웃 없이 써 넣은 원문이라 보여주기만 한다.
@@ -1593,6 +1620,7 @@ export type SearchScope =
  * 첨부 문서만
  */
 "Files"
+export type SkippedNote = { rel_path: string; reason: string }
 /**
  * 첫 실행 화면에 제안할 저장 위치 (클라우드 동기화 폴더 등)
  */

@@ -29,6 +29,7 @@ pub fn run() {
         commands::notes::delete_note,
         commands::notes::ensure_link_targets,
         commands::notes::prune_link_stubs,
+        commands::notes::move_notes,
         commands::notes::open_today_daily,
         commands::notes::open_daily,
         commands::write_export,

@@ -855,3 +855,106 @@ mod link_stub_tests {
         assert_eq!(back[0].rel_path, src);
     }
 }
+
+/// 여러 편을 한 번에 옮긴 결과
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct MovedNotes {
+    /// 옮긴 노트 (옛 rel → 새 rel)
+    pub moved: Vec<MovedNote>,
+    /// 옮기지 못한 노트와 까닭 — 나머지는 옮긴 대로다
+    pub skipped: Vec<SkippedNote>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct SkippedNote {
+    pub rel_path: String,
+    pub reason: String,
+}
+
+/// 노트 여러 편을 한 번에 다른 분류로 옮긴다.
+///
+/// `move_note`를 편수만큼 부르지 않는 까닭: 편마다 vault 전체를 훑어 경로 링크를 고친다.
+/// 여기서는 파일을 다 옮긴 뒤 한 번만 훑고, 색인도 한 번에 따라잡는다. 한 편이 안 돼도
+/// 나머지는 옮기고 못 옮긴 것을 까닭과 함께 돌려준다. 진행은 `relocate-progress`.
+#[tauri::command]
+#[specta::specta]
+pub async fn move_notes(
+    app: tauri::AppHandle,
+    rel_paths: Vec<String>,
+    new_type_id: String,
+) -> Result<MovedNotes, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut report = relocate_reporter(&app);
+        with_ctx_write(&state, |c| move_notes_in(c, &rel_paths, &new_type_id, &mut report))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+pub(crate) fn move_notes_in(
+    c: &mut Ctx,
+    rel_paths: &[String],
+    new_type_id: &str,
+    report: RelocateReport<'_>,
+) -> Result<MovedNotes, yamcha_core::CoreError> {
+    let r = c
+        .vault
+        .move_notes_with(rel_paths, new_type_id, &mut |d, t| report("links", d, t))?;
+    catch_up_moves(c, &r.moved, &r.rewritten, &r.warnings, &mut |d, t| report("index", d, t));
+    for (rel, why) in &r.skipped {
+        crate::applog::warn(format!("옮기지 못한 노트 — {rel}: {why}"));
+    }
+    Ok(MovedNotes {
+        moved: r.moved.into_iter().map(|(from, to)| MovedNote { from, to }).collect(),
+        skipped: r
+            .skipped
+            .into_iter()
+            .map(|(rel_path, reason)| SkippedNote { rel_path, reason })
+            .collect(),
+    })
+}
+
+#[cfg(test)]
+mod move_notes_tests {
+    use super::*;
+    use std::path::Path;
+
+    fn ctx(vault_root: &Path, index_root: &Path) -> Ctx {
+        Ctx {
+            vault: Vault::open(vault_root).unwrap(),
+            indexer: Indexer::open(&index_root.join("index.db")).unwrap(),
+            search: SearchEngine::open(&index_root.join("search")).unwrap(),
+            todo_cache: dashboard::TodoCache::default(),
+        }
+    }
+
+    /// 옮긴 뒤 색인이 따라온다 — 옛 경로는 빠지고 새 경로가 들어가며, 경로 링크를 고쳐 쓴
+    /// 글의 백링크도 새 자리를 가리킨다.
+    #[test]
+    fn 여러_편을_옮기면_색인이_따라온다() {
+        let (v, i) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut c = ctx(v.path(), i.path());
+        let a = create_note_in(&mut c, "free", "가", serde_json::Value::Null).unwrap();
+        let b = create_note_in(&mut c, "free", "나", serde_json::Value::Null).unwrap();
+        let book = create_note_in(&mut c, "book", "어떤 책", serde_json::Value::Null).unwrap();
+        let watcher = create_note_in(&mut c, "writing", "지켜보는 글", serde_json::Value::Null).unwrap();
+        let fm = c.vault.read_note(&watcher).unwrap().frontmatter;
+        save_note_in(&mut c, &watcher, fm, "[[Free/가]]", None).unwrap();
+
+        let r = move_notes_in(&mut c, &[a.clone(), book.clone(), b.clone()], "writing", &mut |_, _, _| {})
+            .unwrap();
+        assert_eq!(r.moved.len(), 2);
+        assert_eq!(r.skipped.len(), 1);
+        assert_eq!(r.skipped[0].rel_path, book);
+
+        let states = c.indexer.note_states().unwrap();
+        for m in &r.moved {
+            assert!(!states.contains_key(&m.from), "옛 경로가 색인에 남았다: {}", m.from);
+            assert!(states.contains_key(&m.to), "새 경로가 색인에 없다: {}", m.to);
+        }
+        let back = c.indexer.backlinks(&c.vault, "Writing/가.md").unwrap();
+        assert_eq!(back.len(), 1, "{back:?}");
+        assert_eq!(back[0].rel_path, watcher);
+    }
+}

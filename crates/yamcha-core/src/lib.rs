@@ -18,6 +18,8 @@ pub mod linkstub;
 pub mod migrations;
 #[cfg(test)]
 mod lock_bench;
+#[cfg(test)]
+mod move_batch_tests;
 pub mod mirror;
 pub mod parse;
 pub mod schema;
@@ -36,7 +38,7 @@ pub use linkstub::CreatedLink;
 pub use schema::{Builtin, EntryKind, FieldDef, FieldKind, TypeDef};
 pub use search::{SearchEngine, SearchFilter, SearchHit, SearchScope, FILE_TYPE};
 pub use vault::{
-    file_identity, fingerprint, CalloutDef, NoteContent, NoteSummary, ParsedNote, Relocation,
+    file_identity, fingerprint, CalloutDef, MoveBatch, NoteContent, NoteSummary, ParsedNote, Relocation,
     SaveResult, TagRename, TrashItem, TrashRestore, TypeRemoval, Vault,
 };
 
