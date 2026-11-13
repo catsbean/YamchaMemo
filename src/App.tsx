@@ -6,6 +6,7 @@ import EditorPane from "./components/EditorPane";
 import LinkPickerDialog from "./components/LinkPickerDialog";
 import LinkStubToast from "./components/LinkStubToast";
 import MissingLinkToast from "./components/MissingLinkToast";
+import MoveBatchToast from "./components/MoveBatchToast";
 import MoveUndoToast from "./components/MoveUndoToast";
 import RelocateProgressDialog from "./components/RelocateProgressDialog";
 import SearchModal from "./components/SearchModal";
@@ -210,6 +211,7 @@ export default function App() {
       <MissingLinkToast />
       <LinkStubToast />
       <MoveUndoToast />
+      <MoveBatchToast />
       <RelocateProgressDialog />
       {startupNotice && (
         <StartupNoticeBanner

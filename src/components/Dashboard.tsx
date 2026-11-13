@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { NoteSummary } from "../bindings";
 import { useVault } from "../stores/vault";
-import { fileSuffix, fmDisplay, fmStr, listFields } from "../lib/note";
+import { canMoveType, fileSuffix, fmDisplay, fmStr, josaRo, listFields } from "../lib/note";
+import { useSelection } from "../lib/selection";
 import AuditDashboard from "./AuditDashboard";
 import Bookshelf from "./Bookshelf";
 import ContextMenu from "./ContextMenu";
@@ -73,6 +74,7 @@ function ListDashboard({ noteType }: { noteType: string }) {
     openToday,
     createUntitled,
     moveNoteTo,
+    moveNotesTo,
     groupings,
     setGrouping,
   } = useVault();
@@ -153,10 +155,28 @@ function ListDashboard({ noteType }: { noteType: string }) {
   // 수천 줄을 한꺼번에 그리지 않는다 — 앞의 몇백 줄만, 내려가면 더 (`useIncremental`).
   // 분류·묶기·정렬·필터가 바뀌면 처음 길이로 돌아간다
   const totalRows = useMemo(() => groups.reduce((n, [, items]) => n + items.length, 0), [groups]);
-  const rows = useIncremental(
-    totalRows,
-    `${noteType}|${groupKey}|${sort.key}|${sort.dir}|${tagFilter}|${JSON.stringify(groupFilters)}`,
+  const viewKey = `${noteType}|${groupKey}|${sort.key}|${sort.dir}|${tagFilter}|${JSON.stringify(groupFilters)}`;
+  const rows = useIncremental(totalRows, viewKey);
+
+  // 여러 줄 고르기 — 화면에 놓인 순서 그대로(아직 안 그린 줄까지) Shift 범위가 따라간다.
+  // 분류·묶기·정렬·필터가 바뀌면 풀린다: 안 보이게 된 줄이 골라진 채 옮겨지면 안 된다.
+  const order = useMemo(
+    () => groups.flatMap(([, items]) => items.map((n) => n.rel_path)),
+    [groups],
   );
+  const sel = useSelection(order, viewKey);
+  // 옮길 수 있는 분류에서만 고르기를 연다 (책·일지는 못 옮긴다 — 지금 고른 것으로 할 일이 이동뿐이다)
+  const moveTargets = useMemo(
+    () => (canMoveType(noteType) ? schemas.filter((s) => s.id !== noteType && canMoveType(s.id)) : []),
+    [schemas, noteType],
+  );
+  const selectable = moveTargets.length > 0;
+  const picking = sel.selected.size > 0;
+  const moveSelected = (typeId: string) => {
+    const rels = order.filter((rel) => sel.selected.has(rel));
+    sel.clear();
+    void moveNotesTo(rels, typeId);
+  };
   const visibleGroups = useMemo(() => takeGroups(groups, rows.count), [groups, rows.count]);
   const groupSize = useMemo(() => new Map(groups.map(([k, items]) => [k, items.length])), [groups]);
 
@@ -265,6 +285,10 @@ function ListDashboard({ noteType }: { noteType: string }) {
           </div>
         ))}
 
+      {picking && (
+        <SelectionBar count={sel.selected.size} targets={moveTargets} onMove={moveSelected} onClear={sel.clear} />
+      )}
+
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {list.length === 0 && (
           <p className="mt-16 text-center text-sm text-neutral-400">
@@ -280,28 +304,44 @@ function ListDashboard({ noteType }: { noteType: string }) {
                 {groupKey !== "none" && (
                   <span className="font-normal text-neutral-400">{groupSize.get(group)}</span>
                 )}
+                {selectable && picking && (
+                  <GroupPick
+                    rels={(groups.find(([k]) => k === group)?.[1] ?? []).map((n) => n.rel_path)}
+                    selected={sel.selected}
+                    onSet={sel.setMany}
+                  />
+                )}
               </h2>
             )}
             <ul className="divide-y divide-neutral-100 rounded-lg border border-neutral-200 bg-white">
               {items.map((n) => (
-                <li key={n.rel_path}>
-                  <button
-                    className={`flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-neutral-50 ${
-                      current?.rel_path === n.rel_path ? "bg-neutral-100" : ""
-                    }`}
-                    {...noteItemHandlers(
-                      n.rel_path,
-                      () => openNote(n.rel_path),
-                      openNoteWindow,
-                      ctx.open,
-                      moveMenuItems(n.note_type, schemas, (id) =>
-                        moveNoteTo(n.rel_path, id),
-                      ),
-                    )}
-                  >
-                    <Row note={n} noteType={noteType} fields={shown} />
-                  </button>
-                </li>
+                <NoteLine
+                  key={n.rel_path}
+                  note={n}
+                  open={current?.rel_path === n.rel_path}
+                  selectable={selectable}
+                  picking={picking}
+                  picked={sel.selected.has(n.rel_path)}
+                  onPick={sel.pick}
+                  handlers={noteItemHandlers(
+                    n.rel_path,
+                    () => openNote(n.rel_path),
+                    openNoteWindow,
+                    ctx.open,
+                    // 고른 줄을 우클릭하면 고른 것 전부를 옮긴다, 아니면 그 줄만
+                    sel.selected.has(n.rel_path) && sel.selected.size > 1
+                      ? [
+                          { separator: true },
+                          ...moveTargets.map((s) => ({
+                            label: `${sel.selected.size}개를 ${s.label}${josaRo(s.label)} 이동`,
+                            onClick: () => moveSelected(s.id),
+                          })),
+                        ]
+                      : moveMenuItems(n.note_type, schemas, (id) => moveNoteTo(n.rel_path, id)),
+                  )}
+                >
+                  <Row note={n} noteType={noteType} fields={shown} />
+                </NoteLine>
               ))}
             </ul>
           </section>
@@ -313,6 +353,145 @@ function ListDashboard({ noteType }: { noteType: string }) {
         <NewNoteDialog noteType={noteType} onClose={() => setCreating(false)} />
       )}
       {ctx.menu && <ContextMenu state={ctx.menu} onClose={ctx.close} />}
+    </div>
+  );
+}
+
+/** 목록의 한 줄 — 왼쪽 체크 칸으로 여러 줄을 고른다.
+ *
+ *  체크 칸은 마우스를 올렸을 때, 그리고 하나라도 고른 뒤에는 늘 보인다. Shift를 누른 채
+ *  줄이나 체크 칸을 누르면 마지막에 누른 줄부터 여기까지가 한꺼번에 골라진다.
+ *  Ctrl+클릭은 건드리지 않는다 — 이미 "새 창으로 열기"다. */
+function NoteLine({
+  note,
+  open,
+  selectable,
+  picking,
+  picked,
+  onPick,
+  handlers,
+  children,
+}: {
+  note: NoteSummary;
+  open: boolean;
+  selectable: boolean;
+  picking: boolean;
+  picked: boolean;
+  onPick: (rel: string, shift: boolean) => void;
+  handlers: ReturnType<typeof noteItemHandlers>;
+  children: React.ReactNode;
+}) {
+  return (
+    <li className={`group flex items-center ${picked ? "bg-sky-50" : open ? "bg-neutral-100" : ""}`}>
+      {selectable && (
+        <input
+          type="checkbox"
+          aria-label={`${note.title} 고르기`}
+          title="고르기 — Shift를 누른 채 누르면 여기까지 한꺼번에"
+          className={`ml-3 h-3.5 w-3.5 shrink-0 cursor-pointer accent-sky-600 ${
+            picking ? "" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+          }`}
+          checked={picked}
+          // 값은 클릭에서 바꾼다 (Shift를 눌렀는지 알아야 한다)
+          onChange={() => {}}
+          onClick={(e) => onPick(note.rel_path, e.shiftKey)}
+        />
+      )}
+      <button
+        className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5 text-left hover:bg-neutral-50"
+        {...handlers}
+        onClick={(e) => {
+          // 고르는 중의 Shift+클릭은 열기가 아니라 범위 고르기다
+          if (selectable && e.shiftKey) {
+            e.preventDefault();
+            onPick(note.rel_path, true);
+            return;
+          }
+          handlers.onClick(e);
+        }}
+      >
+        {children}
+      </button>
+    </li>
+  );
+}
+
+/** 묶음 머리글의 "전부" — 그 묶음의 줄을 한꺼번에 고르거나 푼다 */
+function GroupPick({
+  rels,
+  selected,
+  onSet,
+}: {
+  rels: string[];
+  selected: ReadonlySet<string>;
+  onSet: (rels: string[], on: boolean) => void;
+}) {
+  const all = rels.length > 0 && rels.every((r) => selected.has(r));
+  return (
+    <button
+      className="ml-2 rounded px-1.5 py-0.5 text-2xs font-normal text-sky-600 hover:bg-sky-50"
+      onClick={() => onSet(rels, !all)}
+    >
+      {all ? "이 묶음 풀기" : "이 묶음 전부"}
+    </button>
+  );
+}
+
+/** 고른 줄이 있을 때 목록 위에 뜨는 띠 — 몇 개를 골랐는지, 무엇을 할 수 있는지 */
+function SelectionBar({
+  count,
+  targets,
+  onMove,
+  onClear,
+}: {
+  count: number;
+  targets: { id: string; label: string }[];
+  onMove: (typeId: string) => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex items-center gap-2 border-b border-sky-200 bg-sky-50 px-6 py-1.5 text-sm">
+      <span className="font-medium text-sky-800">{count}개 고름</span>
+      <span className="relative">
+        <button
+          className="rounded border border-sky-300 bg-white px-2.5 py-1 text-xs text-sky-800 hover:border-sky-500"
+          onClick={() => setOpen((v) => !v)}
+          aria-haspopup="menu"
+          aria-expanded={open}
+        >
+          이동 ▾
+        </button>
+        {open && (
+          <>
+            {/* 바깥을 눌러 닫기 */}
+            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+            <div className="absolute left-0 top-full z-50 mt-1 w-44 rounded-md border border-neutral-200 bg-white py-1 shadow-lg">
+              {targets.map((s) => (
+                <button
+                  key={s.id}
+                  className="block w-full px-3 py-1.5 text-left text-xs text-neutral-700 hover:bg-neutral-100"
+                  onClick={() => {
+                    setOpen(false);
+                    onMove(s.id);
+                  }}
+                >
+                  {s.label}
+                  {josaRo(s.label)}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </span>
+      <span className="flex-1" />
+      <span className="text-2xs text-sky-700">Shift+클릭으로 범위 · Esc로 풀기</span>
+      <button
+        className="rounded px-2 py-1 text-xs text-sky-800 hover:bg-sky-100"
+        onClick={onClear}
+      >
+        풀기
+      </button>
     </div>
   );
 }
