@@ -220,11 +220,20 @@ pub fn clear_note(vault: &Vault, rel: &str) -> Result<(), CoreError> {
 /// 새 이름은 이력이 없는 상태에서 다시 시작한다 — 이름 한 번 바꿨다고 되돌릴 지점이
 /// 사라지면 안전장치라고 할 수 없다.
 pub fn move_note(vault: &Vault, from: &str, to: &str) -> Result<(), CoreError> {
-    let src = note_dir(vault, from);
-    if !src.is_dir() || from == to {
+    if from == to {
         return Ok(());
     }
-    let dst = note_dir(vault, to);
+    move_dir(note_dir(vault, from), note_dir(vault, to))
+}
+
+/// 스냅샷 폴더를 옮긴다. 갈 자리에 이미 기록이 있으면 하나씩 합친다.
+fn move_dir(src: PathBuf, dst: PathBuf) -> Result<(), CoreError> {
+    if !src.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent)?;
+    }
     // 대소문자만 바꾼 이름이면(Windows) 두 경로가 **같은 폴더**다 — 합치기로 가면 스냅샷마다
     // "이미 있다"며 건너뛴 뒤 폴더를 지워 기록이 통째로 사라진다. 그냥 이름만 바꾼다.
     let same_dir = matches!(
@@ -249,6 +258,71 @@ pub fn move_note(vault: &Vault, from: &str, to: &str) -> Result<(), CoreError> {
     }
     let _ = fs::remove_dir_all(&src);
     Ok(())
+}
+
+// ── 휴지통 ──
+// 노트를 휴지통으로 보내면 그 편집 기록도 함께 휴지통에 머문다. 예전엔 그 자리에서 지웠다 —
+// 지운 글의 본문이 20벌씩 vault에 남지 않게 하려는 것이었는데, 휴지통에서 글을 되살려도
+// 기록은 영영 돌아오지 않았다(목록의 [되돌리기]가 생기며 드러났다). 이제 기록은 휴지통 파일과
+// **같이 살고 같이 죽는다** — 되살리면 따라 돌아오고, 휴지통을 비우면 함께 지워진다.
+
+/// 휴지통 속 노트의 편집 기록이 머무는 곳 — `.yamcha/trash/.history/<휴지통 파일 이름>/`.
+/// 휴지통 목록·비우기는 `.md` 파일만 보므로 이 폴더를 노트로 착각하지 않는다.
+fn trash_stash_dir(vault: &Vault, trash_file: &str) -> PathBuf {
+    vault.root().join(".yamcha").join("trash").join(".history").join(trash_file)
+}
+
+/// 휴지통 파일 이름으로 쓸 수 없는 것(경로를 벗어나는 것)을 막는다
+fn check_trash_file(trash_file: &str) -> Result<(), CoreError> {
+    if trash_file.is_empty()
+        || trash_file.contains('/')
+        || trash_file.contains('\\')
+        || trash_file.contains("..")
+    {
+        return Err(CoreError::Invalid(format!("잘못된 휴지통 파일 이름: {trash_file}")));
+    }
+    Ok(())
+}
+
+/// 노트를 휴지통으로 보낼 때 — 그 편집 기록을 휴지통으로 옮긴다.
+pub fn stash_for_trash(vault: &Vault, rel: &str, trash_file: &str) -> Result<(), CoreError> {
+    check_trash_file(trash_file)?;
+    move_dir(note_dir(vault, rel), trash_stash_dir(vault, trash_file))
+}
+
+/// 휴지통에서 되살릴 때 — 기록을 되살린 자리로 돌려놓는다(이름이 바뀌었으면 새 이름으로).
+pub fn unstash_from_trash(vault: &Vault, trash_file: &str, rel: &str) -> Result<(), CoreError> {
+    check_trash_file(trash_file)?;
+    move_dir(trash_stash_dir(vault, trash_file), note_dir(vault, rel))
+}
+
+/// 휴지통 항목을 영구히 지울 때 — 기록도 함께.
+pub fn drop_trash_stash(vault: &Vault, trash_file: &str) -> Result<(), CoreError> {
+    check_trash_file(trash_file)?;
+    let dir = trash_stash_dir(vault, trash_file);
+    if dir.is_dir() {
+        fs::remove_dir_all(&dir)?;
+    }
+    Ok(())
+}
+
+/// 주인(휴지통 파일)이 없어진 기록을 걷는다 → 걷은 수. 휴지통 파일을 앱 밖에서 지웠을 때 남는다.
+pub fn prune_trash_stash(vault: &Vault) -> Result<u32, CoreError> {
+    let root = vault.root().join(".yamcha").join("trash").join(".history");
+    if !root.is_dir() {
+        return Ok(0);
+    }
+    let trash = vault.root().join(".yamcha").join("trash");
+    let mut removed = 0;
+    for entry in fs::read_dir(&root)?.flatten() {
+        if entry.path().is_dir()
+            && !trash.join(entry.file_name()).is_file()
+            && fs::remove_dir_all(entry.path()).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 /// vault에 더 이상 없는 노트의 스냅샷 폴더를 지운다 → 지운 폴더 수.
@@ -471,20 +545,89 @@ mod tests {
 
     /// **지운 글의 본문이 vault 안에 남으면 안 된다.**
     /// 파일 자체는 휴지통에 있으니 되돌릴 길은 그대로다.
-    #[test]
-    fn 노트를_지우면_스냅샷도_지운다() {
-        let (_d, mut v, rel) = setup();
+    /// 스냅샷 둘을 뜬 노트 하나 → 그 스탬프들
+    fn with_two_snapshots(v: &mut Vault, rel: &str) -> Vec<String> {
         v.set_history_policy(EAGER);
-        put(&v, &rel, "지워질 내용");
-        snapshot(&v, &rel, None, EAGER).unwrap();
-        assert_eq!(list(&v, &rel).unwrap().len(), 1);
+        put(v, rel, "첫 판");
+        snapshot(v, rel, None, EAGER).unwrap();
+        put(v, rel, "둘째 판");
+        snapshot(v, rel, None, EAGER).unwrap();
+        let stamps: Vec<String> = list(v, rel).unwrap().into_iter().map(|h| h.stamp).collect();
+        assert_eq!(stamps.len(), 2);
+        stamps
+    }
 
-        v.delete_note(&rel).unwrap();
-        assert!(
-            list(&v, &rel).unwrap().is_empty(),
-            "지운 글의 스냅샷이 남았다"
-        );
+    /// 지운 글의 기록은 노트 자리에서 빠져 휴지통으로 간다 — 지운 글이 기록 목록에 남지 않고,
+    /// 되살리면 그대로 돌아온다. (예전엔 지울 때 기록을 지워서, 되살려도 기록은 영영 없었다)
+    #[test]
+    fn 지운_글의_기록은_휴지통을_따라갔다가_되살리면_돌아온다() {
+        let (_d, mut v, rel) = setup();
+        let before = with_two_snapshots(&mut v, &rel);
+
+        let file = v.trash_note(&rel).unwrap();
+        assert!(list(&v, &rel).unwrap().is_empty(), "지운 글의 기록이 노트 자리에 남았다");
         assert!(!note_dir(&v, &rel).exists());
+        assert!(trash_stash_dir(&v, &file).is_dir(), "기록이 휴지통에 없다");
+        // 휴지통 목록에는 노트만 보인다 (기록 폴더를 항목으로 세지 않는다)
+        assert_eq!(v.list_trash().unwrap().len(), 1);
+
+        let back = v.restore_trash(&file).unwrap().rel;
+        assert_eq!(back, rel);
+        let after: Vec<String> = list(&v, &back).unwrap().into_iter().map(|h| h.stamp).collect();
+        assert_eq!(after, before, "되살렸는데 기록이 돌아오지 않았다");
+        assert!(!trash_stash_dir(&v, &file).exists());
+    }
+
+    /// 지운 사이 같은 이름의 글을 새로 만들어 `(2)`로 되살아나면, 기록은 되살아난 쪽을 따라간다
+    #[test]
+    fn 이름이_바뀌어_되살아나면_기록도_그_이름으로() {
+        let (_d, mut v, rel) = setup();
+        let before = with_two_snapshots(&mut v, &rel);
+        let file = v.trash_note(&rel).unwrap();
+        let newer = v.create_note("free", "메모", json!({})).unwrap();
+        assert_eq!(newer, rel);
+        let back = v.restore_trash(&file).unwrap().rel;
+        assert_ne!(back, rel);
+        let after: Vec<String> = list(&v, &back).unwrap().into_iter().map(|h| h.stamp).collect();
+        assert_eq!(after, before);
+        assert!(list(&v, &newer).unwrap().is_empty(), "새 글이 남의 기록을 물려받았다");
+    }
+
+    /// 휴지통을 비우면 기록도 함께 지워진다 — 지운 글의 본문이 vault에 계속 남지 않는다
+    #[test]
+    fn 휴지통을_비우면_기록도_함께_지워진다() {
+        let (_d, mut v, rel) = setup();
+        with_two_snapshots(&mut v, &rel);
+        let file = v.trash_note(&rel).unwrap();
+        // 오래된 항목으로 꾸민다 (파일과 기록 폴더의 이름을 함께)
+        let trash = v.root().join(".yamcha/trash");
+        let old = format!("20200101-000000_{}", file.split_once('_').unwrap().1);
+        fs::rename(trash.join(&file), trash.join(&old)).unwrap();
+        fs::rename(trash_stash_dir(&v, &file), trash_stash_dir(&v, &old)).unwrap();
+
+        assert_eq!(v.purge_trash(7).unwrap(), 1);
+        assert!(!trash_stash_dir(&v, &old).exists(), "비운 휴지통의 기록이 남았다");
+    }
+
+    /// 휴지통 파일을 앱 밖에서 지워 주인이 없어진 기록도 비울 때 걷힌다
+    #[test]
+    fn 주인_없는_휴지통_기록은_비울_때_걷힌다() {
+        let (_d, mut v, rel) = setup();
+        with_two_snapshots(&mut v, &rel);
+        let file = v.trash_note(&rel).unwrap();
+        fs::remove_file(v.root().join(".yamcha/trash").join(&file)).unwrap();
+        assert_eq!(v.purge_trash(7).unwrap(), 0);
+        assert!(!trash_stash_dir(&v, &file).exists());
+    }
+
+    #[test]
+    fn 휴지통_파일_이름으로_경로를_벗어날_수_없다() {
+        let (_d, v, rel) = setup();
+        for bad in ["", "../밖", "a/b.md", "a\\b.md"] {
+            assert!(stash_for_trash(&v, &rel, bad).is_err(), "{bad}");
+            assert!(unstash_from_trash(&v, bad, &rel).is_err(), "{bad}");
+            assert!(drop_trash_stash(&v, bad).is_err(), "{bad}");
+        }
     }
 
     /// 제목을 바꿨다고 되돌릴 지점이 사라지면 안전장치가 아니다

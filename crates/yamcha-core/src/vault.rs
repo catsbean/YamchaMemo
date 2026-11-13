@@ -1857,14 +1857,15 @@ impl Vault {
             .unwrap_or_else(|| "note.md".into());
         let dest = unique_trash_path(&trash, &stamp.to_string(), &name);
         retry_while_locked(|| fs::rename(&abs, &dest))?;
-        // 스냅샷을 남겨 두면 지운 글의 본문이 최대 20벌 vault 안에 계속 남는다.
-        // 파일 자체는 휴지통에 통째로 있으므로 되돌릴 길은 그대로다.
-        let _ = crate::history::clear_note(self, rel);
-        self.mark_index_stale(&t);
-        Ok(dest
+        let file = dest
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default())
+            .unwrap_or_default();
+        // 편집 기록도 휴지통으로 함께 간다 — 되살리면 따라 돌아오고, 비우면 같이 지워진다.
+        // 못 옮기면 제자리에 둔다(지우지 않는다): 주인 없는 기록은 한 달 뒤 `prune_orphans`가 걷는다.
+        let _ = crate::history::stash_for_trash(self, rel, &file);
+        self.mark_index_stale(&t);
+        Ok(file)
     }
 
     /// 여러 편을 휴지통으로 → 보낸 것 (rel, 휴지통 파일 이름)과 못 보낸 것 (rel, 까닭).
@@ -2017,6 +2018,9 @@ impl Vault {
         let dest = self.unique_path(&dir, stem);
         retry_while_locked(|| fs::rename(&src, &dest))?;
         let rel = self.rel_of(&dest);
+        // 편집 기록도 데려온다. 못 데려와도 글은 이미 돌아왔다 — 실패로 돌려주지 않는다
+        // (남은 기록은 휴지통을 비울 때 주인 없는 것으로 걷힌다)
+        let _ = crate::history::unstash_from_trash(self, file_name, &rel);
         self.mark_index_stale(&resolved_type);
         Ok(TrashRestore { rel, daily_taken })
     }
@@ -2038,10 +2042,14 @@ impl Vault {
             let name = entry.file_name().to_string_lossy().to_string();
             if let Some(deleted_at) = parse_trash_datetime(&name) {
                 if deleted_at < cutoff && fs::remove_file(entry.path()).is_ok() {
+                    // 함께 머물던 편집 기록도 지운다
+                    let _ = crate::history::drop_trash_stash(self, &name);
                     removed += 1;
                 }
             }
         }
+        // 휴지통 파일이 앱 밖에서 지워져 주인 없이 남은 기록도 걷는다
+        let _ = crate::history::prune_trash_stash(self);
         Ok(removed)
     }
 
