@@ -22,11 +22,17 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
 
+    # 서드파티 액션은 모두 커밋 SHA로 고정한다(뒤의 주석이 원래 태그). 태그는 옮겨질 수 있어서,
+    # 그 저장소 하나가 털리면 이 잡이 다루는 업데이트 서명 키가 새어 나간다 — 그 키면 모든 설치본에
+    # 서명된 악성 업데이트를 보낼 수 있다(보안 점검 20261113). 올릴 때는 docs/RELEASE.md 참고.
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # 토큰을 .git/config에 남기지 않는다 — 뒤 단계는 필요한 곳에만 GH_TOKEN을 따로 받는다
+          persist-credentials: false
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
         with:
           # 로컬 개발 환경과 같은 버전으로 고정한다. 메이저만 적으면 최신
           # 11.x가 깔려서, 새 pnpm이 요구하는 Node 버전이 올라갈 때 갑자기
@@ -34,7 +40,7 @@ jobs:
           version: 11.13.1
 
       - name: Setup Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           # pnpm 11은 node:sqlite를 쓰므로 Node 22.13 미만에서는 실행되지
           # 않는다. 로컬과 같은 24로 맞춘다.
@@ -42,12 +48,14 @@ jobs:
           cache: pnpm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          # SHA로 고정하면 ref 이름에서 툴체인을 읽지 못하므로 직접 적는다
+          toolchain: stable
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           # 루트 Cargo.toml이 워크스페이스(src-tauri + crates/yamcha-core)라
           # 산출물은 루트 target/에 쌓인다. src-tauri/target은 생기지 않으므로
@@ -91,7 +99,7 @@ jobs:
           echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$password" >> "$GITHUB_ENV"
 
       - name: Build and release (Tauri)
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # 저장소 Secrets에 등록된 카카오 REST API 키 (없으면 교보 검색만 동작)
@@ -105,6 +113,17 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # 서명이 끝났으니 키를 환경에서 지운다. GITHUB_ENV에 넣은 값은 잡이 끝날 때까지 남아서 뒤의
+      # 단계와 앞 액션들의 정리 단계(post: 캐시 저장 등)까지 다 읽을 수 있다. 빌드가 실패해도
+      # 정리 단계는 돌기 때문에 always()로 둔다. (tauri-action과 그 안의 `pnpm build`는 여전히 키를
+      # 본다 — 같은 스텝에서 빌드하고 서명하는 구조라 피할 수 없다.)
+      - name: Drop updater signing key from the environment
+        if: always()
+        shell: bash
+        run: |
+          echo "TAURI_SIGNING_PRIVATE_KEY=" >> "$GITHUB_ENV"
+          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" >> "$GITHUB_ENV"
 
       # 처음 받는 사람이 가장 먼저 만나는 벽은 서명이 없어 뜨는 설치 경고다(8-6). 넘기는 법을 릴리스 페이지
       # 맨 위에 고정 머리말로 붙인다(scripts/release-header.md). **업데이트 창(latest.json의 notes)에는

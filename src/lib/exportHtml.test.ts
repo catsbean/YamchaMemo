@@ -35,6 +35,23 @@ describe("한 줄 서식", () => {
       expect(inlineToHtml(bad)).not.toContain("<a href");
     }
     expect(inlineToHtml("![](javascript:alert(1))")).not.toContain("<img");
+    // 브라우저는 탭·줄바꿈을 지우고 앞의 제어문자를 버린다 — 그렇게 읽힌 모양으로 검사해야 한다
+    for (const bad of [
+      "[클릭](java\tscript:alert(1))",
+      "[클릭](\u0001javascript:alert(1))",
+      "[클릭](\u0000javascript:alert(1))",
+      "[클릭](jav\rascript:alert(1))",
+      "[클릭](\tvbscript:msgbox)",
+    ]) {
+      expect(inlineToHtml(bad)).not.toContain("<a href");
+    }
+    expect(inlineToHtml("![](java\tscript:alert(1))")).not.toContain("<img");
+    // 스킴은 없지만 제어문자가 섞인 주소도 링크로 만들지 않는다
+    expect(inlineToHtml("[클릭](a\u0002b)")).not.toContain("<a href");
+    // 첨부 경로 속의 띄어쓰기는 그대로
+    expect(inlineToHtml("[자료](_attachments/회의 자료.pdf)")).toBe(
+      '<a href="_attachments/회의 자료.pdf">자료</a>',
+    );
     // 멀쩡한 주소는 그대로 링크가 된다
     expect(inlineToHtml("[메일](mailto:a@b.c)")).toBe(
       '<a href="mailto:a@b.c">메일</a>',
@@ -108,6 +125,15 @@ describe("본문 덩어리", () => {
     ]);
     expect(html).toContain("📝 메모");
     expect(html).not.toContain("💬");
+  });
+
+  it("vault 설정에서 온 아이콘에 HTML이 있어도 글자로 나간다", () => {
+    // `_callouts.json`은 남이 준 vault로 들어올 수 있다 (보안 점검 20261113)
+    const html = bodyToHtml("> [!메모] 09:30\n> 내용", [
+      { label: "메모", icon: '<img src=x onerror="alert(1)">', color: "rose" },
+    ]);
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt; 메모");
   });
 
   it("아이콘을 '없음'으로 둔 종류는 이름만 쓴다", () => {

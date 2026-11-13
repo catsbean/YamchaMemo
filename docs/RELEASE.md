@@ -43,6 +43,20 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<비밀번호>"
 pnpm release:win
 ```
 
+### 워크플로의 액션은 SHA로 고정한다
+
+`release.yml`·`ci.yml`의 `uses:`는 태그가 아니라 **커밋 SHA**를 적고, 뒤 주석에 원래 태그를 남긴다
+(`actions/checkout@3d3c42e… # v7`). 릴리스 잡은 위 서명 키를 다룬다 — 태그는 남이 옮길 수 있어서, 액션
+저장소 하나만 털려도 키가 새고 그 키로 서명한 악성 업데이트가 모든 설치본에 갈 수 있다(보안 점검 2026-11-13).
+같은 이유로 키는 서명 단계가 끝나면 환경에서 지운다(`Drop updater signing key…` 단계).
+
+새 판으로 올릴 때는 그 태그가 지금 가리키는 커밋을 확인해서 바꾼다:
+```bash
+git ls-remote https://github.com/actions/checkout "refs/tags/v7" "refs/tags/v7^{}"
+```
+(`^{}` 줄이 있으면 그 값이 실제 커밋이다.) `dtolnay/rust-toolchain`은 SHA로 고정하면 ref 이름에서
+툴체인을 못 읽으므로 `toolchain: stable`을 직접 적어 둔다.
+
 ## 릴리스
 
 ### ⓪ `CHANGELOG.md`에 이번 판의 절 쓰기

@@ -289,3 +289,27 @@ H-1~H-10 끝. 전체 게이트 통과: clippy · `cargo test --workspace`(앱 56
 화면이 실패를 보지 않던 것, 태그 이름 바꾸기가 깨진 노트를 말없이 빠뜨리던 것.
 
 사람이 확인할 것은 `docs/USER-TODO.md`.
+
+## 보안 점검 (2026-11-13)
+
+oh-my-agent의 `oma-security` 절차로 점검했다: Deepsec 2.3.12 정규식 스캔(무료) + 수동 검토(Tauri 권한·IPC 경로·CSP·
+스크랩 창·백업 zip·CI) + 발견자가 아닌 검토자의 재확인. 결과 원본은 `.agents/results/security/20261113-src-deepsec-scan-1/`
+(커밋하지 않는다). 확인된 4건을 고쳤다. **고칠 때마다 먼저 재현 시험을 쓰고 실패를 확인했다.**
+
+- **S-1. `_types.json`의 분류 폴더가 vault 밖을 가리킬 수 있었다** — 남이 준 vault·백업에 `"folder": "..\밖"`이나
+  절대경로가 있으면 열자마자 밖에 폴더를 만들고 오래된 `*.md.tmp`를 지웠고, 그 분류로 글을 쓰면 `.md`·`_index.md`가 밖에
+  써졌다. → 읽어 들일 때 `is_plain_folder`(이름 한 칸, `/`·`\`·`:`·`.`·`..` 금지)로 거르고 어긋난 정의는 버린다
+  (`vault.rs`). 시험: `types_json_folder_cannot_point_outside_vault`, `is_plain_folder_accepts_only_one_name`.
+- **S-2. HTML 내보내기의 콜아웃 아이콘을 이스케이프하지 않았다** — 아이콘은 vault의 `_callouts.json`에서 온다. 내보낸
+  `.html`을 브라우저로 열면 그 안의 스크립트가 클릭 없이 돌았다(앱 안 인쇄 창은 CSP가 막았다). → `esc()`.
+- **S-3. 내보내기의 주소 검사가 `java⇥script:`를 놓쳤다** — 브라우저는 탭·줄바꿈을 지우고 앞의 제어문자를 버리므로
+  우리 검사와 실제가 어긋났다. → 브라우저처럼 다듬은 뒤 검사하고, 다듬은 모양을 내보낸다. 제어문자가 남은 주소는 링크로
+  만들지 않는다(`exportHtml.ts`, 시험은 `exportHtml.test.ts`).
+- **S-4. 릴리스 워크플로가 서명 키를 쥔 채 태그 고정 액션을 돌렸다** — 액션은 모두 커밋 SHA로 고정(ci.yml 포함),
+  checkout은 `persist-credentials: false`, 서명이 끝나면 키를 환경에서 지운다. 남은 것: tauri-action은 같은 스텝에서
+  `pnpm build`를 돌리므로 npm 의존성 코드는 여전히 키를 볼 수 있다(구조상 피할 수 없음). `environment:` 보호는 저장소
+  설정이 필요해 `USER-TODO.md`로 넘겼다.
+
+기각한 것(근거 있음): `src-tauri/.env` 노출(커밋된 적 없음) · `indexer.rs` SQL(자리표시자만) · `bindings.ts` 키 로그(로그 아님) ·
+`restore_trash`의 `C:이름`(NTFS에 그런 파일이 있을 수 없음, 강화는 미룸) · Deepsec 대량 오탐 173건.
+점검 중 본 보안 밖의 것: `SearchModal.tsx`의 `openPath`는 `opener:default` 권한에 없어 실행 시 거부된다(고치지 않음).

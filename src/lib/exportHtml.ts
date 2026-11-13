@@ -23,11 +23,17 @@ const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ESC[c]);
  *  스킴이 있으면 아는 것만 통과시킨다. `data:`도 막는다(data:text/html이 같은 문제다). */
 const SAFE_SCHEME = /^(https?|mailto|tel):/i;
 function safeUrl(url: string): string | null {
-  const trimmed = url.trim();
+  // 브라우저가 주소를 읽는 방식대로 먼저 다듬고 나서 본다. 브라우저는 주소 속의 탭·줄바꿈을
+  // 통째로 지우고, 앞쪽의 제어문자·공백도 버린다 — 그래서 `java⇥script:`나 `\u0001javascript:`는
+  // 우리 눈엔 스킴이 없어 보여도 브라우저에선 `javascript:`가 된다(보안 점검 20261113).
+  // 검사한 바로 그 모양을 내보내야 검사와 실제가 어긋나지 않는다.
+  const cleaned = url.replace(/[\t\n\r]/g, "").replace(/^[\u0000- ]+|[\u0000- ]+$/g, "");
   // 스킴처럼 보이는 앞부분이 있는가 (`javascript:`, `vbscript:`, `data:` …)
-  const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed);
-  if (hasScheme && !SAFE_SCHEME.test(trimmed)) return null;
-  return trimmed;
+  const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(cleaned);
+  if (hasScheme && !SAFE_SCHEME.test(cleaned)) return null;
+  // 스킴이 없는데 제어문자가 남아 있으면 정상적인 상대 경로가 아니다
+  if (/[\u0000-\u001f\u007f]/.test(cleaned)) return null;
+  return cleaned;
 }
 
 /** 한 줄 안의 서식. 코드(`)를 먼저 떼어 그 안은 건드리지 않는다. */
@@ -121,7 +127,9 @@ export function bodyToHtml(body: string, callouts: CalloutSource[] = []): string
         i++;
       }
       // 등록된 종류인데 아이콘이 '없음'이면 붙이지 않는다 (화면과 같은 규칙)
-      const icon = kindByLabel(name, callouts).icon;
+      // 아이콘은 vault의 `_callouts.json`에서 온다 — 남이 준 vault라면 무엇이든 들어 있을 수
+      // 있으니 이름처럼 이스케이프한다. 안 그러면 내보낸 파일을 여는 순간 스크립트가 돈다.
+      const icon = esc(kindByLabel(name, callouts).icon);
       out.push(
         `<div class="callout co-${slug(name)}">` +
           `<div class="co-head">${[icon, esc(name)].filter(Boolean).join(" ")}` +

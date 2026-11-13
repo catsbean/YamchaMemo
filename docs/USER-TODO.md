@@ -6,10 +6,8 @@ Claude가 대신 할 수 없거나(서명 키·네이티브 창·배포), 사람
 ## 지금
 
 - [ ] **0.9.0 릴리스** (9단계 — 링크와 정리, `docs/HANDOFF-links.md`). CHANGELOG 0.9.0 절은 써 두었다.
-  1. **먼저 작업 폴더를 깨끗이** — `release.bat`은 커밋 안 된 변경이 하나라도 있으면 멈춘다. 지금 보안 점검(아래 항목)의
-     변경(`.github/workflows/*.yml`, `docs/HANDOFF-hardening.md`·`RELEASE.md`, `src/lib/exportHtml.*`, 이 파일의 보안 항목)이
-     커밋되지 않았고 `.deepsec/`·`.agents/`가 있다. 커밋할지·지울지·`.gitignore`에 넣을지 정해 주면 Claude가 정리한다
-     (**`.deepsec/`는 카카오 키가 들어 있어 커밋하면 안 된다**).
+  1. ✅ 작업 폴더 정리 (2026-11-13) — 보안 점검 변경은 커밋했고 `.deepsec/`·`.agents/`는 `.gitignore`에 넣었다.
+     `release.bat`은 커밋 안 된 변경이 하나라도 있으면 멈추니, 돌리기 전에 `git status`가 비었는지만 본다.
   2. `scripts\release.bat` 실행, 판 번호에 `0.9.0` 입력(Enter만 누르면 0.8.2가 된다). 로컬 main의 9단계 커밋이 함께 푸시된다.
   3. 빌드가 끝나면 GitHub 릴리스 초안에서 **Publish** → Claude에게 "latest.json 확인해줘".
   4. 0.8.1이 깔린 컴퓨터에서 설정 › 정보의 [새 버전 확인]으로 0.9.0이 받아지고, 업데이트 창에 0.9.0 절이 보이는지.
@@ -18,6 +16,12 @@ Claude가 대신 할 수 없거나(서명 키·네이티브 창·배포), 사람
       **이 배치 파일은 로컬 main을 커밋·태그·푸시까지 한다** — 안정화(H-1~H-10) 커밋이 함께 나가고, CHANGELOG 0.8.0
       절에 그 내용을 적어 두었다. 따로 "푸시해"라고 할 필요 없다.
       빌드가 끝나면 GitHub 릴리스 초안에서 **Publish** → Claude에게 "latest.json 확인해줘".
+- [ ] **보안 점검(2026-11-13) 뒤 정리** — 고친 것은 `docs/HANDOFF-hardening.md` 맨 끝.
+  1. 다음 릴리스 때 Actions 로그에서 **SHA로 고정한 액션이 그대로 도는지**(특히 Rust 툴체인 설치) 한 번 본다.
+  2. (권장) GitHub 저장소 Settings → Environments에 `release` 환경을 만들고 서명 키 두 개를 그쪽 Secrets로 옮긴 뒤,
+     본인 승인(Required reviewers)을 건다. 그러면 release.yml에 `environment: release` 한 줄만 더하면 된다 — Claude에게 말해 주면 넣는다.
+  3. ✅ `.deepsec/`(스캐너 작업 폴더)와 `.agents/`(점검 결과)는 `.gitignore`에 넣었다(2026-11-13) — `.deepsec/data/`에
+     `.env`의 카카오 키가 그대로 들어 있어서다. 폴더는 지우지 않고 남겨 두었다.
 
 ## 직접 확인 (자동 조작으로 못 보는 것)
 
