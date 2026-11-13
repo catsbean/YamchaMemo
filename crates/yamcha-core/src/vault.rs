@@ -59,6 +59,30 @@ pub struct Relocation {
     pub warnings: Vec<String>,
 }
 
+/// 여러 편에 같은 일을 한 결과 — 한 것과 못 한 것 (rel, 까닭)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteBatch<T> {
+    pub done: Vec<T>,
+    pub skipped: Vec<(String, String)>,
+}
+
+impl<T> Default for NoteBatch<T> {
+    fn default() -> Self {
+        NoteBatch { done: Vec::new(), skipped: Vec::new() }
+    }
+}
+
+/// 여러 편에 태그를 붙인 결과 (`Vault::add_tag_to_notes`)
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TagAdd {
+    /// 태그를 붙인 글
+    pub changed: Vec<String>,
+    /// 이미 그 태그가 있던 글 (건드리지 않았다)
+    pub already: Vec<String>,
+    /// 못 붙인 글 (rel, 까닭)
+    pub skipped: Vec<(String, String)>,
+}
+
 /// 노트 여러 편을 한 번에 옮긴 결과 (`Vault::move_notes_with`)
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MoveBatch {
@@ -231,6 +255,24 @@ fn ensure_aliases_field(fields: &mut Vec<crate::schema::FieldDef>) {
         .map(|i| i + 1)
         .unwrap_or(fields.len());
     fields.insert(at, crate::schema::aliases_field());
+}
+
+/// 분류 폴더로 쓸 수 있는 이름인가 — vault 바로 아래의 **이름 한 칸**만.
+///
+/// 구분자(`/`·`\`)와 `:`(윈도우의 드라이브 `C:`, NTFS 대체 스트림)를 먼저 거르고, 남은 것이
+/// 정확히 보통 이름 하나로 읽히는지 본다 — `.`·`..`·빈 문자열·절대경로가 여기서 다 떨어진다.
+/// `Vault::abs`와 같은 생각이지만, 분류 폴더는 `root.join(folder)`로 곧장 쓰여서 그 검사를
+/// 거치지 않는다. 그래서 정의를 읽어 들이는 자리에서 막는다.
+fn is_plain_folder(folder: &str) -> bool {
+    use std::path::Component;
+    if folder.contains(['/', '\\', ':']) {
+        return false;
+    }
+    let mut parts = Path::new(folder).components();
+    matches!(
+        (parts.next(), parts.next()),
+        (Some(Component::Normal(_)), None)
+    )
 }
 
 /// 클라우드 동기화·백신이 파일을 **잠깐** 붙들고 있어서 나는 오류인가.
@@ -445,6 +487,14 @@ impl Vault {
                     // 없으면 여기서 끼워 넣는다 — 안 그러면 사용자가 만든 분류만
                     // 별칭을 못 쓰는, 설명할 수 없는 차이가 생긴다.
                     ensure_aliases_field(&mut c.fields);
+                    // 폴더는 vault 바로 아래 이름 한 칸이어야 한다. 앱이 만든 정의는 늘 그렇지만
+                    // `_types.json`은 vault에 든 파일이라 남이 준 vault·백업으로 들어올 수 있다.
+                    // `..\..\어딘가`나 절대경로가 그대로 통과하면 열자마자 vault 밖에 폴더를 만들고
+                    // (`ensure_layout`) 오래된 `*.md.tmp`를 지우고(`sweep_stale_tmp`), 그 분류로 글을
+                    // 쓰면 `.md`와 `_index.md`가 vault 밖에 써진다. 그런 정의는 없던 것으로 친다.
+                    if !is_plain_folder(&c.folder) {
+                        continue;
+                    }
                     if !types.iter().any(|t| t.id == c.id || t.folder == c.folder) {
                         types.push(c);
                     }
@@ -1788,6 +1838,11 @@ impl Vault {
     }
 
     pub fn delete_note(&self, rel: &str) -> Result<(), CoreError> {
+        self.trash_note(rel).map(|_| ())
+    }
+
+    /// 노트를 휴지통으로 보낸다 → 휴지통 속 파일 이름 (`restore_trash`에 그대로 넘기면 되살아난다).
+    pub fn trash_note(&self, rel: &str) -> Result<String, CoreError> {
         let abs = self.abs(rel)?;
         if !abs.exists() {
             return Err(CoreError::NotFound(rel.to_string()));
@@ -1806,7 +1861,74 @@ impl Vault {
         // 파일 자체는 휴지통에 통째로 있으므로 되돌릴 길은 그대로다.
         let _ = crate::history::clear_note(self, rel);
         self.mark_index_stale(&t);
-        Ok(())
+        Ok(dest
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default())
+    }
+
+    /// 여러 편을 휴지통으로 → 보낸 것 (rel, 휴지통 파일 이름)과 못 보낸 것 (rel, 까닭).
+    /// 한 편이 안 돼도 나머지는 보낸다.
+    pub fn trash_notes(&self, rels: &[String]) -> NoteBatch<(String, String)> {
+        let mut out = NoteBatch::default();
+        let mut seen = HashSet::new();
+        for rel in rels {
+            if !seen.insert(rel.as_str()) {
+                continue;
+            }
+            match self.trash_note(rel) {
+                Ok(file) => out.done.push((rel.clone(), file)),
+                Err(e) => out.skipped.push((rel.clone(), e.to_string())),
+            }
+        }
+        out
+    }
+
+    /// 여러 편에 태그 하나를 붙인다(frontmatter `tags`) → 붙인 것, 이미 있던 것, 못 붙인 것.
+    ///
+    /// 이미 그 태그가 있는 글은 건드리지 않는다 — frontmatter에 있든 본문의 `#태그`로 있든.
+    /// 태그에 쓸 수 있는 글자는 `rename_tag`와 같다(공백·#가 들어가면 다시 못 찾는다).
+    pub fn add_tag_to_notes(&self, rels: &[String], tag: &str) -> Result<TagAdd, CoreError> {
+        let tag = tag.trim().trim_start_matches('#');
+        if tag.is_empty() || tag.chars().any(|c| !(c.is_alphanumeric() || "/-_".contains(c))) {
+            return Err(CoreError::Invalid(
+                "태그에는 글자·숫자와 - _ / 만 쓸 수 있습니다".into(),
+            ));
+        }
+        let mut out = TagAdd::default();
+        let mut seen = HashSet::new();
+        for rel in rels {
+            if !seen.insert(rel.as_str()) {
+                continue;
+            }
+            let parsed = match self.parse_full(rel) {
+                Ok(p) => p,
+                Err(e) => {
+                    out.skipped.push((rel.clone(), e.to_string()));
+                    continue;
+                }
+            };
+            if parsed.tags.iter().any(|t| t == tag) {
+                out.already.push(rel.clone());
+                continue;
+            }
+            let mut fm = match serde_json::from_str::<Value>(&parsed.frontmatter_json) {
+                Ok(Value::Object(m)) => m,
+                _ => Map::new(),
+            };
+            let mut list = match fm.get("tags") {
+                Some(Value::Array(l)) => l.clone(),
+                Some(Value::String(s)) if !s.trim().is_empty() => vec![Value::String(s.trim().to_string())],
+                _ => Vec::new(),
+            };
+            list.push(Value::String(tag.to_string()));
+            fm.insert("tags".into(), Value::Array(list));
+            match self.save_note(rel, Value::Object(fm), &parsed.body) {
+                Ok(()) => out.changed.push(rel.clone()),
+                Err(e) => out.skipped.push((rel.clone(), e.to_string())),
+            }
+        }
+        Ok(out)
     }
 
     /// 휴지통(.yamcha/trash) 목록 — 최근 삭제가 위로.
@@ -4379,6 +4501,67 @@ mod tests {
         // 내장 분류는 고를 수 없다 (목록 줄이 손으로 짜여 있다)
         let mut v = Vault::open(dir.path()).unwrap();
         assert!(v.set_list_fields("free", &["title".to_string()]).is_err());
+    }
+
+    /// 남이 준 vault의 `_types.json`이 폴더 자리에 경로를 적어 두어도 vault 밖을 건드리지 않는다.
+    /// (보안 점검 20261113 — 예전에는 열자마자 밖에 폴더를 만들고 `*.md.tmp`를 지웠다)
+    #[test]
+    fn types_json_folder_cannot_point_outside_vault() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("vault");
+        let outside = parent.path().join("밖");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        // 밖에 있는 남의 파일 — 지워지거나 덮이면 안 된다
+        fs::write(outside.join("남의 글.md.tmp"), "x").unwrap();
+        fs::write(outside.join("_index.md"), "남의 목록").unwrap();
+
+        let def = |id: &str, folder: &str| {
+            json!({"id": id, "label": id, "folder": folder, "fields": [], "template": "", "builtin": false})
+        };
+        let customs = json!([
+            def("정상", "회의록"),
+            def("위로", ".."),
+            def("위로밖", "../밖"),
+            def("역슬래시", "..\\밖"),
+            def("절대", &outside.to_string_lossy()),
+            def("드라이브", "C:밖"),
+            def("점", "."),
+            def("빈칸", ""),
+        ]);
+        fs::write(root.join(TYPES_FILE), customs.to_string()).unwrap();
+
+        let mut v = Vault::open(&root).unwrap();
+        assert!(v.def_by_id("정상").is_some());
+        for id in ["위로", "위로밖", "역슬래시", "절대", "드라이브", "점", "빈칸"] {
+            assert!(v.def_by_id(id).is_none(), "{id}는 버려져야 한다");
+        }
+        v.sweep_stale_tmp(std::time::Duration::ZERO).unwrap();
+        assert!(outside.join("남의 글.md.tmp").is_file());
+        assert_eq!(fs::read_to_string(outside.join("_index.md")).unwrap(), "남의 목록");
+        // vault 위(부모 폴더)에 분류 폴더가 생기지 않았다
+        let made: Vec<_> = fs::read_dir(parent.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(made.len(), 2, "{made:?}");
+
+        // 정상 정의는 그대로 쓰이고, 다시 저장해도 버린 정의는 돌아오지 않는다
+        let rel = v.create_note("정상", "안건", json!({})).unwrap();
+        assert_eq!(rel, "회의록/안건.md");
+        v.add_custom_type("새분류", "새분류", vec![], "").unwrap();
+        let saved = fs::read_to_string(root.join(TYPES_FILE)).unwrap();
+        assert!(!saved.contains("위로밖"), "{saved}");
+    }
+
+    #[test]
+    fn is_plain_folder_accepts_only_one_name() {
+        for ok in ["회의록", "Free", "my notes", ".hidden", "a.b"] {
+            assert!(is_plain_folder(ok), "{ok}");
+        }
+        for bad in ["", ".", "..", "a/b", "a\\b", "../x", "/abs", "C:x", "C:\\x", "x:"] {
+            assert!(!is_plain_folder(bad), "{bad}");
+        }
     }
 
     #[test]

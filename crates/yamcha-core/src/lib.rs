@@ -38,8 +38,9 @@ pub use linkstub::{BrokenLinks, CreatedLink};
 pub use schema::{Builtin, EntryKind, FieldDef, FieldKind, TypeDef};
 pub use search::{SearchEngine, SearchFilter, SearchHit, SearchScope, FILE_TYPE};
 pub use vault::{
-    file_identity, fingerprint, CalloutDef, MoveBatch, NoteContent, NoteSummary, ParsedNote, Relocation,
-    SaveResult, TagRename, TrashItem, TrashRestore, TypeRemoval, Vault,
+    file_identity, fingerprint, CalloutDef, MoveBatch, NoteBatch, NoteContent, NoteSummary, ParsedNote,
+    Relocation,
+    SaveResult, TagAdd, TagRename, TrashItem, TrashRestore, TypeRemoval, Vault,
 };
 
 /// 증분 색인 결과

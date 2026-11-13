@@ -958,3 +958,118 @@ mod move_notes_tests {
         assert_eq!(back[0].rel_path, watcher);
     }
 }
+
+/// 휴지통으로 보낸 노트 한 편 — `file_name`을 `restore_trash`에 넘기면 되살아난다
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct TrashedNote {
+    pub rel_path: String,
+    pub file_name: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct TrashedNotes {
+    pub trashed: Vec<TrashedNote>,
+    pub skipped: Vec<SkippedNote>,
+}
+
+/// 노트 여러 편을 휴지통으로. 색인·검색에서 빼고 **검색 색인 커밋은 한 번만** 한다.
+/// 한 편이 안 돼도 나머지는 보낸다.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn delete_notes(
+    state: State<'_, AppState>,
+    rel_paths: Vec<String>,
+) -> Result<TrashedNotes, String> {
+    with_ctx_write(&state, |c| delete_notes_in(c, &rel_paths))
+}
+
+pub(crate) fn delete_notes_in(
+    c: &mut Ctx,
+    rel_paths: &[String],
+) -> Result<TrashedNotes, yamcha_core::CoreError> {
+    let r = c.vault.trash_notes(rel_paths);
+    for (rel, _) in &r.done {
+        c.indexer.remove(rel)?;
+        c.search.remove(rel)?;
+    }
+    if !r.done.is_empty() {
+        c.search.commit()?;
+    }
+    Ok(TrashedNotes {
+        trashed: r
+            .done
+            .into_iter()
+            .map(|(rel_path, file_name)| TrashedNote { rel_path, file_name })
+            .collect(),
+        skipped: skipped_of(r.skipped),
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct TaggedNotes {
+    /// 태그를 붙인 글
+    pub changed: Vec<String>,
+    /// 이미 그 태그가 있던 글
+    pub already: Vec<String>,
+    pub skipped: Vec<SkippedNote>,
+}
+
+/// 노트 여러 편에 태그 하나를 붙인다 (frontmatter `tags`). 색인은 바뀐 편만 한 번에.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn add_tag_to_notes(
+    state: State<'_, AppState>,
+    rel_paths: Vec<String>,
+    tag: String,
+) -> Result<TaggedNotes, String> {
+    with_ctx_write(&state, |c| add_tag_to_notes_in(c, &rel_paths, &tag))
+}
+
+pub(crate) fn add_tag_to_notes_in(
+    c: &mut Ctx,
+    rel_paths: &[String],
+    tag: &str,
+) -> Result<TaggedNotes, yamcha_core::CoreError> {
+    let r = c.vault.add_tag_to_notes(rel_paths, tag)?;
+    refresh_notes(c, r.changed.iter().map(String::as_str))?;
+    Ok(TaggedNotes { changed: r.changed, already: r.already, skipped: skipped_of(r.skipped) })
+}
+
+fn skipped_of(list: Vec<(String, String)>) -> Vec<SkippedNote> {
+    list.into_iter()
+        .map(|(rel_path, reason)| SkippedNote { rel_path, reason })
+        .collect()
+}
+
+#[cfg(test)]
+mod batch_96_tests {
+    use super::*;
+    use std::path::Path;
+
+    fn ctx(vault_root: &Path, index_root: &Path) -> Ctx {
+        Ctx {
+            vault: Vault::open(vault_root).unwrap(),
+            indexer: Indexer::open(&index_root.join("index.db")).unwrap(),
+            search: SearchEngine::open(&index_root.join("search")).unwrap(),
+            todo_cache: dashboard::TodoCache::default(),
+        }
+    }
+
+    #[test]
+    fn 지우면_색인에서_빠지고_태그는_색인에_들어간다() {
+        let (v, i) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let mut c = ctx(v.path(), i.path());
+        let a = create_note_in(&mut c, "free", "가", serde_json::Value::Null).unwrap();
+        let b = create_note_in(&mut c, "free", "나", serde_json::Value::Null).unwrap();
+
+        let t = add_tag_to_notes_in(&mut c, &[a.clone(), b.clone()], "모임").unwrap();
+        assert_eq!(t.changed.len(), 2);
+        let tagged = c.indexer.notes_by_tag("모임").unwrap();
+        assert_eq!(tagged.len(), 2, "{tagged:?}");
+
+        let d = delete_notes_in(&mut c, std::slice::from_ref(&a)).unwrap();
+        assert_eq!(d.trashed.len(), 1);
+        assert!(!c.indexer.note_states().unwrap().contains_key(&a));
+        assert_eq!(c.indexer.notes_by_tag("모임").unwrap().len(), 1);
+    }
+}

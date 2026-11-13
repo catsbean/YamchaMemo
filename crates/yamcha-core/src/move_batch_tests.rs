@@ -150,3 +150,67 @@ fn 도로_옮기면_처음과_같다() {
     assert_eq!(now, vec![a.as_str(), b.as_str()]);
     assert_eq!(body_of(&v, &watcher), "[[Free/가]] 와 [[Free/나]]");
 }
+
+// ── 여러 편 휴지통으로 · 태그 붙이기 (9-6) ──
+
+#[test]
+fn 여러_편을_휴지통으로_보내고_되살린다() {
+    let (_d, v) = vault();
+    let a = v.create_note("free", "가", json!({})).unwrap();
+    let b = v.create_note("writing", "나", json!({})).unwrap();
+    let r = v.trash_notes(&[a.clone(), "Free/없는 글.md".into(), b.clone(), a.clone()]);
+    assert_eq!(r.done.len(), 2, "{:?}", r);
+    assert_eq!(r.skipped.len(), 1);
+    assert_eq!(r.skipped[0].0, "Free/없는 글.md");
+    assert!(v.read_note(&a).is_err());
+    // 돌려준 휴지통 파일 이름으로 그대로 되살아난다 — 제자리로
+    for (rel, file) in &r.done {
+        assert_eq!(&v.restore_trash(file).unwrap().rel, rel);
+    }
+    assert_eq!(v.list_notes().unwrap().len(), 2);
+}
+
+#[test]
+fn 같은_이름을_같은_초에_지워도_휴지통에서_겹치지_않는다() {
+    let (_d, v) = vault();
+    let a = v.create_note("free", "같은 이름", json!({})).unwrap();
+    let b = v.create_note("writing", "같은 이름", json!({})).unwrap();
+    let r = v.trash_notes(&[a.clone(), b.clone()]);
+    assert_eq!(r.done.len(), 2);
+    assert_ne!(r.done[0].1, r.done[1].1, "휴지통 파일 이름이 겹쳤다");
+    let back: Vec<String> = r.done.iter().map(|(_, f)| v.restore_trash(f).unwrap().rel).collect();
+    assert_eq!(back, vec![a, b]);
+}
+
+#[test]
+fn 여러_편에_태그를_붙인다() {
+    let (_d, v) = vault();
+    let a = v.create_note("free", "가", json!({})).unwrap();
+    let b = v.create_note("free", "나", json!({ "tags": ["기존"] })).unwrap();
+    let c = v.create_note("free", "다", json!({ "tags": ["모임"] })).unwrap();
+    let d = v.create_note("free", "라", json!({})).unwrap();
+    set_body(&v, &d, "본문에 #모임 이라고 적었다");
+
+    let r = v
+        .add_tag_to_notes(&[a.clone(), b.clone(), c.clone(), d.clone(), "Free/없음.md".into()], "#모임")
+        .unwrap();
+    assert_eq!(r.changed, vec![a.clone(), b.clone()]);
+    assert_eq!(r.already, vec![c.clone(), d.clone()]);
+    assert_eq!(r.skipped.len(), 1);
+
+    let tags = |rel: &str| v.read_note(rel).unwrap().frontmatter["tags"].clone();
+    assert_eq!(tags(&a), json!(["모임"]));
+    assert_eq!(tags(&b), json!(["기존", "모임"]));
+    // 본문은 그대로
+    assert_eq!(body_of(&v, &d), "본문에 #모임 이라고 적었다");
+}
+
+#[test]
+fn 태그에_못_쓰는_글자는_거절한다() {
+    let (_d, v) = vault();
+    let a = v.create_note("free", "가", json!({})).unwrap();
+    for bad in ["", "#", "두 낱말", "a#b", "쉼표,"] {
+        assert!(v.add_tag_to_notes(std::slice::from_ref(&a), bad).is_err(), "{bad}");
+    }
+    assert!(v.read_note(&a).unwrap().frontmatter.get("tags").is_none_or(|t| t == &json!([])));
+}

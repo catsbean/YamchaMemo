@@ -162,6 +162,29 @@ async moveNotes(relPaths: string[], newTypeId: string) : Promise<Result<MovedNot
 }
 },
 /**
+ * 노트 여러 편을 휴지통으로. 색인·검색에서 빼고 **검색 색인 커밋은 한 번만** 한다.
+ * 한 편이 안 돼도 나머지는 보낸다.
+ */
+async deleteNotes(relPaths: string[]) : Promise<Result<TrashedNotes, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_notes", { relPaths }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * 노트 여러 편에 태그 하나를 붙인다 (frontmatter `tags`). 색인은 바뀐 편만 한 번에.
+ */
+async addTagToNotes(relPaths: string[], tag: string) : Promise<Result<TaggedNotes, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("add_tag_to_notes", { relPaths, tag }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 오늘의 데일리노트 열기 (없으면 생성)
  */
 async openTodayDaily() : Promise<Result<string, string>> {
@@ -1698,6 +1721,15 @@ existing: boolean;
  * 범주 태그인가 (고유명사 칩과 색을 달리한다)
  */
 category: boolean }
+export type TaggedNotes = { 
+/**
+ * 태그를 붙인 글
+ */
+changed: string[]; 
+/**
+ * 이미 그 태그가 있던 글
+ */
+already: string[]; skipped: SkippedNote[] }
 /**
  * 미러로 고른 폴더가 어떤 상태인가
  */
@@ -1780,6 +1812,11 @@ rel: string;
  * 화면이 "두 편을 합치세요"라고 알린다.
  */
 daily_taken: string | null }
+/**
+ * 휴지통으로 보낸 노트 한 편 — `file_name`을 `restore_trash`에 넘기면 되살아난다
+ */
+export type TrashedNote = { rel_path: string; file_name: string }
+export type TrashedNotes = { trashed: TrashedNote[]; skipped: SkippedNote[] }
 /**
  * 타입 하나의 전체 정의 (내장 + 사용자 정의 공통)
  */
