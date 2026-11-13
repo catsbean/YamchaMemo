@@ -7,6 +7,7 @@ import LinkPickerDialog from "./components/LinkPickerDialog";
 import LinkStubToast from "./components/LinkStubToast";
 import MissingLinkToast from "./components/MissingLinkToast";
 import MoveBatchToast from "./components/MoveBatchToast";
+import { TagBatchToast, TrashBatchToast } from "./components/BatchToasts";
 import MoveUndoToast from "./components/MoveUndoToast";
 import RelocateProgressDialog from "./components/RelocateProgressDialog";
 import SearchModal from "./components/SearchModal";
@@ -212,6 +213,8 @@ export default function App() {
       <LinkStubToast />
       <MoveUndoToast />
       <MoveBatchToast />
+      <TrashBatchToast />
+      <TagBatchToast />
       <RelocateProgressDialog />
       {startupNotice && (
         <StartupNoticeBanner

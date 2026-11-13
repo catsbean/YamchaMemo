@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { ask } from "@tauri-apps/plugin-dialog";
+import DeleteButton from "./DeleteButton";
+import { isImeEnter } from "../lib/ime";
 import type { NoteSummary } from "../bindings";
 import { useVault } from "../stores/vault";
 import { canMoveType, fileSuffix, fmDisplay, fmStr, josaRo, listFields } from "../lib/note";
@@ -75,6 +78,9 @@ function ListDashboard({ noteType }: { noteType: string }) {
     createUntitled,
     moveNoteTo,
     moveNotesTo,
+    trashNotes,
+    addTagToNotes,
+    deleteConfirm,
     groupings,
     setGrouping,
   } = useVault();
@@ -170,10 +176,33 @@ function ListDashboard({ noteType }: { noteType: string }) {
     () => (canMoveType(noteType) ? schemas.filter((s) => s.id !== noteType && canMoveType(s.id)) : []),
     [schemas, noteType],
   );
-  const selectable = moveTargets.length > 0;
+  // 고르기는 어느 목록에서나 연다 — 옮길 수 없는 일지도 지우기·태그는 된다
+  const selectable = true;
   const picking = sel.selected.size > 0;
+  const pickedRels = () => order.filter((rel) => sel.selected.has(rel));
+  const tagSelected = (tag: string) => {
+    const rels = pickedRels();
+    sel.clear();
+    void addTagToNotes(rels, tag);
+  };
+  /** 휴지통으로 — 띠의 [삭제]는 제 버튼이 이미 두 번 묻는다(`confirmed`). 우클릭 메뉴에서는
+   *  설정의 "삭제 전 확인"이 켜져 있으면 한 번 묻는다. 어느 쪽이든 알림에서 되돌릴 수 있다. */
+  const trash = async (rels: string[], confirmed: boolean) => {
+    if (!confirmed && deleteConfirm) {
+      const what = rels.length === 1 ? `'${list.find((n) => n.rel_path === rels[0])?.title ?? "이 노트"}'` : `${rels.length}편`;
+      const ok = await ask(`${what}을(를) 휴지통으로 보낼까요? 휴지통에서 되살릴 수 있습니다.`, {
+        title: "휴지통으로",
+        kind: "warning",
+        okLabel: "휴지통으로",
+        cancelLabel: "취소",
+      });
+      if (!ok) return;
+    }
+    sel.clear();
+    void trashNotes(rels);
+  };
   const moveSelected = (typeId: string) => {
-    const rels = order.filter((rel) => sel.selected.has(rel));
+    const rels = pickedRels();
     sel.clear();
     void moveNotesTo(rels, typeId);
   };
@@ -286,7 +315,14 @@ function ListDashboard({ noteType }: { noteType: string }) {
         ))}
 
       {picking && (
-        <SelectionBar count={sel.selected.size} targets={moveTargets} onMove={moveSelected} onClear={sel.clear} />
+        <SelectionBar
+          count={sel.selected.size}
+          targets={moveTargets}
+          onMove={moveSelected}
+          onTag={tagSelected}
+          onTrash={() => trash(pickedRels(), true)}
+          onClear={sel.clear}
+        />
       )}
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
@@ -328,7 +364,7 @@ function ListDashboard({ noteType }: { noteType: string }) {
                     () => openNote(n.rel_path),
                     openNoteWindow,
                     ctx.open,
-                    // 고른 줄을 우클릭하면 고른 것 전부를 옮긴다, 아니면 그 줄만
+                    // 고른 줄을 우클릭하면 고른 것 전부에, 아니면 그 줄만
                     sel.selected.has(n.rel_path) && sel.selected.size > 1
                       ? [
                           { separator: true },
@@ -336,8 +372,22 @@ function ListDashboard({ noteType }: { noteType: string }) {
                             label: `${sel.selected.size}개를 ${s.label}${josaRo(s.label)} 이동`,
                             onClick: () => moveSelected(s.id),
                           })),
+                          { separator: true },
+                          {
+                            label: `${sel.selected.size}개를 휴지통으로`,
+                            danger: true,
+                            onClick: () => void trash(pickedRels(), false),
+                          },
                         ]
-                      : moveMenuItems(n.note_type, schemas, (id) => moveNoteTo(n.rel_path, id)),
+                      : [
+                          ...moveMenuItems(n.note_type, schemas, (id) => moveNoteTo(n.rel_path, id)),
+                          { separator: true },
+                          {
+                            label: "휴지통으로",
+                            danger: true,
+                            onClick: () => void trash([n.rel_path], false),
+                          },
+                        ],
                   )}
                 >
                   <Row note={n} noteType={noteType} fields={shown} />
@@ -442,17 +492,22 @@ function SelectionBar({
   count,
   targets,
   onMove,
+  onTag,
+  onTrash,
   onClear,
 }: {
   count: number;
   targets: { id: string; label: string }[];
   onMove: (typeId: string) => void;
+  onTag: (tag: string) => void;
+  onTrash: () => void;
   onClear: () => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="flex items-center gap-2 border-b border-sky-200 bg-sky-50 px-6 py-1.5 text-sm">
       <span className="font-medium text-sky-800">{count}개 고름</span>
+      {targets.length > 0 && (
       <span className="relative">
         <button
           className="rounded border border-sky-300 bg-white px-2.5 py-1 text-xs text-sky-800 hover:border-sky-500"
@@ -484,6 +539,9 @@ function SelectionBar({
           </>
         )}
       </span>
+      )}
+      <TagPicker onTag={onTag} />
+      <DeleteButton onDelete={onTrash} />
       <span className="flex-1" />
       <span className="text-2xs text-sky-700">Shift+클릭으로 범위 · Esc로 풀기</span>
       <button
@@ -493,6 +551,73 @@ function SelectionBar({
         풀기
       </button>
     </div>
+  );
+}
+
+/** 고른 글에 붙일 태그를 적는 작은 칸 — 있는 태그는 목록에서 고를 수 있다 */
+function TagPicker({ onTag }: { onTag: (tag: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const notes = useVault((s) => s.notes);
+  const known = useMemo(() => {
+    const set = new Set<string>();
+    for (const n of notes) for (const t of n.tags) set.add(t);
+    return [...set].sort((a, b) => a.localeCompare(b, "ko"));
+  }, [notes]);
+  const submit = () => {
+    const tag = value.trim().replace(/^#/, "");
+    if (!tag) return;
+    setOpen(false);
+    setValue("");
+    onTag(tag);
+  };
+  return (
+    <span className="relative">
+      <button
+        className="rounded border border-sky-300 bg-white px-2.5 py-1 text-xs text-sky-800 hover:border-sky-500"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        태그 붙이기 ▾
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full z-50 mt-1 flex w-56 gap-1 rounded-md border border-neutral-200 bg-white p-1.5 shadow-lg">
+            <input
+              autoFocus
+              list="batch-tag-list"
+              className="min-w-0 flex-1 rounded border border-neutral-300 px-2 py-1 text-xs"
+              placeholder="태그 이름"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                // 조합 중 Enter는 한글을 확정하려는 것이다
+                if (e.key === "Enter" && !isImeEnter(e)) {
+                  e.preventDefault();
+                  submit();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setOpen(false);
+                }
+              }}
+            />
+            <datalist id="batch-tag-list">
+              {known.map((t) => (
+                <option key={t} value={t} />
+              ))}
+            </datalist>
+            <button
+              className="rounded bg-sky-600 px-2 py-1 text-xs text-white hover:bg-sky-500 disabled:opacity-40"
+              disabled={!value.trim()}
+              onClick={submit}
+            >
+              붙이기
+            </button>
+          </div>
+        </>
+      )}
+    </span>
   );
 }
 

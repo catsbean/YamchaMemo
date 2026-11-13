@@ -28,6 +28,8 @@ import {
   commands,
   type DailyKind,
   type BrokenLinks,
+  type TaggedNotes,
+  type TrashedNotes,
   type CalloutDef,
   type EntryKind,
   type FieldDef,
@@ -358,6 +360,17 @@ interface VaultStore {
   } | null;
   undoMoveBatch(): Promise<void>;
   dismissMoveBatch(): void;
+  /** 여러 편을 휴지통으로 (목록에서 골라서, 또는 우클릭 한 편) */
+  trashNotes(relPaths: string[]): Promise<void>;
+  /** 방금 휴지통으로 보낸 것 — 알림과 [되돌리기]용 */
+  trashBatch: TrashedNotes | null;
+  undoTrashBatch(): Promise<void>;
+  dismissTrashBatch(): void;
+  /** 여러 편에 태그 하나를 붙인다 */
+  addTagToNotes(relPaths: string[], tag: string): Promise<void>;
+  /** 방금 붙인 태그 결과 — 알림용 */
+  tagBatch: (TaggedNotes & { tag: string }) | null;
+  dismissTagBatch(): void;
   /** 가리키는 글이 없는 링크를 단 글들 — 점검 화면에 따로 보인다 (경고 개수에는 안 넣는다) */
   brokenLinks: BrokenLinks[];
   refreshBrokenLinks(): Promise<void>;
@@ -1894,6 +1907,71 @@ export const useVault = create<VaultStore>((set, get) => {
           skipped: r.skipped,
         },
       });
+    },
+
+    async trashNotes(relPaths) {
+      // 열려 있는 글을 지우면 화면에서 내린다 — 편집기 [삭제]와 같다(저장하지 않은 글은 함께 버린다)
+      const cur = get().current;
+      if (cur && relPaths.includes(cur.rel_path)) set({ current: null, dirty: false });
+      await guard(async () => {
+        const r = unwrap(await commands.deleteNotes(relPaths));
+        await get().refresh();
+        await notifyOtherWindows(r.trashed.map((t) => t.rel_path));
+        afterWrite();
+        set({ trashBatch: r, moveBatch: null, moveUndo: null, tagBatch: null });
+      });
+    },
+
+    trashBatch: null,
+    dismissTrashBatch() {
+      set({ trashBatch: null });
+    },
+    /** 방금 휴지통으로 보낸 것을 되살린다 — 제자리로. 그 날 일지가 그새 새로 생겼으면
+     *  같은 달 폴더에 따로 되살아나니(같은 날 일지가 둘) 합치라고 알린다. */
+    async undoTrashBatch() {
+      const b = get().trashBatch;
+      set({ trashBatch: null });
+      if (!b) return;
+      await guard(async () => {
+        const back: string[] = [];
+        let taken = 0;
+        for (const t of b.trashed) {
+          const r = unwrap(await commands.restoreTrash(t.file_name));
+          back.push(r.rel);
+          if (r.daily_taken) taken += 1;
+        }
+        await get().refresh();
+        await notifyOtherWindows(back);
+        afterWrite();
+        if (taken > 0) {
+          set({
+            error: `그 날 일지가 이미 있어 ${taken}편은 같은 달 폴더에 따로 되살렸습니다. 열어서 하나로 합쳐 주세요.`,
+          });
+        }
+      });
+    },
+
+    async addTagToNotes(relPaths, tag) {
+      // 열려 있는 글이 끼어 있으면 친 글부터 저장한다 — 붙인 뒤 다시 읽을 때 저장 안 한 글을 버리지 않게.
+      // 저장하지 못했으면(밖에서 바뀜 등) 그 글을 건드리지 않고 멈춘다
+      const open = get().current?.rel_path;
+      if (open && relPaths.includes(open) && !(await flushCurrent())) return;
+      await guard(async () => {
+        const r = unwrap(await commands.addTagToNotes(relPaths, tag));
+        if (r.changed.length > 0) {
+          await get().refresh();
+          // 열려 있는 글에 붙었으면 편집기가 든 frontmatter에도 넣는다 — 안 그러면 다음 자동저장이 지운다
+          const cur = get().current;
+          if (cur && r.changed.includes(cur.rel_path)) await get().reloadCurrent();
+          await notifyOtherWindows(r.changed);
+          afterWrite();
+        }
+        set({ tagBatch: { ...r, tag: tag.trim().replace(/^#/, "") }, moveBatch: null, trashBatch: null });
+      });
+    },
+    tagBatch: null,
+    dismissTagBatch() {
+      set({ tagBatch: null });
     },
 
     moveBatch: null,
