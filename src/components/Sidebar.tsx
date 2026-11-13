@@ -32,6 +32,7 @@ export default function Sidebar({
     nav,
     current,
     issues,
+    brokenLinks,
     shortcutsOff,
     setNav,
     openToday,
@@ -194,6 +195,21 @@ export default function Sidebar({
           >
             <span>⚠️ 점검</span>
             <span className="font-bold">{issues.length}</span>
+          </button>
+        )}
+        {issues.length === 0 && brokenLinks.length > 0 && (
+          // 경고가 아니다 — 링크를 먼저 써 두는 것도 쓰는 방식이다. 들어갈 문만 조용히 연다
+          <button
+            className={`mb-2 flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs ${
+              nav === "audit"
+                ? "bg-neutral-200 text-neutral-800"
+                : "text-neutral-500 hover:bg-neutral-100"
+            }`}
+            onClick={() => setNav("audit")}
+            title="아직 없는 글을 가리키는 [[링크]]가 있는 노트"
+          >
+            <span>🔗 없는 링크</span>
+            <span>{brokenLinks.length}</span>
           </button>
         )}
         <p className="truncate text-2xs text-neutral-400" title={vaultPath ?? ""}>

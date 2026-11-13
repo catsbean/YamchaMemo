@@ -52,6 +52,7 @@ vi.mock("../bindings", () => ({
     listNotes: async () => ({ status: "ok", data: [] }),
     noteSummary: async () => ({ status: "error", error: "없음" }),
     auditVault: async () => ({ status: "ok", data: [] }),
+    brokenLinks: async () => ({ status: "ok", data: [] }),
     flushIndexFiles: async () => {
       flushCalls += 1;
       return { status: "ok", data: null };

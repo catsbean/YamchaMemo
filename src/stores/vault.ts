@@ -27,6 +27,7 @@ import {
 import {
   commands,
   type DailyKind,
+  type BrokenLinks,
   type CalloutDef,
   type EntryKind,
   type FieldDef,
@@ -357,6 +358,11 @@ interface VaultStore {
   } | null;
   undoMoveBatch(): Promise<void>;
   dismissMoveBatch(): void;
+  /** 가리키는 글이 없는 링크를 단 글들 — 점검 화면에 따로 보인다 (경고 개수에는 안 넣는다) */
+  brokenLinks: BrokenLinks[];
+  refreshBrokenLinks(): Promise<void>;
+  /** 없는 링크 대상을 자유노트에 만든다 (점검 화면에서 누를 때) → 만든 편수 */
+  createLinkTargets(targets: string[]): Promise<number>;
   addMirror(): Promise<void>;
   removeMirror(path: string): Promise<void>;
   syncMirrors(): Promise<void>;
@@ -463,6 +469,9 @@ export const useVault = create<VaultStore>((set, get) => {
       }
       indexTimer = null;
       commands.flushIndexFiles().catch(() => {});
+      // 자동저장은 점검을 다시 돌리지 않는다(무겁다). 없는 링크는 싸니 손을 멈췄을 때 다시 묻는다 —
+      // 안 그러면 방금 쓴 링크가 사이드바·점검 화면에 다음 전체 갱신 때까지 안 보인다
+      void get().refreshBrokenLinks();
     }, INDEX_IDLE_MS);
   }
 
@@ -1123,6 +1132,31 @@ export const useVault = create<VaultStore>((set, get) => {
       // 배지용 조회 — 실패해도 앱 흐름을 막지 않는다
       const r = await commands.auditVault();
       if (r.status === "ok") set({ issues: r.data });
+      // 없는 링크는 색인의 링크 표로 찾아서 싸다 — 같은 때 함께 묻는다
+      await get().refreshBrokenLinks();
+    },
+
+    /** 덤으로 하는 조회라 무슨 일이 나도 부른 쪽을 실패로 만들지 않는다 */
+    async refreshBrokenLinks() {
+      try {
+        const b = await commands.brokenLinks();
+        if (b.status === "ok") set({ brokenLinks: b.data });
+      } catch (e) {
+        console.warn("없는 링크 조회 실패", e);
+      }
+    },
+
+    brokenLinks: [],
+    async createLinkTargets(targets) {
+      const made = await guard(async () => {
+        const r = unwrap(await commands.ensureLinkTargets(targets));
+        if (r.length === 0) return 0;
+        await get().refresh();
+        await notifyOtherWindows(r.map((m) => m.rel_path));
+        afterWrite();
+        return r.length;
+      });
+      return made ?? 0;
     },
 
     async fixIssue(relPath, kind) {

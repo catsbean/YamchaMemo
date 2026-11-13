@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { IssueKind, NoteIssue } from "../bindings";
 import { useVault } from "../stores/vault";
+import BrokenLinksSection from "./BrokenLinksSection";
 import RawEditModal from "./RawEditModal";
 
 /** 점검 종류별 설명 — 왜 이게 문제인지 한 줄로 */
@@ -25,7 +26,7 @@ const KIND_HINT: Record<IssueKind, string> = {
 
 /** 점검 화면 — 외부 편집기에서 만들어졌거나 고쳐진 파일 중 규격에 맞지 않는 것들 */
 export default function AuditDashboard() {
-  const { issues, fixIssue, refresh } = useVault();
+  const { issues, brokenLinks, fixIssue, refresh } = useVault();
   const [busy, setBusy] = useState<string | null>(null);
   const [raw, setRaw] = useState<NoteIssue | null>(null);
 
@@ -69,7 +70,9 @@ export default function AuditDashboard() {
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {issues.length === 0 ? (
-          <p className="mt-16 text-center text-sm text-neutral-400">
+          <p
+            className={`text-center text-sm text-neutral-400 ${brokenLinks.length > 0 ? "mb-8 mt-4" : "mt-16"}`}
+          >
             모든 노트가 규격에 맞습니다. 다른 앱(옵시디언 등)에서 vault를 고쳐도
             여기서 확인할 수 있습니다.
           </p>
@@ -146,6 +149,7 @@ export default function AuditDashboard() {
             ))}
           </>
         )}
+        <BrokenLinksSection />
       </div>
 
       {raw && (
