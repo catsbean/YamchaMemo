@@ -3,9 +3,11 @@ import type { NoteSummary } from "../bindings";
 import {
   aliasesOf,
   aliasShadowedBy,
+  linkNameSet,
   linkNamesOf,
   linkOptions,
   linkReaches,
+  linkResolves,
   linkTargetOf,
   resolveLink,
 } from "./resolveLink";
@@ -212,5 +214,48 @@ describe("자동완성 후보 만들기", () => {
   it("제목이 파일명과 다르면 둘 다 후보가 된다", () => {
     const n = note("Free/앞뒤.md", "앞/뒤");
     expect(linkOptions([n]).map((o) => o.label)).toEqual(["앞뒤", "앞/뒤"]);
+  });
+});
+
+describe("이름 모음으로 닿는지 보기 (없는 링크 흐리게 그리기용)", () => {
+  const notes = [
+    note("Free/메모.md", "메모"),
+    note("Free/중복노트.md", "중복노트"),
+    note("회의록/중복노트.md", "중복노트"),
+    note("Writing/초고.md", "첫 원고", { aliases: ["비비풀"] }),
+    note("Free/앞뒤.md", "앞/뒤"),
+  ];
+  const names = linkNameSet(notes);
+
+  // 같은 답을 내야 한다 — 다르면 흐리게 그린 링크가 눌러 보면 열린다
+  it.each([
+    "메모",
+    "[[메모]]",
+    "메모|표시",
+    "메모#절",
+    "초고",
+    "첫 원고",
+    "비비풀",
+    "Free/중복노트",
+    "회의록/중복노트.md",
+    "앞/뒤",
+    "없는 글",
+    "Free/없는 글",
+    "Writing/메모",
+    "메모 ",
+    "MEMO",
+    "메모2",
+  ])("resolveLink와 같은 답: %s", (raw) => {
+    expect(linkResolves(names, raw)).toBe(resolveLink(notes, raw).length > 0);
+  });
+
+  it("빈 링크는 없는 글로 치지 않는다", () => {
+    expect(linkResolves(names, "")).toBe(true);
+    expect(linkResolves(names, "#절만")).toBe(true);
+  });
+
+  it("같은 목록에는 같은 모음을 돌려준다 (다시 만들지 않는다)", () => {
+    expect(linkNameSet(notes)).toBe(names);
+    expect(linkNameSet([...notes])).not.toBe(names);
   });
 });

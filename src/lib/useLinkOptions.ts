@@ -1,6 +1,6 @@
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import type { NoteSummary } from "../bindings";
-import { linkOptions, type LinkOption } from "./resolveLink";
+import { linkNameSet, linkOptions, linkResolves, type LinkOption } from "./resolveLink";
 
 /** 편집기에 넘길 `[[` 후보 꺼내기 함수.
  *
@@ -28,4 +28,14 @@ export function useLinkOptions(
     return out;
   });
   return get.current;
+}
+
+/** 편집기에 넘길 "가리키는 글이 없는 링크인가" 판정 — 노트 목록이 바뀔 때만 새로 만든다.
+ *  목록을 아직 못 받았으면(빈 배열) 아무것도 흐리게 그리지 않는다 — 모든 링크가 없어 보이면 안 된다. */
+export function useMissingLinkCheck(notes: NoteSummary[]): (target: string) => boolean {
+  return useMemo(() => {
+    if (notes.length === 0) return () => false;
+    const names = linkNameSet(notes);
+    return (target: string) => !linkResolves(names, target);
+  }, [notes]);
 }

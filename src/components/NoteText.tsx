@@ -1,3 +1,4 @@
+import { useMissingLinkCheck } from "../lib/useLinkOptions";
 import { useVault } from "../stores/vault";
 
 /** `[[타깃]]`, `[[타깃|표시]]`, `[[타깃#섹션]]` */
@@ -75,6 +76,8 @@ export default function NoteText({
   className?: string;
 }) {
   const openByTitle = useVault((s) => s.openByTitle);
+  // 가리키는 글이 없는 링크는 흐리게 — 이름 모음은 목록마다 한 번만 만든다(카드가 여럿이어도)
+  const isMissing = useMissingLinkCheck(useVault((s) => s.notes));
 
   /** 한 줄 안의 위키링크를 링크 버튼으로 바꾼다 */
   function inline(line: string, key: string) {
@@ -91,6 +94,15 @@ export default function NoteText({
     return parts.map((p, i) =>
       typeof p === "string" ? (
         p
+      ) : isMissing(p.target) ? (
+        <button
+          key={`${key}-${i}`}
+          className="rounded text-neutral-400 underline decoration-neutral-400 decoration-dashed underline-offset-2 hover:bg-neutral-100"
+          onClick={() => openByTitle(p.target)}
+          title={`${p.target} — 아직 없는 글입니다`}
+        >
+          {p.label}
+        </button>
       ) : (
         <button
           key={`${key}-${i}`}

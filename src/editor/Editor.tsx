@@ -22,7 +22,7 @@ import {
 import { commands } from "../bindings";
 import type { LinkOption } from "../lib/resolveLink";
 import { formatKeymap } from "./format";
-import { livePreview } from "./livePreview";
+import { linksChanged, livePreview, missingLinkCheck } from "./livePreview";
 import { urlPaste } from "./urlPaste";
 import { registerCursorLinkProbe } from "../lib/linkStubs";
 import {
@@ -57,6 +57,9 @@ interface Props {
   onNavigate?: (target: string) => void;
   /** `[[` 자동완성 후보 — 만드는 규칙은 `lib/resolveLink.ts`의 `linkOptions` */
   getLinkOptions?: () => LinkOption[];
+  /** 이 링크 타깃이 가리키는 글이 없는가 — 그런 링크는 흐리게 그린다.
+   *  노트 목록이 바뀌면 새 함수를 넘긴다(그때 장식을 다시 그린다). */
+  isMissingLink?: (target: string) => boolean;
   /** 목차 등에서 특정 줄로 이동시키기 위한 훅 (1-based) */
   onReady?: (goToLine: (line: number) => void) => void;
   /** 우클릭 — 서식 메뉴를 띄우기 위해 뷰와 위치를 넘긴다 */
@@ -110,6 +113,7 @@ export default function Editor({
   onChange,
   onNavigate,
   getLinkOptions,
+  isMissingLink,
   onReady,
   onContextMenu,
   onView,
@@ -127,6 +131,8 @@ export default function Editor({
   onNavigateRef.current = onNavigate;
   const getLinkOptionsRef = useRef(getLinkOptions);
   getLinkOptionsRef.current = getLinkOptions;
+  const isMissingRef = useRef(isMissingLink);
+  isMissingRef.current = isMissingLink;
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
   const onViewRef = useRef(onView);
@@ -159,6 +165,7 @@ export default function Editor({
         markdown({ base: markdownLanguage, extensions: [wikiLinkMarkdown] }),
         syntaxHighlighting(defaultHighlightStyle),
         livePreview(),
+        missingLinkCheck.of((t) => isMissingRef.current?.(t) ?? false),
         pasteImage,
         urlPaste(),
         EditorView.domEventHandlers({
@@ -212,6 +219,11 @@ export default function Editor({
     // 노트 전환 시(컴포넌트 key 변경) 재생성하므로 value는 초기값으로만 사용
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 노트 목록이 바뀌었다 — 흐리게 그린 링크를 다시 판정한다
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: linksChanged.of(null) });
+  }, [isMissingLink]);
 
   // 읽기/편집 전환
   useEffect(() => {

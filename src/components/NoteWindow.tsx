@@ -24,7 +24,7 @@ import {
   undoLinkStubs,
 } from "../lib/linkStubs";
 import { setPlainLinkSuggest } from "../lib/plainLink";
-import { useLinkOptions } from "../lib/useLinkOptions";
+import { useLinkOptions, useMissingLinkCheck } from "../lib/useLinkOptions";
 import {
   resolveLink,
   type LinkHit,
@@ -55,6 +55,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
   const [schemas, setSchemas] = useState<TypeDef[]>([]);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const getLinkOptions = useLinkOptions(notes, schemas);
+  const isMissingLink = useMissingLinkCheck(notes);
   const notesRef = useRef(notes);
   notesRef.current = notes;
 
@@ -598,6 +599,7 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
             ctx.open(e, editorMenuItems(view, [], { event: e, onNavigate: navigate }))
           }
           getLinkOptions={getLinkOptions}
+            isMissingLink={isMissingLink}
         />
       </div>
 

@@ -1,7 +1,7 @@
 // Obsidian식 라이브 프리뷰: 커서가 닿지 않은 마크업의 문법 기호를 숨기고
 // 서식만 렌더링한다. 커서가 해당 요소 범위에 들어오면 원문이 다시 보인다.
 
-import { RangeSet, type Range } from "@codemirror/state";
+import { Facet, RangeSet, StateEffect, type Range } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import {
   Decoration,
@@ -140,7 +140,17 @@ class CalloutLabelWidget extends WidgetType {
   }
 }
 
+/** 링크 타깃이 가리키는 글이 없는가 — 편집기를 띄우는 쪽이 노트 목록으로 답한다.
+ *  없으면(주지 않았으면) 전부 있는 것으로 본다. */
+export const missingLinkCheck = Facet.define<(target: string) => boolean, (target: string) => boolean>({
+  combine: (vs) => vs[0] ?? (() => false),
+});
+
+/** 노트 목록이 바뀌었다 — 링크 장식을 다시 그린다 (글이 생기면 흐리던 링크가 살아난다) */
+export const linksChanged = StateEffect.define<null>();
+
 function buildDecorations(view: EditorView): DecorationSet {
+  const isMissing = view.state.facet(missingLinkCheck);
   const ranges: Range<Decoration>[] = [];
   const tree = syntaxTree(view.state);
 
@@ -222,10 +232,20 @@ function buildDecorations(view: EditorView): DecorationSet {
             Decoration.line({ class: "cm-lp-listline" }).range(line.from),
           );
         }
-        // 위키링크: 색 + 마우스 올렸을 때 음영 (기록 카드의 링크와 같은 계열)
+        // 위키링크: 색 + 마우스 올렸을 때 음영 (기록 카드의 링크와 같은 계열).
+        // 가리키는 글이 없으면 흐리게 + 점선 — 누르기 전에 알 수 있게.
         if (node.name === "WikiLink") {
+          const target = view.state
+            .sliceDoc(node.from + 2, node.to - 2)
+            .split("|")[0]
+            .split("#")[0]
+            .trim();
+          const missing = target !== "" && isMissing(target);
           ranges.push(
-            Decoration.mark({ class: "cm-wikilink" }).range(node.from, node.to),
+            Decoration.mark({
+              class: missing ? "cm-wikilink cm-wikilink-missing" : "cm-wikilink",
+              attributes: missing ? { title: "아직 없는 글입니다" } : undefined,
+            }).range(node.from, node.to),
           );
         }
         // 체크박스: 클릭 유도 스타일
@@ -276,7 +296,8 @@ const livePreviewPlugin = ViewPlugin.fromClass(
         update.docChanged ||
         update.viewportChanged ||
         update.selectionSet ||
-        syntaxTree(update.startState) !== syntaxTree(update.state)
+        syntaxTree(update.startState) !== syntaxTree(update.state) ||
+        update.transactions.some((tr) => tr.effects.some((e) => e.is(linksChanged)))
       ) {
         this.decorations = buildDecorations(update.view);
       }
@@ -366,6 +387,12 @@ const livePreviewTheme = EditorView.baseTheme({
   ".cm-wikilink:hover": {
     backgroundColor: "color-mix(in oklab, var(--color-violet-500) 16%, transparent)",
     textDecorationColor: "var(--color-violet-500)",
+  },
+  // 가리키는 글이 없는 링크 — 기록 카드(NoteText)와 같은 모양
+  ".cm-wikilink.cm-wikilink-missing": {
+    color: "var(--color-neutral-400)",
+    textDecorationStyle: "dashed",
+    textDecorationColor: "var(--color-neutral-400)",
   },
   // 콜아웃 공통
   ".cm-callout": {
