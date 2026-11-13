@@ -1,20 +1,25 @@
 // [[위키링크]] — 마크다운 인라인 파서 확장 + Ctrl+클릭 이동 + 자동완성
 
 import {
+  acceptCompletion,
   autocompletion,
+  closeCompletion,
   completionStatus,
+  currentCompletions,
   moveCompletionSelection,
+  setSelectedCompletion,
   type Completion,
   type CompletionContext,
   type CompletionResult,
 } from "@codemirror/autocomplete";
 import { syntaxTree } from "@codemirror/language";
-import { Prec } from "@codemirror/state";
+import { Prec, type EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import type { MarkdownConfig } from "@lezer/markdown";
 import { matchLinkOptions, suggestKey } from "../lib/linkMatch";
 import { newNoteOption } from "../lib/linkStubs";
+import { plainLinkMatch, plainLinkSuggestOn } from "../lib/plainLink";
 import type { LinkOption } from "../lib/resolveLink";
 
 /** 편집기 자동완성이 한 번에 내놓는 최대 개수 (목록은 스크롤된다) */
@@ -121,8 +126,112 @@ export function wikiLinkCompletion(getOptions: () => LinkOption[]) {
     }
     return c;
   }
-  return [autocompletion({ override: [source] }), composingArrows];
+  // ── `[[` 없이 쓰다가: 글 이름을 치면 링크로 바꿔 주겠냐고 추천한다 (설정에서 켠 사람만) ──
+  // 규칙은 `lib/plainLink.ts`. 여기서는 줄 밖을 봐야 아는 자리(코드 블록 등)를 구문 트리로 거른다.
+  function plainSpot(state: EditorState, pos: number) {
+    if (!plainLinkSuggestOn()) return null;
+    const line = state.doc.lineAt(pos);
+    // 낱말 한가운데를 고치는 중이면 끼어들지 않는다 (커서 뒤에 글자가 붙어 있다)
+    if (/\S/.test(line.text[pos - line.from] ?? "")) return null;
+    for (let n: { name: string; parent: unknown } | null = syntaxTree(state).resolveInner(pos, -1); n; ) {
+      if (PLAIN_BLOCKED.test(n.name)) return null;
+      n = n.parent as { name: string; parent: unknown } | null;
+    }
+    const hit = plainLinkMatch(getOptions(), line.text.slice(0, pos - line.from), PLAIN_MAX);
+    return hit ? { from: line.from + hit.from, typed: hit.typed, options: hit.options } : null;
+  }
+
+  function plainSource(context: CompletionContext): CompletionResult | null {
+    const spot = plainSpot(context.state, context.pos);
+    if (!spot) return null;
+    return { from: spot.from, filter: false, options: spot.options.map(plainCompletionOf) };
+  }
+
+  const plainMade = new Map<string, Completion>();
+  function plainCompletionOf(o: LinkOption): Completion {
+    const key = `${o.label}\u0000${o.insert}\u0000${o.detail}`;
+    let c = plainMade.get(key);
+    if (!c) {
+      c = { label: o.label, detail: o.detail || undefined, type: PLAIN_TYPE, apply: `[[${o.insert}]]` };
+      plainMade.set(key, c);
+    }
+    return c;
+  }
+
+  // 그 목록은 **아무것도 골라 두지 않은 채** 뜬다. 청하지 않은 추천이 Enter를 가로채면 줄을
+  // 바꾸려다 링크가 들어간다. CodeMirror는 첫 줄을 골라 둔 채로 여는 것밖에 몰라서,
+  // "아직 고르기를 시작하지 않았다"(`idle`)를 여기서 따로 들고 키를 먼저 받는다.
+  let idle = true;
+  let shownFor: string | null = null;
+  const isPlain = (state: EditorState) =>
+    completionStatus(state) === "active" && currentCompletions(state)[0]?.type === PLAIN_TYPE;
+  const paintIdle = (view: EditorView) => {
+    // 고른 줄 표시를 지운다/되살린다 (styles.css의 `.cm-plain-idle`)
+    const on = idle && isPlain(view.state);
+    view.dom.querySelector(".cm-tooltip-autocomplete")?.classList.toggle("cm-plain-idle", on);
+  };
+
+  const plainIdle = EditorView.updateListener.of((update) => {
+    const state = update.state;
+    if (!isPlain(state)) {
+      shownFor = null;
+      return;
+    }
+    // 친 글자가 달라졌으면(목록이 새로 잡혔으면) 고르기를 처음으로 돌린다
+    const spot = plainSpot(state, state.selection.main.head);
+    const key = spot ? `${spot.from}:${spot.typed}` : null;
+    if (key !== shownFor) {
+      shownFor = key;
+      idle = true;
+    }
+    // 목록 DOM은 이 갱신이 끝난 뒤에 그려진다
+    requestAnimationFrame(() => paintIdle(update.view));
+  });
+
+  const plainKeys = Prec.highest(
+    EditorView.domEventHandlers({
+      keydown(event, view) {
+        if (!isPlain(view.state)) return false;
+        const key = suggestKey(event);
+        if (idle) {
+          if (key === "ArrowDown" || key === "Tab") {
+            // 여기서부터 고르기 — 첫 줄을 고른다
+            idle = false;
+            view.dispatch({ effects: setSelectedCompletion(0) });
+            paintIdle(view);
+            event.preventDefault();
+            return true;
+          }
+          if (key === "Enter" || key === "ArrowUp") {
+            // 목록을 물리고 키는 제 일을 하게 둔다 (줄바꿈 · 윗줄로)
+            closeCompletion(view);
+            return false;
+          }
+          return false;
+        }
+        if (key === "Tab") {
+          event.preventDefault();
+          return acceptCompletion(view);
+        }
+        return false;
+      },
+    }),
+  );
+
+  return [
+    autocompletion({ override: [source, plainSource] }),
+    plainKeys,
+    plainIdle,
+    composingArrows,
+  ];
 }
+
+/** `[[` 없이 뜬 추천의 표시 (Completion.type) */
+const PLAIN_TYPE = "plain-link";
+/** 그 추천은 짧게 — 청하지 않은 목록이 화면을 덮으면 안 된다 */
+const PLAIN_MAX = 6;
+/** 이 구문 안에서는 추천하지 않는다 — 코드·주소·이미 링크·제목 */
+const PLAIN_BLOCKED = /^(FencedCode|CodeBlock|CodeText|InlineCode|URL|Autolink|Link|Image|WikiLink|HTMLBlock|HTMLTag|ATXHeading\d|SetextHeading\d)$/;
 
 /** 한글을 조합 중일 때 눌린 ↑↓도 자동완성 목록을 움직이게 한다.
  *

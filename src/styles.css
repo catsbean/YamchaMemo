@@ -252,3 +252,9 @@ textarea,
 .cm-editor .cm-tooltip.cm-tooltip-autocomplete .cm-completionIcon {
   display: none;
 }
+
+/* `[[` 없이 쓰다가 뜬 추천은 아무것도 골라 두지 않은 채 뜬다 (↓나 Tab을 눌러야 고르기가 시작된다).
+   CodeMirror는 늘 첫 줄을 골라 둔 것으로 그리므로, 고르기 전에는 그 표시를 지운다. */
+.cm-editor .cm-tooltip.cm-tooltip-autocomplete.cm-plain-idle > ul > li[aria-selected] {
+  background: transparent;
+}

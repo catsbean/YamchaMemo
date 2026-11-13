@@ -18,6 +18,7 @@ import {
   syncLinkStubs,
   undoLinkStubs,
 } from "../lib/linkStubs";
+import { setPlainLinkSuggest } from "../lib/plainLink";
 import {
   DEFAULT_CAPTURE_SHORTCUT,
   disableCapture,
@@ -317,6 +318,9 @@ interface VaultStore {
   /** 없는 글로 이어진 링크를 쓰면 자유노트에 자동으로 만들지 (기본 켬) */
   autoCreateLinkTargets: boolean;
   setAutoCreateLinkTargets(v: boolean): Promise<void>;
+  /** `[[` 없이 쓰다가 글 이름이 나오면 링크로 추천할지 (기본 끔) */
+  suggestLinksWhileTyping: boolean;
+  setSuggestLinksWhileTyping(v: boolean): Promise<void>;
   /** 방금 링크에서 자동으로 만든 글들 — 알림과 [되돌리기]용. `tooMany`는 너무 많아 안 만든 개수 */
   linkStubs: { made: { target: string; rel_path: string; title: string }[]; tooMany: number } | null;
   dismissLinkStubs(): void;
@@ -342,6 +346,17 @@ interface VaultStore {
   } | null;
   undoMove(): Promise<void>;
   dismissMoveUndo(): void;
+  /** 여러 편을 한 번에 다른 분류로 옮긴다 (목록에서 골라서) */
+  moveNotesTo(relPaths: string[], newTypeId: string): Promise<void>;
+  /** 방금 한꺼번에 옮긴 결과 — 알림과 [되돌리기]용.
+   *  `moved`의 `fromTypeId`는 되돌릴 때 갈 분류, `skipped`는 옮기지 못한 것과 까닭. */
+  moveBatch: {
+    toTypeId: string;
+    moved: { from: string; to: string; fromTypeId: string }[];
+    skipped: { rel_path: string; reason: string }[];
+  } | null;
+  undoMoveBatch(): Promise<void>;
+  dismissMoveBatch(): void;
   addMirror(): Promise<void>;
   removeMirror(path: string): Promise<void>;
   syncMirrors(): Promise<void>;
@@ -657,6 +672,54 @@ export const useVault = create<VaultStore>((set, get) => {
    *  예전엔 openNote로 다시 읽어 들였는데, 그러면 왕복 뒤에 친 글자가 디스크 내용에
    *  덮이고 편집기도 새로 만들어졌다. 그 사이 사용자가 다른 노트로 옮겨 갔으면
    *  화면을 도로 끌어오지 않는다. */
+  /** 여러 편을 한 번에 옮긴다 → 옮긴 것과 못 옮긴 것.
+   *
+   *  열려 있는 글이 끼어 있으면 그 한 편은 **한 편 옮기기의 길**(`relocateCurrent`)로 먼저 보낸다 —
+   *  쓰던 글을 저장하고 새 자리에서 이어 쓰게 하는 절차가 거기 있다. 나머지는 백엔드가 한 번에
+   *  옮긴다(링크 고치기·색인 따라잡기를 편수만큼 하지 않는다). */
+  async function moveMany(
+    relPaths: string[],
+    newTypeId: string,
+  ): Promise<{
+    moved: { from: string; to: string }[];
+    skipped: { rel_path: string; reason: string }[];
+  }> {
+    const moved: { from: string; to: string }[] = [];
+    const skipped: { rel_path: string; reason: string }[] = [];
+    let rest = relPaths;
+    const cur = get().current;
+    if (cur && relPaths.includes(cur.rel_path)) {
+      rest = relPaths.filter((r) => r !== cur.rel_path);
+      if (cur.note_type === newTypeId) {
+        skipped.push({ rel_path: cur.rel_path, reason: "이미 그 분류에 있습니다" });
+      } else {
+        const to = await relocateCurrent(
+          cur,
+          () => commands.moveNote(cur.rel_path, newTypeId),
+          ["type"],
+        );
+        if (to) moved.push({ from: cur.rel_path, to });
+        else skipped.push({ rel_path: cur.rel_path, reason: "열려 있는 글을 옮기지 못했습니다" });
+      }
+    }
+    if (rest.length > 0) {
+      await guard(async () => {
+        const r = unwrap(await withRelocation(() => commands.moveNotes(rest, newTypeId)));
+        moved.push(...r.moved);
+        skipped.push(...r.skipped);
+      });
+    }
+    if (moved.length > 0) {
+      await get().refresh();
+      const here = get().current?.rel_path;
+      const mine = moved.find((m) => m.to === here);
+      if (mine) await settleRelocated(mine.to);
+      await notifyOtherWindows(moved.flatMap((m) => [m.from, m.to]));
+      afterWrite();
+    }
+    return { moved, skipped };
+  }
+
   async function settleRelocated(newRel: string) {
     const now = get().current;
     if (!now || now.rel_path !== newRel) return;
@@ -1145,6 +1208,9 @@ export const useVault = create<VaultStore>((set, get) => {
         const autoCreateLinkTargets =
           (await store.get<boolean>("autoCreateLinkTargets")) ?? true;
         setAutoCreateHint(autoCreateLinkTargets);
+        const suggestLinksWhileTyping =
+          (await store.get<boolean>("suggestLinksWhileTyping")) ?? false;
+        setPlainLinkSuggest(suggestLinksWhileTyping);
         const theme = (await store.get<ThemeMode>("theme")) ?? "light";
         applyTheme(theme);
         const startupMode =
@@ -1179,6 +1245,7 @@ export const useVault = create<VaultStore>((set, get) => {
           dailyKindOrder,
           createOnMissingLink,
           autoCreateLinkTargets,
+          suggestLinksWhileTyping,
         });
         // 켜 둔 채로 앱을 껐었다면 다시 걸어 준다. 실패해도 시작을 막지 않는다.
         if (quickCaptureOn) {
@@ -1686,6 +1753,14 @@ export const useVault = create<VaultStore>((set, get) => {
       await store.set("autoCreateLinkTargets", v);
     },
 
+    suggestLinksWhileTyping: false,
+    async setSuggestLinksWhileTyping(v) {
+      set({ suggestLinksWhileTyping: v });
+      setPlainLinkSuggest(v);
+      const store = await settings();
+      await store.set("suggestLinksWhileTyping", v);
+    },
+
     linkStubs: null,
     dismissLinkStubs() {
       set({ linkStubs: null });
@@ -1771,6 +1846,37 @@ export const useVault = create<VaultStore>((set, get) => {
           });
         }
       });
+    },
+
+    async moveNotesTo(relPaths, newTypeId) {
+      const typeOf = new Map(get().notes.map((n) => [n.rel_path, n.note_type]));
+      const r = await moveMany(relPaths, newTypeId);
+      if (r.moved.length === 0 && r.skipped.length === 0) return;
+      set({
+        moveUndo: null,
+        moveBatch: {
+          toTypeId: newTypeId,
+          moved: r.moved.map((m) => ({ ...m, fromTypeId: typeOf.get(m.from) ?? "free" })),
+          skipped: r.skipped,
+        },
+      });
+    },
+
+    moveBatch: null,
+    dismissMoveBatch() {
+      set({ moveBatch: null });
+    },
+    /** 방금 한꺼번에 옮긴 것을 도로 옮긴다 — 원래 분류마다 한 번씩.
+     *  원래 파일명이 그새 쓰이고 있으면 `(2)`가 붙어 돌아온다(한 편 되돌리기와 같은 약속). */
+    async undoMoveBatch() {
+      const b = get().moveBatch;
+      set({ moveBatch: null });
+      if (!b) return;
+      const byType = new Map<string, string[]>();
+      for (const m of b.moved) {
+        byType.set(m.fromTypeId, [...(byType.get(m.fromTypeId) ?? []), m.to]);
+      }
+      for (const [typeId, rels] of byType) await moveMany(rels, typeId);
     },
 
     moveUndo: null,

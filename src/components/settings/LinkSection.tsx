@@ -3,11 +3,13 @@ import { SwitchRow } from "./ui";
 
 /** `[[위키링크]]` 동작 설정.
  *
- *  스위치가 둘인 까닭: 하나는 **쓰는 순간**, 하나는 **누르는 순간**이다. 자동 만들기를 꺼도
+ *  만들기 스위치가 둘인 까닭: 하나는 **쓰는 순간**, 하나는 **누르는 순간**이다. 자동 만들기를 꺼도
  *  예전에 써 둔 링크나 폴더까지 적은 링크는 누를 때 만들 수 있어야 한다. */
 export default function LinkSection() {
   const autoCreate = useVault((s) => s.autoCreateLinkTargets);
   const setAutoCreate = useVault((s) => s.setAutoCreateLinkTargets);
+  const suggestPlain = useVault((s) => s.suggestLinksWhileTyping);
+  const setSuggestPlain = useVault((s) => s.setSuggestLinksWhileTyping);
   const createOnMissingLink = useVault((s) => s.createOnMissingLink);
   const setCreateOnMissingLink = useVault((s) => s.setCreateOnMissingLink);
 
@@ -38,6 +40,20 @@ export default function LinkSection() {
         }
         checked={createOnMissingLink}
         onChange={setCreateOnMissingLink}
+      />
+      <SwitchRow
+        title="글 이름을 치면 링크 추천"
+        desc="[[ 를 치지 않아도, 쓰다가 있는 글의 이름이 나오면 링크로 바꿀지 추천합니다."
+        help={
+          <>
+            목록이 떠도 아무것도 골라져 있지 않아 Enter는 그대로 줄바꿈입니다. ↓나 Tab을 눌러야 고르기가
+            시작되고, 그다음 Enter(또는 Tab)가 그 낱말을 [[링크]]로 바꿉니다. 낱말의 앞부터 두 글자 이상
+            맞을 때만 뜨고, 조사가 붙어 이름보다 길어지면 닫힙니다. 코드·주소·제목 줄·이미 링크인 자리,
+            그리고 일지(날짜 이름)는 추천하지 않습니다.
+          </>
+        }
+        checked={suggestPlain}
+        onChange={setSuggestPlain}
       />
     </>
   );

@@ -23,6 +23,7 @@ import {
   syncLinkStubs,
   undoLinkStubs,
 } from "../lib/linkStubs";
+import { setPlainLinkSuggest } from "../lib/plainLink";
 import { useLinkOptions } from "../lib/useLinkOptions";
 import {
   resolveLink,
@@ -56,6 +57,17 @@ export default function NoteWindow({ relPath }: { relPath: string }) {
   const getLinkOptions = useLinkOptions(notes, schemas);
   const notesRef = useRef(notes);
   notesRef.current = notes;
+
+  // 링크 설정 — 이 창은 스토어를 초기화하지 않으므로 직접 읽어 알려 둔다
+  useEffect(() => {
+    loadSettings("settings.json", { autoSave: true, defaults: {} }).then(
+      async (s) => {
+        setAutoCreateHint((await s.get<boolean>("autoCreateLinkTargets")) ?? true);
+        setPlainLinkSuggest((await s.get<boolean>("suggestLinksWhileTyping")) ?? false);
+      },
+      () => {},
+    );
+  }, []);
 
   // 링크에서 자동으로 만든 글 알림 (메인 창의 LinkStubToast와 같은 것 — 이 창은 스토어가 없다)
   const [stubs, setStubs] = useState<{ made: CreatedLink[]; tooMany: number } | null>(null);

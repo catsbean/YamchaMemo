@@ -4,6 +4,7 @@ import { load } from "@tauri-apps/plugin-store";
 import { commands, type NoteSummary, type TagSuggestion } from "../bindings";
 import { isImeEnter } from "../lib/ime";
 import { MAX_LINK_STUBS, missingTargets, setAutoCreateHint } from "../lib/linkStubs";
+import { setPlainLinkSuggest } from "../lib/plainLink";
 import { linkOptions, type LinkOption } from "../lib/resolveLink";
 import { notifyOtherWindows } from "../lib/windowSync";
 import TagSuggestionRow from "./TagSuggestionRow";
@@ -46,7 +47,10 @@ export default function CaptureWindow() {
       () => {},
     );
     load("settings.json", { autoSave: true, defaults: {} })
-      .then((s) => s.get<boolean>("autoCreateLinkTargets"))
+      .then(async (s) => {
+        setPlainLinkSuggest((await s.get<boolean>("suggestLinksWhileTyping")) ?? false);
+        return s.get<boolean>("autoCreateLinkTargets");
+      })
       .then(
         (v) => {
           autoCreateRef.current = v ?? true;

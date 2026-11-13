@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isImeEnter } from "../lib/ime";
 import { matchLinkOptions, suggestKey } from "../lib/linkMatch";
 import { newNoteOption } from "../lib/linkStubs";
+import { plainLinkMatch, plainLinkSuggestOn } from "../lib/plainLink";
 import { linkOptions, type LinkOption } from "../lib/resolveLink";
 import { useVault } from "../stores/vault";
 
@@ -10,6 +11,9 @@ export { suggestKey };
 /** 추천을 띄울 최대 개수. 화면에는 여덟 줄쯤 보이고 나머지는 스크롤된다 —
  *  예전에는 여덟 개에서 잘라서, 아홉째부터는 글자를 더 쳐야만 닿을 수 있었다. */
 const MAX = 30;
+
+/** `[[` 없이 쓰다가 뜨는 추천은 짧게 — 청하지 않은 목록이 화면을 덮으면 안 된다 */
+const PLAIN_MAX = 6;
 
 /** 커서 앞에서 `[[`로 시작해 아직 닫히지 않은 부분을 찾는다.
  *  `]` `|` `#` 줄바꿈이 끼면 링크가 이미 끝났거나 다른 문법이라 보지 않는다. */
@@ -41,11 +45,39 @@ export function refreshAction(
   return contextKey(at) === shownKey ? "keep" : "reset";
 }
 
-/** 고른 제목으로 `[[…`를 채운다 */
-function insert(el: HTMLTextAreaElement, title: string) {
-  const at = openLinkAt(el);
+/** 커서 앞에서 추천을 띄울 자리 — `[[…` 조각이거나, (설정을 켰으면) 글 이름을 쓰는 중인 낱말 */
+type Spot =
+  | { kind: "link"; from: number; caret: number; key: string; query: string }
+  | { kind: "plain"; from: number; caret: number; key: string; found: LinkOption[] };
+
+function spotAt(el: HTMLTextAreaElement, options: LinkOption[]): Spot | null {
+  const link = openLinkAt(el);
+  if (link) {
+    return {
+      kind: "link",
+      from: link.caret - link.query.length,
+      caret: link.caret,
+      key: contextKey(link),
+      query: link.query,
+    };
+  }
+  if (!plainLinkSuggestOn()) return null;
+  const caret = el.selectionStart ?? 0;
+  // 낱말 한가운데를 고치는 중이면 끼어들지 않는다 (커서 뒤에 글자가 붙어 있다)
+  if (/\S/.test(el.value[caret] ?? "")) return null;
+  const lineStart = el.value.lastIndexOf("\n", caret - 1) + 1;
+  const hit = plainLinkMatch(options, el.value.slice(lineStart, caret), PLAIN_MAX);
+  if (!hit) return null;
+  const from = lineStart + hit.from;
+  return { kind: "plain", from, caret, key: `p:${from}:${hit.typed}`, found: hit.options };
+}
+
+/** 고른 제목을 넣는다 — `[[…` 조각이면 채워 닫고, 평범한 낱말이면 `[[제목]]`으로 바꾼다 */
+function insert(el: HTMLTextAreaElement, title: string, options: LinkOption[]) {
+  const at = spotAt(el, options);
   if (!at) return;
-  el.setRangeText(`${title}]]`, at.caret - at.query.length, at.caret, "end");
+  const text = at.kind === "link" ? `${title}]]` : `[[${title}]]`;
+  el.setRangeText(text, at.from, at.caret, "end");
   // IME 훅이 placeholder를 다시 맞추도록 알린다 (값은 여기서 이미 바꿨다)
   el.dispatchEvent(new Event("input", { bubbles: true }));
   el.focus();
@@ -119,8 +151,13 @@ export default function WikiLinkSuggest({
     // "타이핑 중에는 리렌더가 없어야 한다"(lib/ime.ts 규칙 2)이므로 어기면 안 된다.
     // 지금 목록이 어느 `[[…` 조각을 보고 만든 것인지 (`contextKey`). 닫혀 있으면 null
     let shownKey: string | null = null;
+    // 지금 목록이 `[[` 없이 뜬 것인가. 그 목록은 **아무것도 골라 두지 않고** 뜬다(active = -1) —
+    // 청하지 않은 추천이 Enter를 가로채면 줄을 바꾸려다 링크가 들어간다. ↓나 Tab을 눌러야
+    // 고르기가 시작된다.
+    let plain = false;
 
     const close = () => {
+      plain = false;
       shownKey = null;
       setItems((cur) => (cur.length === 0 ? cur : []));
       setActive(0);
@@ -129,13 +166,19 @@ export default function WikiLinkSuggest({
     const refresh = () => {
       const target = inputRef.current;
       if (!target) return;
-      const at = openLinkAt(target);
-      const action = refreshAction(shownKey, at);
-      if (action === "close" || !at) return close();
+      const at = spotAt(target, latest.current.options);
+      if (!at) return close();
       if (dismissed) return;
       // 같은 조각이면 그대로 둔다 — 화살표로 고른 자리가 keyup에 되돌아가지 않게
-      if (action === "keep") return;
-      shownKey = contextKey(at);
+      if (at.key === shownKey) return;
+      shownKey = at.key;
+      if (at.kind === "plain") {
+        plain = true;
+        setItems(at.found);
+        setActive(-1);
+        return;
+      }
+      plain = false;
       // 후보를 만드는 규칙은 에디터 자동완성과 같은 함수를 쓴다 (파일명·제목·별칭)
       const found = matches(latest.current.options, at.query);
       // 맞는 이름이 없으면 "이 이름으로 새 글" 줄을 끝에 붙인다 (자동 만들기가 켜져 있을 때)
@@ -153,19 +196,34 @@ export default function WikiLinkSuggest({
         e.preventDefault();
         e.stopPropagation();
       };
-      switch (suggestKey(e)) {
+      const key = suggestKey(e);
+      // `[[` 없이 뜬 목록에서 아직 고르기를 시작하지 않았다 — ↓·Tab만 받고 나머지는 흘려보낸다
+      if (plain && latest.current.active < 0) {
+        if (key === "ArrowDown" || key === "Tab") {
+          setActive(0);
+          return stop();
+        }
+        if (key === "Escape") {
+          // 목록만 물리고 Esc는 그대로 흘려보낸다 (담기 창에서는 창을 닫는 키다)
+          dismissed = true;
+          close();
+        }
+        return;
+      }
+      switch (key) {
         case "ArrowDown":
           setActive((i) => (i + 1) % list.length);
           return stop();
         case "ArrowUp":
-          setActive((i) => (i - 1 + list.length) % list.length);
+          // `[[` 없이 뜬 목록은 맨 위에서 한 번 더 올리면 고르기를 그만둔다
+          setActive((i) => (plain && i === 0 ? -1 : (i - 1 + list.length) % list.length));
           return stop();
         case "Escape":
           dismissed = true;
           close();
           return stop();
         case "Tab":
-          insert(target, list[latest.current.active].insert);
+          insert(target, list[latest.current.active].insert, latest.current.options);
           close();
           return stop();
         case "Enter":
@@ -173,7 +231,7 @@ export default function WikiLinkSuggest({
           if (e.ctrlKey || e.metaKey) return;
           // 조합 중 Enter는 한글을 확정하려는 것이다. 가로채면 글자가 잘린다.
           if (isImeEnter({ nativeEvent: e, key: e.key })) return;
-          insert(target, list[latest.current.active].insert);
+          insert(target, list[latest.current.active].insert, latest.current.options);
           close();
           return stop();
       }
@@ -220,7 +278,7 @@ export default function WikiLinkSuggest({
             onClick={() => {
               const el = inputRef.current;
               // insert가 알리는 `input`이 refresh → close를 불러 목록을 닫는다
-              if (el) insert(el, o.insert);
+              if (el) insert(el, o.insert, latest.current.options);
               else setItems([]);
             }}
           >
