@@ -308,6 +308,18 @@ impl Indexer {
         Ok(names)
     }
 
+    /// 색인에 든 링크 전부 (보낸 글, 타깃) — 가리키는 글이 없는 링크를 찾을 때 쓴다.
+    /// 본문을 다시 읽지 않으려고 색인의 링크 표를 그대로 꺼낸다.
+    pub fn link_pairs(&self) -> Result<Vec<(String, String)>, CoreError> {
+        let mut stmt = self.conn.prepare("SELECT src, target FROM links ORDER BY src")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// 어떤 노트를 가리키는 링크들 (타깃 = 제목·파일명 stem·별칭·경로)
     pub fn backlinks(&self, vault: &Vault, rel_path: &str) -> Result<Vec<NoteRef>, CoreError> {
         let parsed = vault.parse_full(rel_path)?;

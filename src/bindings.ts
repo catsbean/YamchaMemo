@@ -763,6 +763,20 @@ async fixIssue(relPath: string, kind: IssueKind) : Promise<Result<string, string
 }
 },
 /**
+ * 가리키는 글이 없는 `[[링크]]`들 — 글마다 모은다.
+ * 
+ * 점검(`audit_vault`)과 따로 둔다. 링크를 먼저 써 두고 글은 나중에 채우는 것도 쓰는 방식이라
+ * 경고 개수에 넣지 않는다. 색인의 링크 표와 (캐시된) 노트 목록만 쓰므로 본문을 다시 읽지 않는다.
+ */
+async brokenLinks() : Promise<Result<BrokenLinks[], string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("broken_links") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * 파싱 못 하는 파일의 원문 읽기 (수리 화면 전용)
  */
 async readRaw(relPath: string) : Promise<Result<string, string>> {
@@ -1207,6 +1221,18 @@ export type BookMeta = { author: string; publisher: string; isbn: string; genre:
  * 카카오 책 검색 결과 한 건
  */
 export type BookSearchHit = { title: string; authors: string; publisher: string; isbn: string; thumbnail_url: string; published: string }
+/**
+ * 가리키는 글이 없는 링크를 단 글 하나 (점검 화면용)
+ */
+export type BrokenLinks = { 
+/**
+ * 링크를 단 글
+ */
+rel_path: string; title: string; 
+/**
+ * 그 글에서 가리키는 글이 없는 링크 타깃들 (겹치지 않게, 가나다순)
+ */
+targets: string[] }
 /**
  * 사용자 정의 콜아웃 종류 (vault의 `_callouts.json`에 저장 — vault를 옮기면 함께 간다)
  */

@@ -34,7 +34,7 @@ pub use error::CoreError;
 pub use history::{HistoryItem, HistoryPolicy};
 pub use file_index::{FileIndexProgress, FileIndexStatus};
 pub use indexer::{Backlink, Indexer, NoteRef, TagCount};
-pub use linkstub::CreatedLink;
+pub use linkstub::{BrokenLinks, CreatedLink};
 pub use schema::{Builtin, EntryKind, FieldDef, FieldKind, TypeDef};
 pub use search::{SearchEngine, SearchFilter, SearchHit, SearchScope, FILE_TYPE};
 pub use vault::{

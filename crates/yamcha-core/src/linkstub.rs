@@ -296,3 +296,148 @@ mod tests {
         assert!(!v.is_untouched_link_stub(&moved).unwrap());
     }
 }
+
+/// 가리키는 글이 없는 링크를 단 글 하나 (점검 화면용)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct BrokenLinks {
+    /// 링크를 단 글
+    pub rel_path: String,
+    pub title: String,
+    /// 그 글에서 가리키는 글이 없는 링크 타깃들 (겹치지 않게, 가나다순)
+    pub targets: Vec<String>,
+}
+
+/// 가리키는 글이 없는 링크들을 글마다 모은다.
+///
+/// `pairs`는 색인의 (보낸 글, 타깃) — 본문을 다시 읽지 않는다. 닿는지는 화면의 `resolveLink`와
+/// 같은 규칙으로 본다: 폴더까지 적었으면 경로로, 아니면 제목·파일명·별칭(대소문자를 가린다).
+///
+/// 이건 **고장이 아니다.** 링크를 먼저 써 두고 글은 나중에 채우는 것도 쓰는 방식이라, 점검의
+/// 경고 개수에 넣지 않고 따로 보인다.
+pub fn broken_links(notes: &[NoteSummary], pairs: &[(String, String)]) -> Vec<BrokenLinks> {
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+    let mut names: HashSet<&str> = HashSet::new();
+    let mut aliases: Vec<String> = Vec::new();
+    let mut titles: HashMap<&str, &str> = HashMap::new();
+    for n in notes {
+        names.insert(n.title.as_str());
+        names.insert(stem_of(&n.rel_path));
+        names.insert(n.rel_path.as_str());
+        names.insert(n.rel_path.strip_suffix(".md").unwrap_or(&n.rel_path));
+        aliases.extend(aliases_of(n));
+        titles.insert(n.rel_path.as_str(), n.title.as_str());
+    }
+    let aliases: HashSet<&str> = aliases.iter().map(String::as_str).collect();
+    let reaches = |t: &str| {
+        if t.contains('/') && names.contains(t.strip_suffix(".md").unwrap_or(t)) {
+            return true;
+        }
+        names.contains(t) || aliases.contains(t)
+    };
+
+    let mut by_src: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (src, target) in pairs {
+        let t = target.trim();
+        // 색인에서 빠진 글(지웠거나 아직 못 읽은 것)의 링크는 보이지 않는다
+        if t.is_empty() || !titles.contains_key(src.as_str()) || reaches(t) {
+            continue;
+        }
+        by_src.entry(src.as_str()).or_default().insert(t);
+    }
+    by_src
+        .into_iter()
+        .map(|(src, targets)| BrokenLinks {
+            rel_path: src.to_string(),
+            title: titles.get(src).copied().unwrap_or_else(|| stem_of(src)).to_string(),
+            targets: targets.into_iter().map(str::to_string).collect(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod broken_tests {
+    use super::*;
+
+    fn note(rel: &str, title: &str, aliases: &[&str]) -> NoteSummary {
+        NoteSummary {
+            rel_path: rel.into(),
+            note_type: "free".into(),
+            title: title.into(),
+            date: "2026-11-13".into(),
+            tags: vec![],
+            char_count: 0,
+            entry_count: 0,
+            frontmatter: json!({ "aliases": aliases }),
+        }
+    }
+
+    fn pair(src: &str, target: &str) -> (String, String) {
+        (src.into(), target.into())
+    }
+
+    #[test]
+    fn 닿지_않는_링크만_글마다_모은다() {
+        let notes = vec![
+            note("Free/메모.md", "메모", &[]),
+            note("Writing/초고.md", "첫 원고", &["비비풀"]),
+            note("Free/중복.md", "중복", &[]),
+        ];
+        let pairs = vec![
+            pair("Free/메모.md", "초고"),        // 파일명
+            pair("Free/메모.md", "첫 원고"),     // 제목
+            pair("Free/메모.md", "비비풀"),      // 별칭
+            pair("Free/메모.md", "Free/중복"),   // 경로
+            pair("Free/메모.md", "Free/중복.md"), // 경로 + 확장자
+            pair("Free/메모.md", "없는 글"),
+            pair("Free/메모.md", "없는 글"),     // 같은 링크 두 번
+            pair("Free/메모.md", "Writing/중복"), // 폴더가 틀린 경로
+            pair("Writing/초고.md", "가나"),
+            pair("Writing/초고.md", "메모"),
+            pair("Free/지운 글.md", "아무거나"), // 목록에 없는 글이 보낸 것
+        ];
+        let got = broken_links(&notes, &pairs);
+        assert_eq!(
+            got,
+            vec![
+                BrokenLinks {
+                    rel_path: "Free/메모.md".into(),
+                    title: "메모".into(),
+                    targets: vec!["Writing/중복".into(), "없는 글".into()],
+                },
+                BrokenLinks {
+                    rel_path: "Writing/초고.md".into(),
+                    title: "첫 원고".into(),
+                    targets: vec!["가나".into()],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn 대소문자를_가린다() {
+        let notes = vec![note("Free/Memo.md", "Memo", &[])];
+        let got = broken_links(&notes, &[pair("Free/Memo.md", "memo")]);
+        assert_eq!(got[0].targets, vec!["memo".to_string()]);
+    }
+
+    /// 실제 vault와 색인으로 — 링크를 쓰고 그 글을 만들면 목록에서 빠진다
+    #[test]
+    fn 글을_만들면_빠진다() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = Vault::open(dir.path()).unwrap();
+        let idx_dir = tempfile::tempdir().unwrap();
+        let mut idx = crate::Indexer::open(&idx_dir.path().join("i.db")).unwrap();
+        let src = v.create_note("free", "원글", json!({})).unwrap();
+        let n = v.read_note(&src).unwrap();
+        v.save_note(&src, n.frontmatter, "[[회의: 3월]] [[원글]]").unwrap();
+        idx.upsert(&v.parse_full(&src).unwrap()).unwrap();
+
+        let got = broken_links(&v.list_notes().unwrap(), &idx.link_pairs().unwrap());
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].targets, vec!["회의: 3월".to_string()]);
+
+        // 다듬어진 제목으로 만들어져도 별칭이 심겨 빠진다
+        v.ensure_link_targets(&["회의: 3월".to_string()]).unwrap();
+        assert!(broken_links(&v.list_notes().unwrap(), &idx.link_pairs().unwrap()).is_empty());
+    }
+}

@@ -82,6 +82,7 @@ pub fn run() {
         commands::diag::diagnostics,
         commands::maintenance::audit_vault,
         commands::maintenance::fix_issue,
+        commands::maintenance::broken_links,
         commands::maintenance::read_raw,
         commands::maintenance::write_raw,
         commands::maintenance::list_history,

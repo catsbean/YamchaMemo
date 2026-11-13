@@ -115,6 +115,20 @@ pub fn audit_vault(state: State<'_, AppState>) -> Result<Vec<yamcha_core::NoteIs
     with_ctx(&state, |c| Ok(yamcha_core::audit::audit(&c.vault)))
 }
 
+/// 가리키는 글이 없는 `[[링크]]`들 — 글마다 모은다.
+///
+/// 점검(`audit_vault`)과 따로 둔다. 링크를 먼저 써 두고 글은 나중에 채우는 것도 쓰는 방식이라
+/// 경고 개수에 넣지 않는다. 색인의 링크 표와 (캐시된) 노트 목록만 쓰므로 본문을 다시 읽지 않는다.
+#[tauri::command(async)]
+#[specta::specta]
+pub fn broken_links(state: State<'_, AppState>) -> Result<Vec<yamcha_core::BrokenLinks>, String> {
+    with_ctx(&state, |c| {
+        let notes = c.vault.list_notes()?;
+        let pairs = c.indexer.link_pairs()?;
+        Ok(yamcha_core::linkstub::broken_links(&notes, &pairs))
+    })
+}
+
 /// 점검 항목 한 건 수리 → (바뀌었을 수 있는) rel 경로
 #[tauri::command(async)]
 #[specta::specta]
